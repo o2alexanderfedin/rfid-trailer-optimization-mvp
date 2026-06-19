@@ -70,3 +70,37 @@ RED-first integration tests, then GREEN implementation against real Postgres
 | `pnpm -r build` | OK |
 | `pnpm lint` | OK |
 | `pnpm test:all` | OK — 55 tests / 8 files (incl. 14 Postgres integration) |
+
+## Integration
+
+Merged rival #1 (`wt/p1-03-r1` @ `d274cbba3369a63a55c579c4ad99c04c446bc1da`) into
+`feature/phase-1-operational-data-foundation-live-map-spike` via `--no-ff` (no
+conflicts; winner was a direct descendant of the phase tip). All gates re-verified
+green from the main repo against real Postgres (Testcontainers on the active
+OrbStack docker context): `pnpm install && pnpm -r build && pnpm lint &&
+pnpm test:all` → build (6 pkgs) OK, lint 0 errors, **55/55 tests passed (8 files)**.
+
+## Carried risks (integrator notes for Plan 04+)
+
+1. **Two append paths coexist.** R1 keeps both the forward API
+   (`appendToStream` / `appendWithRetry`) and the legacy `append` (which also
+   writes the inline `hubs` projection in-transaction) so the Plan-01 spine
+   (`seed.ts` / `app.ts`) stays green. **Plan 04 projections MUST consume
+   `appendToStream`, not the legacy `append`, to avoid double-projecting.**
+2. **events → streams FK ordering.** `schema.sql` carries an `events.stream_id`
+   FK to `streams`; appends must create/claim the `streams` row first (R1's CAS
+   does this via insert-on-conflict-do-nothing for `expectedVersion === 0`). Any
+   future direct event-insert path must respect this ordering or hit a FK
+   violation.
+3. **`appendWithRetry` default `maxRetries = 3`** (with an `expectedVersion`
+   mapping option, identity by default). Trivially raised; confirm 3 is enough
+   headroom once the Phase-4 optimizer becomes a concurrent writer.
+4. **`projection_checkpoints`** table is created but unused until Plan 04
+   (intentional scaffolding).
+5. **`SCHEMA_SQL` is embedded in `schema.ts`** (no `.sql` asset copy at runtime),
+   guarded by a byte-identity unit test. Editors must update `schema.sql` and
+   re-run `schema-sql.test.ts` — do not edit only one side.
+6. **Read-back re-validation.** `readStream` / `readAll` re-validate every row via
+   `@mm/domain` `validateEvent` on read-back: correct and type-safe, but a slight
+   per-read cost at large replay volumes. Fine for demo scale; revisit if replay
+   throughput matters.
