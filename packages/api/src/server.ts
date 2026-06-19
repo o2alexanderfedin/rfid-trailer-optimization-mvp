@@ -6,6 +6,7 @@ import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
+import { registerKpiRoutes } from "./routes/kpis.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
 
@@ -54,6 +55,8 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   registerExceptionRoutes(app, deps.db);
   // POST /plan — the pure load-planning pipeline (LOAD-08). Read-only, DB-free.
   registerPlanRoutes(app);
+  // Plan 05-03: GET /kpis + GET /kpis/comparison (UI-03/UI-04 backend).
+  registerKpiRoutes(app, deps.db);
 
   // The rolling optimizer shell (OPT-04/05/06) + its read-only recommendations
   // endpoint. The service owns the ONE write path (PlanAccepted); the route reads.
