@@ -21,3 +21,24 @@ export type {
   InventoryBucket,
 } from "./hub-inventory.js";
 export { emptyHubInventoryState, hubInventoryReducer } from "./hub-inventory.js";
+
+// --- SNS-02: tag -> package registry ----------------------------------------
+export type { TagRegistryState } from "./tag-registry.js";
+export {
+  emptyTagRegistryState,
+  resolveTag,
+  tagRegistryReducer,
+} from "./tag-registry.js";
+
+// --- SNS-02/03: latest fused zone estimate per (packageId, trailerId) -------
+export type {
+  ResolveTag,
+  ZoneEstimateDeps,
+  ZoneEstimateState,
+} from "./zone-estimate.js";
+export {
+  DEFAULT_DWELL_WINDOW_MS,
+  emptyZoneEstimateState,
+  makeZoneEstimateReducer,
+  zoneEstimateKey,
+} from "./zone-estimate.js";

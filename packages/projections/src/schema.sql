@@ -36,6 +36,29 @@ CREATE TABLE IF NOT EXISTS hub_inventory (
   staged   JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
+-- SNS-02: the tag -> package registry, folded from PackageCreated.rfidTagId.
+-- tag_id is the identity so re-applying a registration is an idempotent upsert;
+-- an unmapped tag simply has no row (resolves to undefined, never an exception).
+CREATE TABLE IF NOT EXISTS tag_registry (
+  tag_id     TEXT PRIMARY KEY,
+  package_id TEXT NOT NULL
+);
+
+-- SNS-02/03: the latest fused zone estimate per (package_id, trailer_id) — the
+-- OBSERVED layer made queryable. confidence is the bounded posterior mass of
+-- estimated_zone (STRICTLY < 1.0, anti-P5b). posterior is the full distribution
+-- (JSONB) for auditing; last_reliable_checkpoint is the carried-forward anchor.
+CREATE TABLE IF NOT EXISTS zone_estimate (
+  package_id               TEXT             NOT NULL,
+  trailer_id               TEXT             NOT NULL,
+  estimated_zone           TEXT             NOT NULL,
+  confidence               DOUBLE PRECISION NOT NULL,
+  posterior                JSONB            NOT NULL,
+  last_reliable_checkpoint TEXT,
+  last_observed_at         TIMESTAMPTZ      NOT NULL,
+  PRIMARY KEY (package_id, trailer_id)
+);
+
 -- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored
 -- event that names a package; global_seq is the identity AND the strict order.
 CREATE TABLE IF NOT EXISTS audit_timeline (
