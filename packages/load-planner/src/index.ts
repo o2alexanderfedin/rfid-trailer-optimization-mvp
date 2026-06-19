@@ -39,7 +39,16 @@ export { buildUnloadOrderMap } from "./unload-order.js";
 export { planLoad } from "./plan-load.js";
 
 // --- Independent feasibility validator (LOAD-04, anti-P1/anti-P2) ------------
-export { isFeasible, validatePlan } from "./validator.js";
+export { isFeasible, placementsFromSlices, validatePlan } from "./validator.js";
+
+// --- Soft scoring: rehandle + utilization (LOAD-06 / LOAD-07) -----------------
+export {
+  type BlockRehandle,
+  rehandleBreakdown,
+  rehandleScore,
+  scorePlan,
+  utilizationScore,
+} from "./scoring.js";
 
 // --- Shared type contracts (P2 feasibility-vs-score separation baked in) ------
 export type {
