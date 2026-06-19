@@ -15,6 +15,11 @@ export default tseslint.config(
       "**/playwright-report/**",
       "**/test-results/**",
       "packages/web/dist/**",
+      // Local, untracked tooling/agent caches (mirrors .gitignore) — never
+      // part of the typed project, so the typed linter must not pick them up.
+      "**/.remember/**",
+      "**/.turbo/**",
+      "**/.playwright-mcp/**",
     ],
   },
   js.configs.recommended,
