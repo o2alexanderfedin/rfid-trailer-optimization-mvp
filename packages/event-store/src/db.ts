@@ -1,7 +1,6 @@
-import { Kysely, PostgresDialect, sql } from "kysely";
+import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
 import type { Database } from "./schema.js";
-import { SCHEMA_SQL } from "./schema.js";
 
 /**
  * Build a Kysely instance over `pg` for the given connection string.
@@ -18,9 +17,4 @@ export function createDb(connectionString?: string): Kysely<Database> {
     pool: new pg.Pool({ connectionString: url }),
   });
   return new Kysely<Database>({ dialect });
-}
-
-/** Apply the idempotent schema (events + hubs). Safe to call repeatedly. */
-export async function migrate(db: Kysely<Database>): Promise<void> {
-  await sql.raw(SCHEMA_SQL).execute(db);
 }
