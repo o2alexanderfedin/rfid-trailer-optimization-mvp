@@ -144,3 +144,39 @@ real-world value.
   re-running detection re-appends nothing (proven in both int suites).
 - **OCC (T-03-17):** the detector appends via `appendWithRetry` (expected-version
   + reload-retry) — a concurrent writer alongside the sim converges safely.
+
+## Integration note (merge of rival #2 into feature/phase-3-rfid-assisted-validation)
+
+This plan was executed as a multi-rival contest; **rival #2** (`wt/p3-06-r2`, sha
+`92946e098baae1c2c6b3bce239fe31bd7b302059`) won and was merged via `--no-ff`. Both
+rivals were merge-ready and passed every gate; the call was close (rival #1 was more
+self-contained). The merge applied cleanly with no conflicts.
+
+### Gates re-verified on the integrated branch (ALL GREEN)
+- `pnpm install` — clean.
+- `pnpm build` (turbo) — 9/9 successful, no workspace cycles.
+- `pnpm -r build` — all 9 packages Done.
+- `pnpm lint` — clean.
+- `pnpm test:all` — **450/450 across 56 test files**.
+
+### Carried residual risks (for Plan 07 to resolve)
+1. **`readDepartedHubs` MVP adapter** infers "departed" from `in_transit` status
+   rather than an actual TrailerDeparted-for-this-hub. As-shipped it can over-include
+   dest hubs and (combined with `detectMissedUnload` requiring an above-threshold
+   observation) could flag a correctly-en-route package as missed-unload until Plan 07
+   injects the exact just-departed hub through the same `DetectorReads` port — the fix
+   is zero-change to the detector core.
+2. **Dest-hub resolution is deferred** to an injected `readDestHub` callback, so the
+   projections package alone cannot resolve PLANNED dest hubs without the composition
+   root wiring it. Plan 07 must provide that wiring (rival #1's persisted
+   `package_plan` projection was the more self-contained alternative).
+3. **Parallel-container test config** passed here on a 16GB VM but is less conservative
+   than rival #1's `fileParallelism: false`. On a smaller CI VM it could OOM. Plan 07 /
+   CI should confirm on the target runner or adopt the sequential setting.
+4. **Single biggest carried risk — detection + fusion calibration.** Both rivals
+   independently recalibrated to reach the detection gate from the saturated (~0.40)
+   fusion confidence: rival #2 lowers the e2e `confidenceThreshold` to `0.34` while
+   rival #1 keeps `0.6` and maps readers to zones. **Plan 07 must standardize ONE
+   production detection+fusion calibration band** (see the Calibration finding section
+   above). The pure predicates are correct; only the threshold constant needs the
+   real-world value.
