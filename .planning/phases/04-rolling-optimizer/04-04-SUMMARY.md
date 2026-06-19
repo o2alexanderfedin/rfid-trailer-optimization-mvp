@@ -61,3 +61,37 @@ A pure-TS VRPTW pipeline in `@mm/optimizer/src/vrptw/`:
 `pnpm install` ✓ · `pnpm build` (turbo) ✓ · `pnpm -r build` ✓ · `pnpm lint` ✓ ·
 `pnpm test:all` ✓ (50 files / 396 tests, integration on shared Postgres via
 `MM_PG_URL`).
+
+## Integration (winner: rival #1)
+
+Plan 04-04 ran as a two-rival match; rival #1 (`wt/p4-04-r1`,
+`6e2897fa6bf4060c05c81ba80d9cca05270cbbc3`) won and was merged into
+`feature/phase-4-rolling-optimizer` via `git merge --no-ff` (merge commit
+`b75bf6da5820a537c7abbdf5b6b1ab10e119b4e1`). No merge conflicts — the winning
+commit descended directly from the branch tip, so the only adds were the
+`packages/optimizer/src/vrptw/` files plus this summary.
+
+**Re-verified post-merge (all GREEN), shared PG up for the run then torn down:**
+`MM_PG_URL=postgres://mm:mm@localhost:5432/postgres` · `pnpm install` ✓ ·
+`pnpm build` (turbo, 9/9) ✓ · `pnpm -r build` (clean tsc, no cache) ✓ ·
+`pnpm lint` ✓ · `pnpm test:all` ✓ (50 files / 396 tests). No leftover
+`mm_test_*` per-run databases after teardown.
+
+### Carried risks (from the judge)
+
+- **Narrow margin, quality/fidelity call.** Both rivals were mergeable with
+  identical gate results; R2 (depot-free `t=0` model) is a legitimate alternative
+  interpretation, so this was not a correctness disqualification of R2.
+- **`startHubId` is an interface deviation from the literal spec shape.** R1 added
+  a required `startHubId` to `RouteTrailersInput` (a physical-model fidelity choice:
+  trailers depart a depot hub). The plan's literal `routeTrailers` shape was
+  `{trailerId, capacity, stops, travel}`. If a later rolling/repair-layer caller is
+  written against the exact spec signature, it needs a trivial call-site adapter
+  (supply a depot hub id). No code change required now.
+- **Reused LIFO gate is structurally always-pass on routing output.** Routing emits
+  the canonical layout (visiting order = unload order = depth order, zero blockers),
+  so the reused Phase-2 `validatePlan` HARD gate can never reject a routing-produced
+  load. Its "teeth" are demonstrated only via hand-built reversed-plan tests (present
+  in both suites). The `validatePlan` integration is therefore a wiring proof more
+  than an active runtime constraint on routing output. Shared limitation, not an R1
+  defect — revisit if/when a non-canonical load path is introduced.
