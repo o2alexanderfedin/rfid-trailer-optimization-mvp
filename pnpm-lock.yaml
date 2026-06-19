@@ -119,6 +119,12 @@ importers:
         specifier: 8.20.0
         version: 8.20.0
 
+  packages/load-planner:
+    dependencies:
+      '@mm/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/projections:
     dependencies:
       '@mm/domain':
