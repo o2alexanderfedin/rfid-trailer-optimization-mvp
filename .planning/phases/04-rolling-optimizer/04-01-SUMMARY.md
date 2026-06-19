@@ -54,3 +54,27 @@ confirming the build gate still enforces exhaustiveness/parity. Restored to gree
   single accepted-plan side effect) are first-class, zod-validated, contract-asserted
   members of the closed versioned union — the domain contract every later Phase-4
   plan emits against.
+
+## Integration record (winner rival #1)
+- **Winner:** rival #1, branch `wt/p4-01-r1`, source sha `8419273625e167654153d0b71ddb55ba028ebd34`.
+- **Merge:** `git merge --no-ff` into `feature/phase-4-rolling-optimizer` (merge commit
+  `b2984c6`). The winner branched directly off the integration HEAD (`1a33f65`), so the
+  merge applied with **zero conflicts**.
+- **Re-verification gates** (all run with `MM_PG_URL=postgres://mm:mm@localhost:5432/postgres`
+  ⇒ shared Postgres, per-run isolated DB), all GREEN:
+  - `pnpm install` — OK
+  - `pnpm build` (turbo, `--force` ⇒ 0 cached, fresh compile) — 8/8 successful
+  - `pnpm -r build` — exit 0
+  - `pnpm lint` (eslint) — clean
+  - `pnpm test:all` — 42 files, **335 passed (335)**, **0 skipped**, ~94s test time
+- **Cleanup:** rival worktrees `p4-01-r1` / `p4-01-r2` removed, pruned; rival branches
+  `wt/p4-01-r1` / `wt/p4-01-r2` deleted. Phase-3 main repo and `p3-*` worktrees untouched.
+
+## Carried risks (deferred, not blocking)
+- **Plan-event payload cross-validation** — `epochId`/`scopeHash` idempotency semantics
+  and emit-on-accept wiring are **intentionally out of scope** for this plan; they are
+  enforced by later Phase-4 plans **05/06**. This plan only establishes the typed,
+  zod-validated, contract-asserted union membership. Both rivals scoped this identically.
+- **Integration-suite timing sensitivity** — the Postgres integration suites are slow;
+  a flaky-DB re-run could surface timing sensitivity. Both rivals (and this
+  re-verification run) passed cleanly with 0 skips.
