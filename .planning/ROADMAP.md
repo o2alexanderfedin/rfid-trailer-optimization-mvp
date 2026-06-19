@@ -65,7 +65,14 @@ Notes: This phase bakes in the foundation's HIGH-cost-to-retrofit invariants. En
   3. An independent validator (separate code path that recomputes blockers from placed slices) flags accessibility violations — exceeding max blockers is a HARD violation, fewer is SOFT — and feasibility is a hard gate that is never folded into the optimization score; partial-LIFO accepts bounded blockers with a rehandle cost instead of rejecting outright.
   4. Each block and plan gets a rehandle risk score (blocker count/volume, fragile/dock-delay/SLA penalties) and a utilization score against the soft 75–90% band (penalty on both under- and over-utilization).
   5. A naive baseline planner (e.g., arrival/FIFO order) runs on the *same* inputs through shared KPI plumbing, enabling a before/after comparison later.
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [ ] 02-01-PLAN.md — Domain: flesh out LoadBlock/TrailerSlice + Phase-2 planning value types (PlanningPackage, SLA/handling/size enums, PlannerConfig defaults) — the shared contract (AGG-01, AGG-02, LOAD-01)
+- [ ] 02-02-PLAN.md — @mm/aggregation (pure, TDD): aggregate→split→priority→deadline-bucket; packages → feasible, scored, prioritized load blocks (AGG-01, AGG-02, AGG-03, AGG-04)
+- [ ] 02-03-PLAN.md — @mm/load-planner foundation (pure, TDD): ONE canonical LIFO invariant + blocker predicate, rear→nose trailer model, route unload-order map, P2-separated type contracts (LOAD-01, LOAD-02)
+- [ ] 02-04-PLAN.md — Greedy planner + INDEPENDENT virtual-unload validator + partial-LIFO + the keystone golden reversed-plan fixture + planner-vs-validator property test (LOAD-03, LOAD-04, LOAD-05)
+- [ ] 02-05-PLAN.md — Scoring (rehandle + utilization, P2-separate), loading instructions, per-placement rationale, FIFO baseline sharing the scoring plumbing + beat-it test (LOAD-06, LOAD-07, LOAD-08, LOAD-09, LOAD-10)
+- [ ] 02-06-PLAN.md — Thin @mm/api POST /plan: runs aggregate→plan+baseline→validate→score→instructions, gates on feasibility (P2 at the boundary); demoable end to end (LOAD-08)
 
 Notes: This is the load-bearing correctness phase. Defend against P1 (inverted LIFO depth↔unload-order mapping) with one canonical invariant asserted everywhere, an *independent* validator that recomputes blockers from placed slices rather than trusting placement order, and golden fixtures that flag a deliberately-reversed plan (the single most important test in the codebase) plus a property test fuzzing the planner against the validator. Defend against P2 (feasibility folded into score) by keeping feasibility (hard gate) and rehandle cost (soft score) as two separate validation outputs, never collapsed until the gate passes; unit-test the exact blocker predicate with same-hub and multi-block-slice fixtures. The baseline planner is designed in *here* (P8) because the planner already needs something to beat; it shares KPI plumbing so the Phase 5 "money slide" is wiring, not a rebuild. `aggregation` and `load-planner` are pure, IO-free, TDD-friendly modules.
 
@@ -123,7 +130,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Operational Data Foundation + Live Map Spike | 7/7 | ✅ Complete | 2026-06-19 |
-| 2. Load Planning | 0/TBD | Not started | - |
+| 2. Load Planning | 0/6 | Not started | - |
 | 3. RFID-Assisted Validation | 0/TBD | Not started | - |
 | 4. Rolling Optimizer | 0/TBD | Not started | - |
 | 5. Simulation + Visualization Wrapper | 0/TBD | Not started | - |
