@@ -63,3 +63,51 @@ No Phase-1 (126) or earlier Phase-2 regressions; no test weakened.
 - `packages/load-planner/src/plan-load.test.ts`, `src/validator.test.ts` (new unit tests)
 - `packages/load-planner/test/golden-reversed-plan.test.ts`,
   `test/planner-vs-validator.property.test.ts` (keystone tests)
+
+---
+
+## Integration record (rival-exec → `feature/phase-2-load-planning`)
+
+**Winner:** rival #2 — branch `wt/p2-04-r2`, source sha `6ff1c3c01e7d72be6dab49344b6539cc64504f83`.
+**Merge:** `git merge --no-ff` onto `feature/phase-2-load-planning`. All 8 files added cleanly
+(pure additions to `packages/load-planner` + this SUMMARY); **zero conflicts** — `index.ts` merged
+without overlap and re-exports `planLoad`, `isFeasible`, `validatePlan`. Integration merge commit
+`3c961da`.
+
+### Requirements delivered
+
+- **LOAD-03** — greedy route-aware planner (`src/plan-load.ts`, `planLoad`).
+- **LOAD-04** — independent feasibility validator via virtual-unload simulation
+  (`src/validator.ts`, `validatePlan` / `isFeasible`); independence guarded by import-shape test.
+- **LOAD-05** — partial-LIFO: bounded blockers emit a plan and classify SOFT, not HARD.
+
+### Gate results — re-verified on the integration branch post-merge
+
+| Gate | Result |
+|------|--------|
+| `pnpm install` | OK — lockfile up to date, exit 0 |
+| `pnpm -r build` | OK — 8 packages built (domain, aggregation, load-planner, api, event-store, projections, web, simulation), exit 0 |
+| `pnpm lint` | OK — eslint zero findings, exit 0 |
+| `pnpm test:all` | OK — **34 files, 269 tests passed**, exit 0 (incl. Testcontainers Postgres integration) |
+| load-planner subset | OK — 7 files, 63 tests passed (8 plan-load + 9 validator + 3 golden + 2 property + foundation) |
+
+No merge-only breakage; nothing fixed, nothing weakened. No Phase-1 or earlier Phase-2 regression.
+
+### Carried risks (from judge adjudication — to address in Plan 05 / later fixtures)
+
+1. **Weight-capacity rollover thinly tested.** R2 sets per-slice weight capacity to
+   `maxBlockVolume * 100`, so weight is effectively never the binding per-slice constraint in the
+   demo — only volume packing is genuinely exercised; the weight-driven rollover path lacks a
+   dedicated fixture.
+2. **Off-route-hub edge semantics uncovered.** R2's validator and planner treat an off-route hub
+   as the *latest* unload (fallback rank = `orderMap.size`), whereas R1 skips off-route blocks
+   entirely. Both are defensible but differ; neither is exercised by a dedicated off-route-hub
+   fixture in R2.
+3. **Golden + validator tests import from `../src` directly** rather than the built
+   `@mm/load-planner` public surface, so they would not catch an `index.ts` mis-export. Mitigated:
+   the property test DOES import the public surface (and the merged `index.ts` was verified to
+   export `planLoad`/`isFeasible`/`validatePlan`).
+4. **Fallback note (R1).** R1 remained fully valid (all gates green, both keystones pass,
+   genuinely independent validator); its shortfall is that its greedy does not perform real
+   multi-block capacity packing — relevant more to Plan 05 scoring/utilization than to the Plan 04
+   LIFO-correctness deliverable. Not selected; recorded for Plan 05 design awareness.
