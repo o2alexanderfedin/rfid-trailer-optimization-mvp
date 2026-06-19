@@ -98,3 +98,28 @@ assignment, gates `detectMissedUnload` to fire only POST-`TrailerDeparted`, and
 wraps `WrongTrailerCandidate` / `MissedUnloadCandidate` into the
 `WrongTrailerDetected` / `MissedUnloadDetected` domain events for the inline
 exceptions projection + `GET /exceptions` feed.
+
+## Carried risks (integration verdict — rival #2 selected)
+
+The winning plan was rival #2 (`wt/p3-04-r2`, src sha
+`a4294ed995d4ce332cfc26575809fc92b0a2f8a9`), merged via `--no-ff` into
+`feature/phase-3-rfid-assisted-validation` (merge commit `91e7e6d`). Carried
+risks recorded by the judge and re-confirmed at integration:
+
+- **emit-per-observation (no dedup pass).** Both predicates iterate the OBSERVED
+  layer and `out.push(...)` once per observation (`detection.ts` lines ~162/172
+  and ~208/215) with no de-duplication. With the realistic
+  one-fused-estimate-per-(package,trailer) input this is never exercised. R1's
+  one-per-package "strongest-disagreement-wins" dedup is slightly more robust to
+  duplicate observations per package. **Plan-06 action:** if Plan-06 ever feeds
+  multiple observations for the same (package,trailer), add a dedup pass before
+  emitting events, or upstream the fusion output to one estimate per package.
+- **@mm/domain has no unit-test suite.** The additive `Severity` TYPE export
+  (`domain-event.ts`, `events/index.ts`, `index.ts` — inferred from the existing
+  `severitySchema`, no schema/runtime change) is verified only via the consuming
+  `@mm/sensor-fusion` build + turbo build (9/9), not by a dedicated domain unit
+  test. Change is additive-only, so regression risk is low.
+- **Integration suite at merge.** Full `pnpm test:all` (Testcontainers/Postgres
+  incl.) was re-run in THIS integration session: **50 files / 412 tests passed,
+  zero regressions**. (The changed code is an isolated pure module plus an
+  additive type export, so integration-regression risk was already low.)
