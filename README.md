@@ -34,12 +34,45 @@ for the full technical specification.
 
 ## Setup
 
+Prerequisites: Node 22+, pnpm 10, and **OrbStack** (the mandated Docker runtime;
+`docker context` must point at `orbstack`).
+
 ```bash
-git clone <repository-url>
-cd intelliswift
+pnpm install
 ```
 
-(Setup instructions are filled in as the project is built.)
+### Monorepo layout (Phase 1 walking skeleton)
+
+`packages/` — downward-only dependencies (`domain` is zero-dep):
+
+- `domain` — entities + zod-validated, versioned domain events (`HubRegistered`).
+- `event-store` — append-only `events` table on Postgres, optimistic concurrency, inline projection.
+- `projections` — pure projection reducers (no clock/RNG; deterministic).
+- `simulation` — USA hub network model (SIM-01).
+- `api` — Fastify read API (`GET /hubs`) over the event store.
+- `web` — React 19 + Vite + OpenLayers 10 live USA map.
+
+### Gates
+
+```bash
+pnpm -r build                  # strict TS, all packages, zero errors
+pnpm lint                      # ESLint 9 flat — errors on `any`
+pnpm test                      # unit tests (no DB)
+pnpm test:all                  # + integration vs a real Postgres (Testcontainers on OrbStack)
+pnpm --filter @mm/web build    # production web build
+pnpm --filter @mm/web test:e2e # Playwright: OSM + one hub marker + no leak
+```
+
+### Run the full stack locally
+
+```bash
+docker compose up -d                 # Postgres 17 on OrbStack
+export DATABASE_URL=postgres://mm:mm@localhost:5432/mm
+pnpm --filter @mm/api dev            # Fastify API on :3001 (migrates + seeds Memphis)
+pnpm --filter @mm/web dev            # Vite dev server on :5173 (proxies /api -> :3001)
+```
+
+Open http://localhost:5173 — an OSM USA basemap with the Memphis hub marker.
 
 ## Development
 

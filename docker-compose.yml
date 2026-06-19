@@ -1,0 +1,29 @@
+# Local Postgres for the operational-twin event store.
+# Runs on OrbStack's Docker engine (the active `orbstack` docker context).
+#
+#   docker compose up -d        # start Postgres on OrbStack
+#   docker compose down -v       # stop and wipe
+#
+# Integration tests do NOT use this file — they spin an ephemeral container
+# via Testcontainers. This service is for manual `pnpm dev` / local exploration
+# (set DATABASE_URL=postgres://mm:mm@localhost:5432/mm).
+services:
+  postgres:
+    image: postgres:17
+    container_name: mm-postgres
+    environment:
+      POSTGRES_USER: mm
+      POSTGRES_PASSWORD: mm
+      POSTGRES_DB: mm
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mm -d mm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

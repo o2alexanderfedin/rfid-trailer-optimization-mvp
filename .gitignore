@@ -40,3 +40,8 @@ coverage/
 # Database / runtime data
 *.local
 pgdata/
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/
