@@ -80,3 +80,41 @@ real pipeline.
   real-Postgres Testcontainers integration suite on the OrbStack docker context. No prior test
   regressed; the FND query/ws/audit suites and the `@mm/load-planner` / `@mm/aggregation` unit
   suites stayed green.
+
+## Integration record (merge into `feature/phase-2-load-planning`)
+
+Selected as the winning plan for 02-06 (rival #2, branch `wt/p2-06-r2`,
+sha `2bb1c567ee156a8b7313088a7349902a1cc90269`) in a near-tie against rival #1 (`5cc938b`).
+Merged with `--no-ff` — the rival was a clean descendant of the integration HEAD, so the
+merge was conflict-free (no manual resolution required).
+
+- Merge commit: `defe33998cc0b00117290d44bbd7589bc53ce719`
+- Re-verified on the integration branch AFTER merge (not just in the worktree):
+  - `pnpm install` — OK (lockfile up to date)
+  - `pnpm -r build` — OK (8 packages, `tsc -b` clean; web `vite build` clean)
+  - `pnpm lint` — OK (root eslint, exit 0, zero warnings)
+  - `pnpm test:all` — OK, **exit 0**, 40 files / **309 tests passed**, incl. the
+    Testcontainers Postgres integration suite on the OrbStack docker context (~28–32s wall).
+- Rival worktrees removed (`--force`) and `wt/p2-06-r1` / `wt/p2-06-r2` branches deleted;
+  `git worktree prune` run. Only the main checkout remains.
+- Pushed: `ed49b49..defe339 → origin/feature/phase-2-load-planning`.
+
+## Carried risks (from the judge; accepted, not blocking)
+
+This was a near-tie; both rivals were mergeable and fully green. Two minor warts carried with
+rival #2 — neither is functional breakage (all gates green), so neither was touched during
+integration to avoid out-of-scope re-work on a passing tree:
+
+1. **Obscure `blocks` type in `gateAndScore`.** `packages/api/src/routes/plan.ts:146` types
+   `blocks` as `Parameters<typeof scorePlan>[1]` rather than an explicit `readonly LoadBlock[]`.
+   Compiles, lints, and tests clean; purely a readability nit. Rival #1 had deliberately
+   refactored this to the explicit type. Trivially improvable in a future cleanup pass.
+2. **No `.strict()` on the request envelope.** The top-level request body does not reject unknown
+   keys, so a body with extra junk top-level keys is silently accepted (rival #1 added
+   `.strict()`). Residual, low-severity tampering surface only — field-level validation via the
+   domain zod schemas (`planningPackageSchema` / `routeStopSchema` / `plannerConfigSchema`) still
+   rejects all malformed *values*, and the endpoint is read-only (no persistence), so extra keys
+   cannot influence output or state. Candidate for envelope hardening when Phase-4 write paths land.
+
+Both rivals depend on an available OrbStack/Docker context for the integration suite; confirmed
+green here (OrbStack active, `docker ps` responsive) on the post-merge re-verification.
