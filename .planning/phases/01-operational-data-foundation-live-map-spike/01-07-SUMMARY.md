@@ -61,6 +61,23 @@ in-place-update, dispose-on-teardown discipline (PITFALLS P10).
 - `pnpm --filter @mm/web build` — OK
 - `pnpm --filter @mm/web test:e2e` — OK (2/2: map + leak guard)
 
+## Integration re-verification (merge into feature branch)
+
+Merged into `feature/phase-1-operational-data-foundation-live-map-spike` via
+`git merge --no-ff e514c5b` (rival #1) — no conflicts. All gates re-run GREEN in
+the main repo against real infra:
+- `pnpm install` — OK (lockfile up to date)
+- `pnpm -r build` — OK (6/6 packages)
+- `pnpm lint` — OK (0 errors)
+- `pnpm test:all` — OK (18 files, 116 tests; real Postgres via Testcontainers on
+  OrbStack)
+- `pnpm --filter @mm/web build` — OK (single ~508 kB chunk; non-blocking Vite
+  chunk-size warning, code-splitting deferred — YAGNI for the demo)
+- `pnpm --filter @mm/web test:e2e` — OK (2/2: map static layers + leak guard,
+  both VIZ-01)
+
+No merge-only breakage; no test weakening required.
+
 ## Notes / carried items
 - The web e2e is fully hermetic: HTTP + ws boundaries are stubbed at the network
   level (Playwright `route` + `routeWebSocket`), so it needs no API/DB/sim.
