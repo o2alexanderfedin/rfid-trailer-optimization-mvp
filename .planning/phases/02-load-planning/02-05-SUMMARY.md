@@ -74,3 +74,51 @@ built strict TDD (RED → GREEN → REFACTOR), one commit per task.
   Testcontainers files on the OrbStack docker context). `@mm/load-planner` grew 63 → 98 tests
   (35 new); no prior test regressed; `@mm/domain` closed-event-union `contract.assert.ts`
   build gate intact.
+
+---
+
+## Integration record (merge into `feature/phase-2-load-planning`)
+
+Winning plan **02-05** was rival **#2** (branch `wt/p2-05-r2`, sha
+`d401c5746a463e0f481b19b289cfb01e8c835070`). Integrated via `git merge --no-ff` onto
+`feature/phase-2-load-planning`.
+
+- **Merge:** clean, no conflicts (recursive strategy). Merge commit `8cdc731`.
+- **Re-verified gates on the integrated branch (post-merge, MAIN repo):**
+  - `pnpm install` — OK (lockfile up to date)
+  - `pnpm -r build` — OK (8/8 workspace projects, `tsc -b` clean; web vite build OK)
+  - `pnpm lint` — OK (root eslint exit 0, zero warnings)
+  - `pnpm test:all` — OK — **39 files / 304 tests passed** (incl. Docker/Testcontainers
+    Postgres integration; ~55s). No merge-only breakage; nothing weakened.
+- **Pushed:** `origin/feature/phase-2-load-planning` `b93dc3c..8cdc731`.
+- **Worktrees cleaned:** `p2-05-r1` + `p2-05-r2` removed (`--force`), pruned; branches
+  `wt/p2-05-r1`, `wt/p2-05-r2` deleted.
+
+### Requirements shipped
+
+LOAD-06 (rehandle score), LOAD-07 (utilization score), LOAD-08 (zone-ordered loading
+instructions), LOAD-09 (FIFO baseline + beats-it), LOAD-10 (placement/plan explainability).
+
+### Carried risks (from judge verdict — accepted, not regressions)
+
+- **R2 signature deviation from the plan's literal `<interfaces>`.** R2 chose
+  `instructions(plan, blocks)` (second arg) vs the documented `instructions(plan)`, and
+  `placementRationale`/`planExplanation` carry an extra `blocks` param. If a downstream
+  **Plan-06** caller wires to the exact documented single-arg signatures, R2 needs a trivial
+  call-site adjustment. This is one-sided in R2's favor: R1 would match the literal signature
+  but lacks dest-hub naming and the verdict/utilization aggregation, so R2's extra param is the
+  cheaper fix. **Action for Plan-06:** pass `blocks` at the call site (already in scope).
+- **Widened validator public API:** `placementsFromSlices` is now an exported, maintained
+  surface of `@mm/load-planner` (deliberate, low-risk — single-source placement derivation so
+  scoring never forks the blocker predicate). Keep it stable.
+- **Placeholder per-slice `capacityWeight` (`maxBlockVolume*100`)** mirrors plan-load but is not
+  independently spec-anchored. Harmless for the rehandle comparison (volume-bound); revisit if
+  weight constraints tighten later.
+- **Integration suite is environment-sensitive** (~22-23s of the run is Postgres Testcontainers,
+  Docker-dependent). It passed cleanly here; treat as the most fragile gate on slower/CI hosts.
+
+### Phase-5 demo note
+
+R2 already aggregates the feasibility **verdict + utilization figure** alongside rehandle in
+`planExplanation` (the "money slide" content), so no backfill is required — this was R1's single
+most consequential miss and is the reason R2 won.
