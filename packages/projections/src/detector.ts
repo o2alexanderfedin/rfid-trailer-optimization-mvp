@@ -238,7 +238,15 @@ function wrongTrailerAppend(c: WrongTrailerCandidate): PlannedAppend {
   };
   return {
     streamId: `package-${c.packageId}`,
-    exceptionId: exceptionId("wrong-trailer", c.packageId, c.observedTrailerId, null),
+    // plannedTrailerId is part of the identity so a re-plan onto a different
+    // trailer (escalated severity/action) is NOT dropped as a duplicate of the
+    // earlier exception. Must match `exceptionsReducer`'s wrong-trailer key.
+    exceptionId: exceptionId(
+      "wrong-trailer",
+      c.packageId,
+      c.observedTrailerId,
+      c.plannedTrailerId,
+    ),
     event,
   };
 }

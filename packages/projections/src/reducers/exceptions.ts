@@ -148,7 +148,15 @@ export function exceptionsReducer(
   switch (event.type) {
     case "WrongTrailerDetected": {
       const p = event.payload;
-      const id = exceptionId("wrong-trailer", p.packageId, p.observedTrailerId, null);
+      // Include plannedTrailerId in the identity: a re-plan onto a DIFFERENT
+      // trailer while still observed on the same wrong trailer is a NEW
+      // (escalated) disagreement, not a duplicate — it must get a distinct id.
+      const id = exceptionId(
+        "wrong-trailer",
+        p.packageId,
+        p.observedTrailerId,
+        p.plannedTrailerId,
+      );
       return open(state, {
         exceptionId: id,
         kind: "wrong-trailer",

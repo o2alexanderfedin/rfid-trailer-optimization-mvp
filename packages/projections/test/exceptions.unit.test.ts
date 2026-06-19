@@ -131,6 +131,26 @@ describe("exceptionsReducer (SNS-04/05)", () => {
     expect(ids.slice(0, 2).sort()).toEqual(["PKG-1", "PKG-3"]);
   });
 
+  it("does NOT drop a re-planned escalation: same (pkg, observedTrailer) but DIFFERENT plannedTrailer ⇒ DISTINCT rows", () => {
+    // The package is observed on the SAME wrong trailer TRL-B across both
+    // detections, but the PLAN moved it (TRL-A ⇒ TRL-C) and the second detection
+    // escalates (warning ⇒ critical, block_departure). The exceptionId MUST
+    // include plannedTrailerId, or the escalated exception collides with the
+    // first and is silently dropped as a duplicate.
+    const state = fold([
+      evt(wrongTrailer("PKG-1", "TRL-B", "TRL-A", 0.4, "warning", "recheck_before_departure"), at(0)),
+      evt(wrongTrailer("PKG-1", "TRL-B", "TRL-C", 0.46, "critical", "block_departure"), at(1000)),
+    ]);
+    const open = openExceptions(state);
+    expect(open).toHaveLength(2);
+    expect(state.totalExceptions).toBe(2);
+    const ids = open.map((e) => e.exceptionId);
+    expect(new Set(ids).size).toBe(2); // distinct ids — escalation survives
+    // both the original warning and the escalated critical are visible.
+    const severities = open.map((e) => e.severity).sort();
+    expect(severities).toEqual(["critical", "warning"]);
+  });
+
   it("is idempotent: re-applying the SAME detection event upserts the same row (no double-count)", () => {
     const e = evt(wrongTrailer("PKG-1", "TRL-B", "TRL-A", 0.82), at(0));
     const once = fold([e]);
