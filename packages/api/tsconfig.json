@@ -10,6 +10,7 @@
     { "path": "../domain" },
     { "path": "../event-store" },
     { "path": "../load-planner" },
+    { "path": "../optimizer" },
     { "path": "../projections" },
     { "path": "../simulation" }
   ],
