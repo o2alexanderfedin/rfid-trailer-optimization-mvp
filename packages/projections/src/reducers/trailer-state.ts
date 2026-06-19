@@ -103,11 +103,17 @@ export function trailerStateReducer(
       });
       return next;
     }
+    // Phase-3 RFID/detection events are no-ops for trailer state — observed
+    // evidence is projected separately (later Phase-3 plans), keeping the
+    // scan-driven trailer read model independent of RFID fusion (anti-P6).
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
     case "PackageScanned":
     case "PackageArrivedAtHub":
+    case "RfidObserved":
+    case "WrongTrailerDetected":
+    case "MissedUnloadDetected":
       return state;
     default:
       return assertNeverEvent(event);

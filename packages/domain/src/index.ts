@@ -56,6 +56,9 @@ export type {
   TrailerArrivedAtHub,
   TrailerDeparted,
   TrailerDocked,
+  RfidObserved,
+  WrongTrailerDetected,
+  MissedUnloadDetected,
 } from "./events/index.js";
 export {
   assertNever,
@@ -69,6 +72,10 @@ export {
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
   trailerDockedSchema,
+  severitySchema,
+  rfidObservedSchema,
+  wrongTrailerDetectedSchema,
+  missedUnloadDetectedSchema,
 } from "./events/index.js";
 
 // --- Phase-2 planning value types (the shared planner/aggregation contract) --
