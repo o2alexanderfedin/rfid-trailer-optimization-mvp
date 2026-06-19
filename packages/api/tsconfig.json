@@ -6,8 +6,10 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
+    { "path": "../aggregation" },
     { "path": "../domain" },
     { "path": "../event-store" },
+    { "path": "../load-planner" },
     { "path": "../projections" },
     { "path": "../simulation" }
   ],

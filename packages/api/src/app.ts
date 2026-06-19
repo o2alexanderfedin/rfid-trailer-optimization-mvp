@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import { getHubs, type Database } from "@mm/event-store";
 import type { Hub } from "@mm/domain";
+import { registerPlanRoutes } from "./routes/plan.js";
 
 /** Public hub DTO returned by `GET /hubs` (matches the domain Hub shape). */
 export type HubDto = Hub;
@@ -31,6 +32,9 @@ export function buildApp(db: Kysely<Database>): FastifyInstance {
       lon: r.lon,
     }));
   });
+
+  // POST /plan — the pure load-planning pipeline (LOAD-08). Read-only, DB-free.
+  registerPlanRoutes(app);
 
   return app;
 }
