@@ -14,7 +14,8 @@
   "scripts": {
     "build": "tsc -b",
     "lint": "eslint src test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:all": "vitest run --root ../.. packages/event-store/"
   },
   "dependencies": {
     "@mm/domain": "workspace:*",

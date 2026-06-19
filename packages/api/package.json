@@ -15,6 +15,7 @@
     "build": "tsc -b",
     "lint": "eslint src test",
     "test": "vitest run",
+    "test:all": "vitest run --root ../.. packages/api/",
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
