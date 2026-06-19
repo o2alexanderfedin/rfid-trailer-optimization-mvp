@@ -11,6 +11,8 @@
     "baseUrl": ".",
     "paths": {
       "@mm/domain": ["packages/domain/src/index.ts"],
+      "@mm/aggregation": ["packages/aggregation/src/index.ts"],
+      "@mm/load-planner": ["packages/load-planner/src/index.ts"],
       "@mm/projections": ["packages/projections/src/index.ts"],
       "@mm/event-store": ["packages/event-store/src/index.ts"],
       "@mm/simulation": ["packages/simulation/src/index.ts"],

@@ -23,23 +23,23 @@
 
 ### Load-Block Aggregation (AGG)
 
-- [ ] **AGG-01**: The system groups packages into load blocks keyed by current hub, next/destination hub, SLA class, deadline bucket, handling class, and size/weight class
-- [ ] **AGG-02**: Each load block computes aggregate volume, weight, and package count
-- [ ] **AGG-03**: The system splits oversized or incompatible load blocks into feasible sub-blocks
-- [ ] **AGG-04**: Each load block is assigned a priority derived from SLA class and deadline
+- [x] **AGG-01**: The system groups packages into load blocks keyed by current hub, next/destination hub, SLA class, deadline bucket, handling class, and size/weight class
+- [x] **AGG-02**: Each load block computes aggregate volume, weight, and package count
+- [x] **AGG-03**: The system splits oversized or incompatible load blocks into feasible sub-blocks
+- [x] **AGG-04**: Each load block is assigned a priority derived from SLA class and deadline
 
 ### Trailer Model & Load Planning (LOAD)
 
-- [ ] **LOAD-01**: A trailer is modeled as an ordered rear-to-nose sequence of slices/zones, each tracking used volume and weight
-- [ ] **LOAD-02**: The system derives a route unload-order map so earlier-unload hubs map to positions closer to the rear door
-- [ ] **LOAD-03**: The planner produces a route-aware LIFO load plan, placing blocks nose→rear so earlier-unload freight is more accessible (greedy placement)
-- [ ] **LOAD-04**: An **independent validator** (separate code path from the planner) flags accessibility violations — more than the configured max blockers is a HARD violation, fewer is a SOFT violation; feasibility is a hard gate and is never folded into the optimization score
-- [ ] **LOAD-05**: The planner supports partial-LIFO — it accepts bounded blockers and assigns rehandle cost instead of rejecting the plan outright
-- [ ] **LOAD-06**: The system computes a rehandle risk score per block and per plan (blocker count/volume, fragile penalty, dock-delay and SLA-impact penalties)
-- [ ] **LOAD-07**: The system computes trailer utilization and scores it against a soft 75–90% band (penalty on both under- and over-utilization)
-- [ ] **LOAD-08**: The system emits human-readable loading instructions (load order by nose/middle/rear zone) per trailer
-- [ ] **LOAD-09**: A naive **baseline planner** (e.g., arrival/FIFO order) runs on the same inputs as the optimizer to enable before/after comparison, sharing KPI plumbing
-- [ ] **LOAD-10**: Each placement decision carries a human-readable rationale (e.g., "LB-H8 placed rear: unloads first; avoids 18-min rehandle") — explainable planning
+- [x] **LOAD-01**: A trailer is modeled as an ordered rear-to-nose sequence of slices/zones, each tracking used volume and weight
+- [x] **LOAD-02**: The system derives a route unload-order map so earlier-unload hubs map to positions closer to the rear door
+- [x] **LOAD-03**: The planner produces a route-aware LIFO load plan, placing blocks nose→rear so earlier-unload freight is more accessible (greedy placement)
+- [x] **LOAD-04**: An **independent validator** (separate code path from the planner) flags accessibility violations — more than the configured max blockers is a HARD violation, fewer is a SOFT violation; feasibility is a hard gate and is never folded into the optimization score
+- [x] **LOAD-05**: The planner supports partial-LIFO — it accepts bounded blockers and assigns rehandle cost instead of rejecting the plan outright
+- [x] **LOAD-06**: The system computes a rehandle risk score per block and per plan (blocker count/volume, fragile penalty, dock-delay and SLA-impact penalties)
+- [x] **LOAD-07**: The system computes trailer utilization and scores it against a soft 75–90% band (penalty on both under- and over-utilization)
+- [x] **LOAD-08**: The system emits human-readable loading instructions (load order by nose/middle/rear zone) per trailer
+- [x] **LOAD-09**: A naive **baseline planner** (e.g., arrival/FIFO order) runs on the same inputs as the optimizer to enable before/after comparison, sharing KPI plumbing
+- [x] **LOAD-10**: Each placement decision carries a human-readable rationale (e.g., "LB-H8 placed rear: unloads first; avoids 18-min rehandle") — explainable planning
 
 ### RFID-Assisted Validation (SNS)
 
@@ -130,20 +130,20 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals an
 | SIM-01 | Phase 1 | Complete |
 | SIM-02 | Phase 1 | Complete |
 | VIZ-01 | Phase 1 | Complete |
-| AGG-01 | Phase 2 | Pending |
-| AGG-02 | Phase 2 | Pending |
-| AGG-03 | Phase 2 | Pending |
-| AGG-04 | Phase 2 | Pending |
-| LOAD-01 | Phase 2 | Pending |
-| LOAD-02 | Phase 2 | Pending |
-| LOAD-03 | Phase 2 | Pending |
-| LOAD-04 | Phase 2 | Pending |
-| LOAD-05 | Phase 2 | Pending |
-| LOAD-06 | Phase 2 | Pending |
-| LOAD-07 | Phase 2 | Pending |
-| LOAD-08 | Phase 2 | Pending |
-| LOAD-09 | Phase 2 | Pending |
-| LOAD-10 | Phase 2 | Pending |
+| AGG-01 | Phase 2 | Complete |
+| AGG-02 | Phase 2 | Complete |
+| AGG-03 | Phase 2 | Complete |
+| AGG-04 | Phase 2 | Complete |
+| LOAD-01 | Phase 2 | Complete |
+| LOAD-02 | Phase 2 | Complete |
+| LOAD-03 | Phase 2 | Complete |
+| LOAD-04 | Phase 2 | Complete |
+| LOAD-05 | Phase 2 | Complete |
+| LOAD-06 | Phase 2 | Complete |
+| LOAD-07 | Phase 2 | Complete |
+| LOAD-08 | Phase 2 | Complete |
+| LOAD-09 | Phase 2 | Complete |
+| LOAD-10 | Phase 2 | Complete |
 | SNS-01 | Phase 3 | Pending |
 | SNS-02 | Phase 3 | Pending |
 | SNS-03 | Phase 3 | Pending |

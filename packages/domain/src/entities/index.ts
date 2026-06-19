@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  deadlineBucketSchema,
+  handlingClassSchema,
+  sizeWeightClassSchema,
+  slaClassSchema,
+} from "../planning/index.js";
 
 /**
  * Phase-1 domain entity types (tech spec §6).
@@ -101,22 +107,85 @@ export const tripSchema = z.object({
 export type Trip = z.infer<typeof tripSchema>;
 
 /**
- * Phase-2 STUB (tech spec §6.2): a load block is the primary optimization unit
- * (a group of packages that move together). Kept minimal here so the closed
- * Phase-1 contract can name it without pulling Phase-2 behavior forward (YAGNI).
+ * The 7-part load-block key (AGG-01, tech spec §11.1): the tuple packages are
+ * grouped by. Reuses the Phase-2 planning enums so the key vocabulary is
+ * single-sourced (the same enums `PlanningPackage` carries).
  */
-export const loadBlockSchema = z.object({
-  loadBlockId: id,
-  packageIds: z.array(id),
+export const blockKeySchema = z.object({
+  currentHubId: id,
+  nextUnloadHubId: id,
+  finalDestHubId: id,
+  slaClass: slaClassSchema,
+  deadlineBucket: deadlineBucketSchema,
+  handlingClass: handlingClassSchema,
+  sizeWeightClass: sizeWeightClassSchema,
 });
+export type BlockKey = z.infer<typeof blockKeySchema>;
+
+/**
+ * A load block (AGG-02, tech spec §6.2): the primary optimization unit — a group
+ * of packages sharing a {@link BlockKey} that move together. Carries the
+ * aggregates (total volume/weight, package count) and an AGG-04 `priority`.
+ *
+ * `packageCount` is refined to equal `packageIds.length` so a block cannot carry
+ * an inconsistent count past the validation boundary (the aggregator computes
+ * both from the same source; the refinement guards tampering — T-02-01).
+ */
+export const loadBlockSchema = z
+  .object({
+    loadBlockId: id,
+    key: blockKeySchema,
+    /** At least one package — an empty block is not a unit (AGG-02). */
+    packageIds: z.array(id).min(1),
+    packageCount: z.number().int().positive(),
+    /** Aggregate volume, m³ (strictly positive). */
+    totalVolume: z.number().positive(),
+    /** Aggregate weight, kg (strictly positive). */
+    totalWeight: z.number().positive(),
+    /** AGG-04 lexicographic priority score (higher = placed/served sooner). */
+    priority: z.number(),
+  })
+  .refine((b) => b.packageCount === b.packageIds.length, {
+    message: "packageCount must equal packageIds.length",
+    path: ["packageCount"],
+  });
 export type LoadBlock = z.infer<typeof loadBlockSchema>;
 
 /**
- * Phase-2 STUB (tech spec §6.4): a trailer slice is a logical depth segment
- * (rear-to-nose). Minimal placeholder for the LIFO load model.
+ * A trailer slice (LOAD-01, tech spec §6.4): one logical depth segment of the
+ * trailer in the rear-to-nose LIFO model.
+ *
+ * **Canonical depth convention (anti-P1, single-sourced):** `depth 0 = rear`
+ * (the door / easiest access); depth increases toward the nose. Earlier-unload
+ * freight belongs at lower depth — `unloadOrder(A) < unloadOrder(B) ⟹
+ * depth(A) ≤ depth(B)`. The planner and the independent validator both build on
+ * this one convention; it is never re-stated divergently.
+ *
+ * `usedVolume`/`usedWeight` are refined to not exceed the slice capacities so a
+ * physically over-filled slice fails validation (P2: capacity is a hard shape
+ * constraint, not a soft score).
  */
-export const trailerSliceSchema = z.object({
-  index: z.number().int().nonnegative(),
-  loadBlockIds: z.array(id),
-});
+export const trailerSliceSchema = z
+  .object({
+    /** Depth from the rear door; 0 = rear (easiest access), increasing → nose. */
+    depth: z.number().int().nonnegative(),
+    /** Slice volume capacity, m³ (strictly positive). */
+    capacityVolume: z.number().positive(),
+    /** Slice weight capacity, kg (strictly positive). */
+    capacityWeight: z.number().positive(),
+    /** Volume currently used (≥ 0, ≤ capacityVolume). */
+    usedVolume: z.number().nonnegative(),
+    /** Weight currently used (≥ 0, ≤ capacityWeight). */
+    usedWeight: z.number().nonnegative(),
+    /** Load blocks placed in this slice (may be empty). */
+    loadBlockIds: z.array(id),
+  })
+  .refine((s) => s.usedVolume <= s.capacityVolume, {
+    message: "usedVolume must not exceed capacityVolume",
+    path: ["usedVolume"],
+  })
+  .refine((s) => s.usedWeight <= s.capacityWeight, {
+    message: "usedWeight must not exceed capacityWeight",
+    path: ["usedWeight"],
+  });
 export type TrailerSlice = z.infer<typeof trailerSliceSchema>;

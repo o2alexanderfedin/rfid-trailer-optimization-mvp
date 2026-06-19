@@ -23,8 +23,6 @@
     "pg": "8.22.0"
   },
   "devDependencies": {
-    "@mm/api": "workspace:*",
-    "@mm/simulation": "workspace:*",
     "@testcontainers/postgresql": "12.0.3",
     "@types/pg": "8.20.0"
   }

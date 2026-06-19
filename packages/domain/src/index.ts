@@ -17,6 +17,7 @@ import { validateEvent } from "./ingestion/validate.js";
 
 // --- Entities ---------------------------------------------------------------
 export type {
+  BlockKey,
   DockDoor,
   Hub,
   LoadBlock,
@@ -29,6 +30,7 @@ export type {
   Trip,
 } from "./entities/index.js";
 export {
+  blockKeySchema,
   dockDoorSchema,
   hubSchema,
   loadBlockSchema,
@@ -68,6 +70,29 @@ export {
   trailerDepartedSchema,
   trailerDockedSchema,
 } from "./events/index.js";
+
+// --- Phase-2 planning value types (the shared planner/aggregation contract) --
+export type {
+  DeadlineBucket,
+  HandlingClass,
+  PlannerConfig,
+  PlanningPackage,
+  RouteStop,
+  SizeWeightClass,
+  SlaClass,
+} from "./planning/index.js";
+export {
+  DEFAULT_PLANNER_CONFIG,
+  deadlineBucketSchema,
+  handlingClassSchema,
+  plannerConfigObjectSchema,
+  plannerConfigSchema,
+  planningPackageSchema,
+  routeStopSchema,
+  sizeWeightClassSchema,
+  SLA_CLASS_WEIGHT,
+  slaClassSchema,
+} from "./planning/index.js";
 
 // --- Ingestion boundary (FND-03) --------------------------------------------
 export { validateEvent, ValidationError } from "./ingestion/validate.js";

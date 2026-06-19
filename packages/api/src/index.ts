@@ -10,6 +10,8 @@ export type {
   AuditEntryDto,
   RouteDto,
 } from "./routes/queries.js";
+export { registerPlanRoutes } from "./routes/plan.js";
+export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
   Broadcast,
