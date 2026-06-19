@@ -1,0 +1,278 @@
+/**
+ * Versioned ws envelope types (VIZ-04).
+ *
+ * Protocol contract for the demo's realtime channel:
+ *   - `snapshot`: full baseline payload sent on connect/resync.
+ *   - `tick`: per-sim-tick delta carrying ONLY changed fields (anti-pattern 4 /
+ *     T-01-19 — never one message per raw domain event).
+ *
+ * Every envelope carries:
+ *   - `v:1`   — protocol version for forward-compatible narrowing.
+ *   - `seq`   — monotonic counter; a gap signals a dropped message (→ resync).
+ *   - `simMs` — authoritative sim-clock milliseconds so the client can resync.
+ *
+ * Buckets for hub/route metrics are PRE-COMPUTED integers on the server
+ * (P3-friendly: no float keys, O(1) style lookup by index on the client, Q4).
+ */
+
+// ---------------------------------------------------------------------------
+// Entity shapes
+// ---------------------------------------------------------------------------
+
+/** VIZ-02 — drives the client-side tween along the route LineString. */
+export interface TrailerKeyframe {
+  readonly id: string;
+  /** RouteId → the LineString geometry already on the client (`/api/routes`). */
+  readonly routeId: string;
+  /** Sim-clock ms at leg start. */
+  readonly departMs: number;
+  /** Sim-clock ms at leg end (ETA). */
+  readonly etaMs: number;
+  /** Coloring driver. */
+  readonly state: "onTime" | "slaRisk" | "late" | "idle";
+  /** 0..1 fill ratio — optional, only when it changes (UI-02 hint). */
+  readonly util?: number;
+}
+
+/** VIZ-03 hub metrics (integer buckets for zero-allocation `StyleFunction`). */
+export interface HubState {
+  readonly id: string;
+  readonly volumeBucket: number;
+  readonly slaRiskBucket: number;
+  readonly congestionBucket: number;
+}
+
+/** VIZ-03 route/edge metrics. */
+export interface RouteState {
+  readonly id: string;
+  readonly loadBucket: number;
+  readonly slaRiskBucket: number;
+}
+
+/** VIZ-04 / UI-01 exception entry. */
+export interface ExceptionItem {
+  readonly id: string;
+  readonly kind: "wrongTrailer" | "missedUnload" | "blockedFreight" | "lowUtilization";
+  readonly severity: "low" | "med" | "high";
+  /** trailerId / hubId / packageId the badge attaches to. */
+  readonly entityId: string;
+  /** Plain-English description. */
+  readonly reason: string;
+  readonly recommendedAction: string;
+  /** Sim-clock ms when the exception was detected. */
+  readonly simMs: number;
+}
+
+/** UI-04 — plan re-optimization made visible. */
+export interface PlanDelta {
+  readonly trailerId: string;
+  readonly changeKind: "split" | "reassign" | "hold" | "overCarry" | "resequence";
+  readonly rationale: string;
+}
+
+/** UI-03 / VIZ-05 "money slide" — baseline planner vs live optimizer. */
+export interface KpiSnapshot {
+  readonly utilization: number;
+  readonly rehandleCount: number;
+  readonly rehandleMinutes: number;
+  readonly wrongTrailerCount: number;
+  readonly missedUnloadCount: number;
+  readonly slaViolationRate: number;
+  readonly onTimeDeparture: number;
+  readonly onTimeArrival: number;
+  /**
+   * Baseline planner metrics over the SAME seeded stream.
+   * Omit<KpiSnapshot,"baseline"> prevents recursive nesting.
+   */
+  readonly baseline: Omit<KpiSnapshot, "baseline">;
+}
+
+// ---------------------------------------------------------------------------
+// Payload shapes
+// ---------------------------------------------------------------------------
+
+/** Full baseline — sent on connect / client-requested resync. */
+export interface SnapshotPayload {
+  readonly trailers: readonly TrailerKeyframe[];
+  readonly hubs: readonly HubState[];
+  readonly routes: readonly RouteState[];
+  readonly kpis: KpiSnapshot;
+  readonly exceptionsOpen: readonly ExceptionItem[];
+}
+
+/** Per-tick delta — only what changed since the prior tick. */
+export interface TickPayload {
+  /** Upsert: trailers whose leg/timing/state/util changed. */
+  readonly trailers?: readonly TrailerKeyframe[];
+  /** Delete: trailerIds that completed or left the network. */
+  readonly trailersGone?: readonly string[];
+  /** Hubs whose metric bucket changed. */
+  readonly hubs?: readonly HubState[];
+  /** Routes whose metric bucket changed. */
+  readonly routes?: readonly RouteState[];
+  /** Changed KPI fields only (Partial avoids sending the whole snapshot). */
+  readonly kpis?: Partial<KpiSnapshot>;
+  /** New exceptions opened this tick. */
+  readonly exceptionsNew?: readonly ExceptionItem[];
+  /** Exception ids cleared this tick. */
+  readonly exceptionsResolved?: readonly string[];
+  /** Plan deltas from a re-optimization event. */
+  readonly planChanges?: readonly PlanDelta[];
+}
+
+// ---------------------------------------------------------------------------
+// Versioned envelope union
+// ---------------------------------------------------------------------------
+
+/** Wire envelope. `v` = protocol version for evolution-safe narrowing. */
+export type WsEnvelope =
+  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly payload: SnapshotPayload }
+  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly payload: TickPayload };
+
+// ---------------------------------------------------------------------------
+// diffTick: pure delta builder (data-in / data-out, no I/O, unit-testable)
+// ---------------------------------------------------------------------------
+
+type KpiKey = Exclude<keyof KpiSnapshot, "baseline">;
+
+const KPI_KEYS: readonly KpiKey[] = [
+  "utilization",
+  "rehandleCount",
+  "rehandleMinutes",
+  "wrongTrailerCount",
+  "missedUnloadCount",
+  "slaViolationRate",
+  "onTimeDeparture",
+  "onTimeArrival",
+];
+
+/** Stable string comparator for id-sorted output (P3 determinism). */
+function byId(a: { readonly id: string }, b: { readonly id: string }): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+function byString(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** True iff two `TrailerKeyframe`s differ in any field. */
+function trailerChanged(prev: TrailerKeyframe, next: TrailerKeyframe): boolean {
+  return (
+    prev.routeId !== next.routeId ||
+    prev.departMs !== next.departMs ||
+    prev.etaMs !== next.etaMs ||
+    prev.state !== next.state ||
+    prev.util !== next.util
+  );
+}
+
+/** True iff two `HubState`s differ in any bucket. */
+function hubChanged(prev: HubState, next: HubState): boolean {
+  return (
+    prev.volumeBucket !== next.volumeBucket ||
+    prev.slaRiskBucket !== next.slaRiskBucket ||
+    prev.congestionBucket !== next.congestionBucket
+  );
+}
+
+/** True iff two `RouteState`s differ in any bucket. */
+function routeChanged(prev: RouteState, next: RouteState): boolean {
+  return prev.loadBucket !== next.loadBucket || prev.slaRiskBucket !== next.slaRiskBucket;
+}
+
+/**
+ * Compute a `TickPayload` containing ONLY the entities that changed between
+ * `prev` and `next`. Collections are sorted by id for P3 determinism.
+ * Returns an empty object `{}` when nothing changed (zero-noise ticks).
+ *
+ * Pure: no I/O, no `Date.now()`, no side effects — safe to unit-test.
+ */
+export function diffTick(prev: SnapshotPayload, next: SnapshotPayload): TickPayload {
+  const result: {
+    trailers?: TrailerKeyframe[];
+    trailersGone?: string[];
+    hubs?: HubState[];
+    routes?: RouteState[];
+    kpis?: Partial<KpiSnapshot>;
+    exceptionsNew?: ExceptionItem[];
+    exceptionsResolved?: string[];
+    planChanges?: PlanDelta[];
+  } = {};
+
+  // --- Trailers: upsert (changed or new) + delete (gone) -------------------
+  const prevTrailers = new Map<string, TrailerKeyframe>(prev.trailers.map((t) => [t.id, t]));
+  const nextTrailers = new Map<string, TrailerKeyframe>(next.trailers.map((t) => [t.id, t]));
+
+  const upserted: TrailerKeyframe[] = [];
+  for (const [id, nxt] of nextTrailers) {
+    const prv = prevTrailers.get(id);
+    if (prv === undefined || trailerChanged(prv, nxt)) {
+      upserted.push(nxt);
+    }
+  }
+  upserted.sort(byId);
+  if (upserted.length > 0) result.trailers = upserted;
+
+  const gone: string[] = [];
+  for (const id of prevTrailers.keys()) {
+    if (!nextTrailers.has(id)) gone.push(id);
+  }
+  gone.sort(byString);
+  if (gone.length > 0) result.trailersGone = gone;
+
+  // --- Hubs: upsert (bucket changed or new) --------------------------------
+  const prevHubs = new Map<string, HubState>(prev.hubs.map((h) => [h.id, h]));
+  const changedHubs: HubState[] = [];
+  for (const nxt of next.hubs) {
+    const prv = prevHubs.get(nxt.id);
+    if (prv === undefined || hubChanged(prv, nxt)) {
+      changedHubs.push(nxt);
+    }
+  }
+  changedHubs.sort(byId);
+  if (changedHubs.length > 0) result.hubs = changedHubs;
+
+  // --- Routes: upsert (bucket changed or new) ------------------------------
+  const prevRoutes = new Map<string, RouteState>(prev.routes.map((r) => [r.id, r]));
+  const changedRoutes: RouteState[] = [];
+  for (const nxt of next.routes) {
+    const prv = prevRoutes.get(nxt.id);
+    if (prv === undefined || routeChanged(prv, nxt)) {
+      changedRoutes.push(nxt);
+    }
+  }
+  changedRoutes.sort(byId);
+  if (changedRoutes.length > 0) result.routes = changedRoutes;
+
+  // --- Exceptions: new + resolved ------------------------------------------
+  const prevExIds = new Set<string>(prev.exceptionsOpen.map((e) => e.id));
+  const nextExIds = new Set<string>(next.exceptionsOpen.map((e) => e.id));
+
+  const newExceptions: ExceptionItem[] = [];
+  for (const ex of next.exceptionsOpen) {
+    if (!prevExIds.has(ex.id)) newExceptions.push(ex);
+  }
+  newExceptions.sort(byId);
+  if (newExceptions.length > 0) result.exceptionsNew = newExceptions;
+
+  const resolved: string[] = [];
+  for (const id of prevExIds) {
+    if (!nextExIds.has(id)) resolved.push(id);
+  }
+  resolved.sort(byString);
+  if (resolved.length > 0) result.exceptionsResolved = resolved;
+
+  // --- KPIs: partial diff (only changed numeric fields) --------------------
+  const kpiDiff: Partial<KpiSnapshot> = {};
+  let kpiChanged = false;
+  for (const key of KPI_KEYS) {
+    if (prev.kpis[key] !== next.kpis[key]) {
+      // Cast needed: TS can't narrow `Partial<KpiSnapshot>[key]` from the loop.
+      (kpiDiff as Record<string, unknown>)[key] = next.kpis[key];
+      kpiChanged = true;
+    }
+  }
+  if (kpiChanged) result.kpis = kpiDiff;
+
+  return result;
+}
