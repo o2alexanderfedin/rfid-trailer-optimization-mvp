@@ -258,10 +258,13 @@ describe("Phase-1 entity types (FND-01)", () => {
     );
   });
 
-  it("LoadBlock and TrailerSlice exist as Phase-2 stubs", () => {
-    // Stubs are intentionally minimal; they must at least carry their id.
+  it("LoadBlock and TrailerSlice carry their Phase-2 fields", () => {
+    // Fleshed out in Phase 2: LoadBlock carries its id + 7-part key; TrailerSlice
+    // carries depth (0 = rear). Full-shape assertions live in
+    // entities-phase2.unit.test.ts.
     expectTypeOf<LoadBlock>().toHaveProperty("loadBlockId");
-    expectTypeOf<TrailerSlice>().toHaveProperty("index");
+    expectTypeOf<LoadBlock>().toHaveProperty("key");
+    expectTypeOf<TrailerSlice>().toHaveProperty("depth");
   });
 });
 
