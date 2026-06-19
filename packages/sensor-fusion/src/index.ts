@@ -32,3 +32,13 @@ export {
   type ZoneEstimate,
   fuseZone,
 } from "./fuse.js";
+export {
+  type DetectionConfig,
+  type MissedUnloadCandidate,
+  type PlannedAssignment,
+  type SlaImpact,
+  type WrongTrailerCandidate,
+  DEFAULT_DETECTION_CONFIG,
+  detectMissedUnload,
+  detectWrongTrailer,
+} from "./detection.js";

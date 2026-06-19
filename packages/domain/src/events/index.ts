@@ -10,6 +10,7 @@ export type {
   TrailerDeparted,
   TrailerArrivedAtHub,
   TrailerDocked,
+  Severity,
   RfidObserved,
   WrongTrailerDetected,
   MissedUnloadDetected,
