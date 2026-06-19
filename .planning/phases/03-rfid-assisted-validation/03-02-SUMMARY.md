@@ -46,3 +46,24 @@ posterior → a §8.4 `ZoneEstimate`. No wall clock, no RNG; same input ⇒ same
 - `pnpm install`, turbo `pnpm build` (9 pkgs, no cycles), `pnpm -r build`, `pnpm lint`, `pnpm test:all` (368 tests, incl. real-Postgres integration via Testcontainers/OrbStack).
 - Purity audit: no `Date.now`/`Math.random` in src or test; no `any`; only `@mm/domain` workspace dep (downward-only).
 - 24 new sensor-fusion tests; all prior phase tests remain green.
+
+## Integration into `feature/phase-3-rfid-assisted-validation`
+
+- **Winner:** rival #1 (`wt/p3-02-r1`), source sha `ec6e1a7ac764704558b0b5456852ff804ab815f2`. Merged `--no-ff` (merge commit `a79f9e1`). No conflicts; clean recursive merge.
+- **Shipped:** new pure package `@mm/sensor-fusion` (`rssiToLikelihood`, `windowObservations`, `fuseZone`, `percentile`, `ZoneEstimate` §8.4) satisfying **SNS-01** (confidence-scored RSSI→likelihood, single read can never reach 1.0) and **SNS-03** (Bayesian zone estimate, empty observations ⇒ prior-derived estimate). Registered in `tsconfig.eslint.json` path map and `pnpm-lock.yaml`.
+- **Post-merge gate results (re-verified at integration, ALL GREEN):**
+  - `pnpm install` — lockfile up to date, clean.
+  - `pnpm build` (turbo) — 9/9 tasks, FULL TURBO, no cycles.
+  - `pnpm -r build` — all 9 packages Done incl. `@mm/sensor-fusion`.
+  - `pnpm lint` — clean (eslint, no warnings).
+  - `pnpm test:all` — **368/368 tests passed across 46 files** (incl. Testcontainers/OrbStack Postgres integration).
+  - No merge-only breakage; no test weakened.
+- **Pushed:** `origin/feature/phase-3-rfid-assisted-validation` at `a79f9e1`.
+- **Cleanup:** rival worktrees `p3-02-r1`/`p3-02-r2` removed + pruned; branches `wt/p3-02-r1`/`wt/p3-02-r2` deleted.
+
+### Carried risks (from judge; narrow win over rival #2)
+- **Narrow margin (criterion-weighting sensitivity):** both rivals were production-quality and fully green. A different weighting of architecture (criterion 4) over keystone-faithfulness could have favored R2.
+- **YAGNI smell (LOW):** `RfidRead.perReadConfidence` is defined and carried through but never consumed by the engine. Candidate for removal or wiring-in.
+- **Faithfulness gap (LOW):** `lastReliableCheckpoint` is only passed through from the caller, not derived from observations. The plan hints at deriving it; rival #2 did derive it. Consider deriving it in a follow-up if Plan 04/05 needs it.
+- **Adapter-seam coupling (watch for Plans 04/05):** R1 uses indexed-access type coupling in `window.ts` rather than R2's single `@mm/domain` import point. If downstream integration weight rises, reconsider the seam. R2's clamp-to-0.85 / shrink-to-0.5 design was more conservative for downstream consumers but deviated from the plan's literal "confidence = posterior probability" / "floor = minLikelihood" wording.
+- **Anti-P5b guarantee is safe either way:** both keystones verified to hold at N=100,000 — the core anti-double-count defense holds regardless of which rival shipped.
