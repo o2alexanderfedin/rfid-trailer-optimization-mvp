@@ -134,6 +134,12 @@ importers:
         specifier: 0.29.2
         version: 0.29.2
 
+  packages/sensor-fusion:
+    dependencies:
+      '@mm/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/simulation:
     dependencies:
       '@mm/domain':
