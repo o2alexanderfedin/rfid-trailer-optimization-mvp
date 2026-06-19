@@ -27,3 +27,8 @@ export {
   percentile,
   windowObservations,
 } from "./window.js";
+export {
+  type FusionInput,
+  type ZoneEstimate,
+  fuseZone,
+} from "./fuse.js";
