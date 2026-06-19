@@ -58,6 +58,12 @@ export const packageSchema = z.object({
   sizeClass: sizeClassSchema,
   /** Weight in kilograms (positive). */
   weight: z.number().positive(),
+  /**
+   * Optional RFID tag bound to this package (SNS-02 mapping source). Additive:
+   * packages created before RFID omit it. When present it is the key the
+   * tag→package registry projection maps `RfidObserved.tagId` back through.
+   */
+  rfidTagId: id.optional(),
 });
 export type Package = z.infer<typeof packageSchema>;
 

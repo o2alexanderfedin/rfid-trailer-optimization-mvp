@@ -1,13 +1,16 @@
 import type { z } from "zod";
 import type {
   hubRegisteredSchema,
+  missedUnloadDetectedSchema,
   packageArrivedAtHubSchema,
   packageCreatedSchema,
   packageScannedSchema,
+  rfidObservedSchema,
   routeRegisteredSchema,
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
   trailerDockedSchema,
+  wrongTrailerDetectedSchema,
 } from "./schemas.js";
 
 /**
@@ -48,10 +51,19 @@ export type TrailerDeparted = z.infer<typeof trailerDepartedSchema>;
 export type TrailerArrivedAtHub = z.infer<typeof trailerArrivedAtHubSchema>;
 export type TrailerDocked = z.infer<typeof trailerDockedSchema>;
 
+// --- Phase-3 events (RFID-assisted validation, SNS-01/04/05) ----------------
+/** A single RFID observation of a tag at a reader/antenna (SNS-01). OBSERVED layer. */
+export type RfidObserved = z.infer<typeof rfidObservedSchema>;
+/** A package observed in a trailer other than the planned one (SNS-04). */
+export type WrongTrailerDetected = z.infer<typeof wrongTrailerDetectedSchema>;
+/** A package still aboard after its unload hub departed (SNS-05). */
+export type MissedUnloadDetected = z.infer<typeof missedUnloadDetectedSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
- * imports (FND-01). Adding a Phase-1 event means adding a member here AND a
- * schema in events/schemas.ts; the type-equality test fails if they diverge.
+ * imports (FND-01). Adding an event means adding a member here AND a schema in
+ * events/schemas.ts; the type-equality proof in contract.assert.ts fails the
+ * BUILD if they diverge.
  */
 export type DomainEvent =
   | HubRegistered
@@ -61,7 +73,10 @@ export type DomainEvent =
   | PackageArrivedAtHub
   | TrailerDeparted
   | TrailerArrivedAtHub
-  | TrailerDocked;
+  | TrailerDocked
+  | RfidObserved
+  | WrongTrailerDetected
+  | MissedUnloadDetected;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

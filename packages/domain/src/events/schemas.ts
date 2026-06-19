@@ -62,6 +62,14 @@ export const packageCreatedSchema = eventSchema(
     destHubId: id,
     sizeClass: sizeClassSchema,
     weight: z.number().positive(),
+    /**
+     * Optional RFID tag bound to this package at creation (SNS-02). Additive:
+     * Phase-1/2 streams that predate RFID omit it and stay valid; when present,
+     * it is the source for the tag→package mapping projection. The payload is
+     * `.strict()`, so an unknown field would be rejected — this declaration is
+     * what makes the new field accepted, not silently dropped.
+     */
+    rfidTagId: id.optional(),
   }),
 );
 
@@ -111,6 +119,77 @@ export const trailerDockedSchema = eventSchema(
   }),
 );
 
+// --- Phase-3 events (RFID-assisted validation, SNS-01/04/05) ----------------
+
+/**
+ * Confidence in [0, 1]. Shared by every RFID/detection payload. The upper bound
+ * is a structural guard at the ingestion boundary (T-03-01): no observed or
+ * detected event can carry confidence > 1 even if a fusion bug overshoots —
+ * complementing the ≤ 0.85 cap the fusion layer applies upstream (P5b).
+ */
+const confidence = z.number().min(0).max(1);
+
+/**
+ * Exception severity — a fixed, closed taxonomy reused by both detection events
+ * so the exception feed has a single, stable ranking vocabulary.
+ */
+export const severitySchema = z.enum(["info", "warning", "critical"]);
+
+/**
+ * RfidObserved (SNS-01, spec §8.3): a single fused-or-raw RFID observation of a
+ * tag at a reader/antenna. This is the OBSERVED layer — evidence, not truth
+ * (anti-P6). It carries only zone-relevant ids + signal strength + a bounded
+ * `confidence`; there is no (x, y) coordinate field, so "RFID ≠ coordinates" is
+ * structural (T-03-03). `rssi` must be finite (NaN/Infinity rejected, T-03-01).
+ */
+export const rfidObservedSchema = eventSchema(
+  "RfidObserved",
+  z.object({
+    tagId: id,
+    readerId: id,
+    antennaId: id,
+    rssi: z.number().finite(),
+    trailerId: id,
+    hubId: id,
+    confidence,
+  }),
+);
+
+/**
+ * WrongTrailerDetected (SNS-04): the detector found a package observed in a
+ * trailer other than the one it was planned into, above the confidence
+ * threshold. Carries the disagreement (observed vs planned), the bounded
+ * confidence, a `severity`, and a non-empty `recommendedAction` for the feed.
+ */
+export const wrongTrailerDetectedSchema = eventSchema(
+  "WrongTrailerDetected",
+  z.object({
+    packageId: id,
+    observedTrailerId: id,
+    plannedTrailerId: id,
+    confidence,
+    severity: severitySchema,
+    recommendedAction: id,
+  }),
+);
+
+/**
+ * MissedUnloadDetected (SNS-05): a package destined for a hub is still observed
+ * aboard its trailer after departure from that hub, above threshold. Detection
+ * is gated POST-departure by the detector; this event is the emitted outcome.
+ */
+export const missedUnloadDetectedSchema = eventSchema(
+  "MissedUnloadDetected",
+  z.object({
+    packageId: id,
+    trailerId: id,
+    hubId: id,
+    confidence,
+    severity: severitySchema,
+    recommendedAction: id,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -125,4 +204,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   trailerDepartedSchema,
   trailerArrivedAtHubSchema,
   trailerDockedSchema,
+  rfidObservedSchema,
+  wrongTrailerDetectedSchema,
+  missedUnloadDetectedSchema,
 ]);

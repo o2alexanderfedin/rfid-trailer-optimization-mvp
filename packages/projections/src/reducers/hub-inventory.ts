@@ -185,11 +185,17 @@ export function hubInventoryReducer(
         (acc, packageId) => placePackage(acc, packageId, null),
         state,
       );
+    // Phase-3 RFID/detection events are no-ops for hub inventory — observed
+    // evidence is projected separately (later Phase-3 plans), never folded into
+    // the planned inventory read model (anti-P6).
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
     case "TrailerArrivedAtHub":
     case "TrailerDocked":
+    case "RfidObserved":
+    case "WrongTrailerDetected":
+    case "MissedUnloadDetected":
       return state;
     default:
       return assertNeverEvent(event);
