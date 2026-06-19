@@ -234,6 +234,54 @@ describe("CATCH-UP projections: audit timeline (FND-08) + geo-track", () => {
     void dfw;
   });
 
+  it("M-4: a hub with 2+ inbound legs resolves the arrival keyframe by the trip's ACTUAL leg", async () => {
+    // Topology: TWO inbound legs into a shared hub ZZZ with DISTINCT terminal
+    // vertices. The trailer travels the BBB->ZZZ leg (the lexicographically
+    // LARGER key); the old code would have mis-resolved to AAA->ZZZ.
+    const tag = `M4-${n}`;
+    const aaa = `${tag}-AAA`;
+    const bbb = `${tag}-BBB`;
+    const zzz = `${tag}-ZZZ`;
+    const trailer = `${tag}-T1`;
+    const trip = `${tag}-TRIP1`;
+    const es = eventStoreView(fx.db);
+
+    const legA: LonLat[] = [
+      [-100, 40],
+      [-95, 38], // AAA->ZZZ terminal vertex
+    ];
+    const legB: LonLat[] = [
+      [-80, 30],
+      [-85, 32], // BBB->ZZZ terminal vertex (different)
+    ];
+    await appendToStream(es, `route-${aaa}-${zzz}`, 0, [routeRegistered(aaa, zzz, legA)], at(0));
+    await appendToStream(es, `route-${bbb}-${zzz}`, 0, [routeRegistered(bbb, zzz, legB)], at(0));
+
+    const db = catchupView(fx.db);
+    // First catch-up pass: ONLY the departure on BBB->ZZZ (arrival not yet in log).
+    await appendToStream(es, `trailer-${trailer}`, 0, [departed(trailer, bbb, zzz, trip, [])], at(1_000));
+    await runCatchup(db, replayReadAll);
+
+    // Second pass: the arrival lands in a SEPARATE catch-up pass — its leg must be
+    // resolved from the PERSISTED in-flight index, not re-derived in-memory.
+    await appendToStream(es, `trailer-${trailer}`, 1, [trailerArrived(trailer, zzz, trip)], at(2_000));
+    await runCatchup(db, replayReadAll);
+
+    const mine = (await readGeoKeyframes(db)).filter(
+      (k) => k.trailerId === trailer && k.tripId === trip,
+    );
+    const arrive = mine.find((k) => k.kind === "arrive")!;
+    // Lands on the BBB->ZZZ terminal vertex, NOT the AAA->ZZZ one.
+    expect([arrive.lon, arrive.lat]).toEqual(legB[legB.length - 1]);
+    expect([arrive.lon, arrive.lat]).not.toEqual(legA[legA.length - 1]);
+
+    // Determinism: a full rebuild reproduces byte-identical state even though the
+    // in-flight resolution crossed two incremental passes.
+    const live = await serializeCatchup(db);
+    await rebuildCatchup(db, replayReadAll);
+    expect(await serializeCatchup(db)).toBe(live);
+  });
+
   it("rebuild (truncate + replay from 0) yields identical audit + geo state", async () => {
     await seedScenario();
     const db = catchupView(fx.db);

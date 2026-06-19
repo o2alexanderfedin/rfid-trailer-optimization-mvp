@@ -46,6 +46,19 @@ export interface SnapshotMessage {
 /** Broadcast one snapshot to all connected clients; returns the message sent. */
 export type Broadcast = () => Promise<SnapshotMessage>;
 
+/** Builds the current snapshot from the read models (injectable for testing). */
+export type SnapshotBuilder = (db: ApiDb) => Promise<SnapshotMessage>;
+
+/** Options for {@link attachSnapshotSocket} (dependency inversion / testing). */
+export interface SnapshotSocketOptions {
+  /**
+   * Override the snapshot source. Defaults to the real {@link buildSnapshot}
+   * (geo-track keyframes + hubs). Injected by tests to exercise the failure path
+   * (M-5) without a live DB.
+   */
+  readonly buildSnapshot?: SnapshotBuilder;
+}
+
 /** View the API handle as the catch-up read schema (same runtime instance). */
 function catchupView(db: ApiDb): Kysely<CatchupDb> {
   return db as unknown as Kysely<CatchupDb>;
@@ -96,19 +109,34 @@ async function buildSnapshot(db: ApiDb): Promise<SnapshotMessage> {
  *
  * Returns the `broadcast` function the sim driver calls per tick.
  */
-export function attachSnapshotSocket(app: FastifyInstance, db: ApiDb): Broadcast {
+export function attachSnapshotSocket(
+  app: FastifyInstance,
+  db: ApiDb,
+  options: SnapshotSocketOptions = {},
+): Broadcast {
   const clients = new Set<WebSocket>();
+  const build = options.buildSnapshot ?? buildSnapshot;
 
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {
     clients.add(socket);
-    // Send an initial snapshot so a fresh client paints immediately.
-    void buildSnapshot(db).then((snap) => sendIfOpen(socket, snap));
+    // Send an initial snapshot so a fresh client paints immediately. This is
+    // fire-and-forget, so it MUST handle rejection (M-5): a transient DB read
+    // failure here would otherwise become an unhandled promise rejection and,
+    // under Node's default `--unhandled-rejections=throw`, crash the whole
+    // server. On failure we log and close the socket so the client reconnects.
+    build(db)
+      .then((snap) => sendIfOpen(socket, snap))
+      .catch((err: unknown) => {
+        app.log.error(err, "initial ws snapshot failed");
+        clients.delete(socket);
+        closeIfOpen(socket);
+      });
     socket.on("close", () => clients.delete(socket));
     socket.on("error", () => clients.delete(socket));
   });
 
   return async (): Promise<SnapshotMessage> => {
-    const snap = await buildSnapshot(db);
+    const snap = await build(db);
     const payload = JSON.stringify(snap);
     for (const socket of clients) sendRawIfOpen(socket, payload);
     return snap;
@@ -123,4 +151,13 @@ function sendIfOpen(socket: WebSocket, snap: SnapshotMessage): void {
 
 function sendRawIfOpen(socket: WebSocket, payload: string): void {
   if (socket.readyState === WS_OPEN) socket.send(payload);
+}
+
+const WS_CONNECTING = 0; // ws.CONNECTING
+
+/** Gracefully close a socket that is still connecting/open (M-5 failure path). */
+function closeIfOpen(socket: WebSocket): void {
+  if (socket.readyState === WS_OPEN || socket.readyState === WS_CONNECTING) {
+    socket.close();
+  }
 }

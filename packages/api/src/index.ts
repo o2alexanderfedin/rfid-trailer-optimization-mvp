@@ -13,6 +13,8 @@ export type {
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
   Broadcast,
+  SnapshotBuilder,
+  SnapshotSocketOptions,
   SnapshotMessage,
   TrailerSnapshot,
   HubSnapshot,
