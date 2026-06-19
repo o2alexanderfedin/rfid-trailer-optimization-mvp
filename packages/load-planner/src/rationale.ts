@@ -24,11 +24,25 @@ import { isFeasible, validatePlan } from "./validator.js";
  * no clock, no RNG. Same input ⇒ identical text.
  */
 
-/** Human zone label for a depth, given the trailer's slice count. */
-function zoneLabel(depth: number, sliceCount: number): Zone {
-  // Guard against a depth out of range (defensive — a placement should be valid).
-  if (sliceCount <= 0 || depth >= sliceCount) return "nose";
-  return zoneForDepth(depth, sliceCount);
+/**
+ * Human zone label for a placement, derived from the block's ACTUAL physical
+ * slice (L6). The zone must match where the block really sits — the slice in
+ * `plan.slices` whose `loadBlockIds` contains it — NOT a caller-supplied
+ * `placement.depth` that could have drifted out of sync with the layout. We
+ * re-derive from `plan.slices` (the same single source `instructions.ts` and the
+ * validator read), falling back to `placement.depth` only if the block is absent
+ * from every slice (defensive — a valid plan always lists it).
+ */
+function zoneLabel(plan: LoadPlan, placement: Placement): Zone {
+  const sliceCount = plan.slices.length;
+  if (sliceCount <= 0) return "nose"; // empty trailer — defensive
+  const owning = plan.slices.find((s) =>
+    s.loadBlockIds.includes(placement.loadBlockId),
+  );
+  const depth = owning?.depth ?? placement.depth;
+  // Clamp an out-of-range depth to the deepest valid slice rather than guessing.
+  const safeDepth = depth >= sliceCount ? sliceCount - 1 : depth;
+  return zoneForDepth(safeDepth, sliceCount);
 }
 
 /**
@@ -47,17 +61,17 @@ export function placementRationale(
   config: PlannerConfig,
 ): string {
   const breakdown = rehandleBreakdown(plan, blocks, route, config);
-  return rationaleFromBreakdown(placement, plan.slices.length, breakdown, config);
+  return rationaleFromBreakdown(placement, plan, breakdown, config);
 }
 
 /** Shared renderer so per-placement and plan-level use ONE phrasing. */
 function rationaleFromBreakdown(
   placement: Placement,
-  sliceCount: number,
+  plan: LoadPlan,
   breakdown: readonly BlockRehandle[],
   config: PlannerConfig,
 ): string {
-  const zone = zoneLabel(placement.depth, sliceCount);
+  const zone = zoneLabel(plan, placement);
   const id = placement.loadBlockId;
   const entry = breakdown.find((b) => b.loadBlockId === id);
 
@@ -111,9 +125,7 @@ export function planExplanation(
     .sort((a, b) =>
       a.depth - b.depth || (a.loadBlockId < b.loadBlockId ? -1 : 1),
     )
-    .map((p) =>
-      rationaleFromBreakdown(p, plan.slices.length, breakdown, config),
-    );
+    .map((p) => rationaleFromBreakdown(p, plan, breakdown, config));
 
   return [header, ...lines].join("\n");
 }

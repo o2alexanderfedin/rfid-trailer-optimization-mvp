@@ -176,3 +176,104 @@ describe("splitBlock — handling incompatibility (fragile ⊄ heavy)", () => {
     expect(out).toHaveLength(1);
   });
 });
+
+describe("splitBlock — M1/L2: mixed-handling + over-volume (id uniqueness + key match)", () => {
+  /**
+   * A block whose members mix fragile + heavy AND whose per-handling groups are
+   * each over `maxBlockVolume`, forcing BOTH the handling split AND the volume
+   * split. Regression for:
+   *   - M1: the `#h{i}` handling discriminator was dropped on the `#v{j}`
+   *     volume rebuild, so distinct handling groups emitted DUPLICATE loadBlockIds.
+   *   - L2: every sub-block carried the ORIGINAL block's `key.handlingClass`,
+   *     mismatching its actual (re-derived) members.
+   */
+  function mixedOverVolumeBlock() {
+    // cfg.maxBlockVolume = 20. Each handling group totals 30 (> 20) so it splits.
+    const fragile = [
+      pkg({ handlingClass: "fragile", volume: 15 }),
+      pkg({ handlingClass: "fragile", volume: 15 }),
+    ];
+    const heavy = [
+      pkg({ handlingClass: "heavy", volume: 15 }),
+      pkg({ handlingClass: "heavy", volume: 15 }),
+    ];
+    const packages: PlanningPackage[] = [...fragile, ...heavy];
+    // A hand-built single block mixing both classes (handlingClass IS a key axis,
+    // so a real aggregate would never combine them — we construct it directly).
+    const block = {
+      loadBlockId: "LB-MIXED",
+      key: {
+        currentHubId: "H1",
+        nextUnloadHubId: "H2",
+        finalDestHubId: "H3",
+        slaClass: "standard" as const,
+        deadlineBucket: 0,
+        handlingClass: "fragile" as HandlingClass,
+        sizeWeightClass: "small" as const,
+      },
+      packageIds: packages.map((p) => p.packageId).sort(),
+      packageCount: packages.length,
+      totalVolume: 60,
+      totalWeight: packages.reduce((s, p) => s + p.weight, 0),
+      priority: 0,
+    };
+    return { block, packages };
+  }
+
+  it("emits UNIQUE loadBlockIds across every sub-block (M1: no #h discriminator drop)", () => {
+    const { block, packages } = mixedOverVolumeBlock();
+    const out = splitBlock(block, packages, cfg);
+
+    // Two handling groups, each over-volume → at least 4 sub-blocks total.
+    expect(out.length).toBeGreaterThanOrEqual(4);
+
+    const ids = out.map((b) => b.loadBlockId);
+    const unique = new Set(ids);
+    expect(unique.size).toBe(ids.length); // NO duplicates
+  });
+
+  it("each sub-block's key.handlingClass matches its actual members (L2)", () => {
+    const { block, packages } = mixedOverVolumeBlock();
+    const out = splitBlock(block, packages, cfg);
+
+    for (const sub of out) {
+      const memberClasses = new Set(
+        packages
+          .filter((p) => sub.packageIds.includes(p.packageId))
+          .map((p) => p.handlingClass),
+      );
+      // Each sub-block is single-handling-class (strict partition) and its key
+      // mirrors that class — never the stale original.
+      expect(memberClasses.size).toBe(1);
+      expect(memberClasses.has(sub.key.handlingClass)).toBe(true);
+    }
+  });
+
+  it("conserves packages + volume + remains feasible after the combined split", () => {
+    const { block, packages } = mixedOverVolumeBlock();
+    const out = splitBlock(block, packages, cfg);
+
+    const allPkgs = out.flatMap((b) => b.packageIds).sort();
+    expect(allPkgs).toStrictEqual(packages.map((p) => p.packageId).sort());
+
+    for (const sub of out) {
+      expect(sub.totalVolume).toBeLessThanOrEqual(cfg.maxBlockVolume);
+      // No sub-block mixes fragile with heavy.
+      const classes = new Set(
+        packages
+          .filter((p) => sub.packageIds.includes(p.packageId))
+          .map((p) => p.handlingClass),
+      );
+      expect(classes.has("fragile") && classes.has("heavy")).toBe(false);
+    }
+  });
+
+  it("is idempotent: re-splitting each produced sub-block yields itself (stable ids)", () => {
+    const { block, packages } = mixedOverVolumeBlock();
+    const out = splitBlock(block, packages, cfg);
+    for (const sub of out) {
+      const members = packages.filter((p) => sub.packageIds.includes(p.packageId));
+      expect(splitBlock(sub, members, cfg)).toStrictEqual([sub]);
+    }
+  });
+});

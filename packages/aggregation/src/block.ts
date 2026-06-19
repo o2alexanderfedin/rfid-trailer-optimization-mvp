@@ -20,13 +20,19 @@ const KEY_FIELDS = [
 ] as const;
 
 /**
- * A canonical, collision-resistant string for a {@link BlockKey}. Used as both
- * the deterministic `loadBlockId` and the stable group/sort key. The unit
- * separator (`␟`) can't appear in the enum/id values, so distinct keys
- * never alias.
+ * A canonical, COLLISION-SAFE string for a {@link BlockKey}. Used as both the
+ * deterministic `loadBlockId` and the stable group/sort key.
+ *
+ * The hub-id fields are arbitrary `z.string().min(1)` values, so they may
+ * contain ANY character — a plain delimiter join would let distinct keys alias
+ * whenever a field embeds the delimiter (e.g. `"A|B" + "C"` vs `"A" + "B|C"`,
+ * L4). We instead JSON-encode the ordered field tuple: every string field is
+ * quoted and escaped, so field boundaries are unambiguous and two keys share an
+ * id IFF every field is equal. The field ORDER is fixed ({@link KEY_FIELDS}), so
+ * the encoding is deterministic and replay-safe (PITFALLS P3).
  */
 export function keyId(key: BlockKey): string {
-  return KEY_FIELDS.map((f) => String(key[f])).join("␟");
+  return JSON.stringify(KEY_FIELDS.map((f) => key[f]));
 }
 
 /**

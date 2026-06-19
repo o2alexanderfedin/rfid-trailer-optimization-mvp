@@ -205,6 +205,25 @@ describe("POST /plan — pure load-planning pipeline at the API boundary (LOAD-0
     await app.close();
   });
 
+  it("BAD INPUT: an inverted util band (utilLow > utilHigh) in config is rejected with 400 (L7)", async () => {
+    // Each edge is a valid (0,1] fraction, so the per-field partial parse passes;
+    // the cross-field invariant on the MERGED config must still reject the band.
+    const app = buildApp(STUB_DB);
+    const res = await app.inject({
+      method: "POST",
+      url: "/plan",
+      payload: {
+        packages: SCENARIO_PACKAGES,
+        route: ROUTE,
+        config: { maxBlockVolume: 3, utilLow: 0.95, utilHigh: 0.5 },
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
   it("BAD INPUT: a missing `route` is rejected with 400", async () => {
     const app = buildApp(STUB_DB);
     const res = await app.inject({

@@ -85,6 +85,7 @@ export {
   DEFAULT_PLANNER_CONFIG,
   deadlineBucketSchema,
   handlingClassSchema,
+  plannerConfigObjectSchema,
   plannerConfigSchema,
   planningPackageSchema,
   routeStopSchema,

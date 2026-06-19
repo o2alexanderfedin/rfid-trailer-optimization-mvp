@@ -10,8 +10,22 @@ import {
   rebuildProjections,
   type ReplayEvent,
   serializeTwin,
-} from "../src/index.js";
-import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js";
+} from "@mm/projections";
+import {
+  eventStoreView,
+  startPgFixture,
+  type FixtureDb,
+  type PgFixture,
+} from "./pg-fixture.js";
+
+/**
+ * The cross-package golden-replay spine (FND-04). Hosted in `@mm/api` (the
+ * composition root that already depends on BOTH `@mm/event-store` and
+ * `@mm/projections`) rather than in `@mm/projections` — `@mm/projections` must
+ * NOT dev-depend on `@mm/event-store`, which would re-form a build cycle that
+ * breaks `turbo run build`. The projection runners are exercised against the
+ * real event log via `@mm/event-store`'s `readAll`, exactly as in production.
+ */
 
 /**
  * The injected log reader for `rebuildProjections`. It receives the SAME
@@ -25,7 +39,7 @@ function replayReadAll(
   fromGlobalSeq: bigint,
 ): Promise<readonly ReplayEvent[]> {
   // The runtime instance owns the full event-store schema; view it as such.
-  return readAll(eventStoreView(db as unknown as PgFixture["db"]), fromGlobalSeq);
+  return readAll(eventStoreView(db as unknown as FixtureDb), fromGlobalSeq);
 }
 
 /**

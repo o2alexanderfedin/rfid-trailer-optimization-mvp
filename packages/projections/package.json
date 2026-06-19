@@ -19,11 +19,5 @@
   "dependencies": {
     "@mm/domain": "workspace:*",
     "kysely": "0.29.2"
-  },
-  "devDependencies": {
-    "@mm/event-store": "workspace:*",
-    "@testcontainers/postgresql": "12.0.3",
-    "pg": "8.22.0",
-    "@types/pg": "8.20.0"
   }
 }

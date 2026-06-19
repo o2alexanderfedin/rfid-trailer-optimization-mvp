@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   DEFAULT_PLANNER_CONFIG,
   planningPackageSchema,
+  plannerConfigObjectSchema,
   plannerConfigSchema,
   routeStopSchema,
   type PlannerConfig,
@@ -103,16 +104,24 @@ function parseBody(body: unknown): ParseSuccess | ParseFailure {
     return { ok: false, message: `invalid route: ${route.error.message}` };
   }
   // `config` is optional; a partial config is merged over the spec defaults so a
-  // caller may tune one knob without restating the whole config.
-  const config = plannerConfigSchema.partial().safeParse(fields.config ?? {});
+  // caller may tune one knob without restating the whole config. We `.partial()`
+  // the un-refined OBJECT schema here (a `.refine()`d schema is a `ZodEffects`
+  // with no `.partial()`); the cross-field invariants (L7) are then enforced on
+  // the MERGED result below — a single tuned edge can still invert the band.
+  const config = plannerConfigObjectSchema.partial().safeParse(fields.config ?? {});
   if (!config.success) {
     return { ok: false, message: `invalid config: ${config.error.message}` };
+  }
+  // Re-validate the merged config through the FULL schema (cross-field rules).
+  const merged = plannerConfigSchema.safeParse(mergeConfig(config.data));
+  if (!merged.success) {
+    return { ok: false, message: `invalid config: ${merged.error.message}` };
   }
   return {
     ok: true,
     packages: packages.data,
     route: route.data,
-    config: mergeConfig(config.data),
+    config: merged.data,
   };
 }
 

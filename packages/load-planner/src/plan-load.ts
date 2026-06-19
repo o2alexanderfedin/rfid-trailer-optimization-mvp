@@ -25,13 +25,20 @@ import { buildUnloadOrderMap } from "./unload-order.js";
  * re-states it — it builds a layout that respects it (the validator independently
  * verifies that, never trusting this bookkeeping).
  *
- * Partial-LIFO (LOAD-05): when capacity forces blocks of the SAME unloadOrder
- * across multiple depths, those are never mutual blockers (strict predicate), so
- * a clean input yields zero blockers; a capacity-constrained input still yields a
- * plan (the planner never rejects a bounded-blocker layout — the rehandle COST is
- * assigned in a later plan). The depth assignment is monotone in unloadOrder, so
- * the planner never manufactures an out-of-bound blocker when a feasible layout
- * exists.
+ * TOTAL-LIFO by construction (LOAD-03/05): `planLoad` lays a STRICTLY accessible
+ * trailer — ZERO blockers — for any input where every block fits a slice. Because
+ * depth is assigned non-increasingly as `unloadOrder` decreases, no later-unload
+ * block is ever placed in front of an earlier-unload one; and blocks of the SAME
+ * `unloadOrder` spread across depths are never mutual blockers (strict predicate).
+ * So `planLoad`'s own output never NEEDS a rehandle — it does not manufacture a
+ * partial-LIFO layout.
+ *
+ * The SOFT / partial-LIFO violations and their rehandle COST are a TOLERANCE of
+ * the independent validator + scorer (`validatePlan` / `scorePlan`), exercised by
+ * the LIFO-blind FIFO strawman {@link baselinePlan} — NOT a layout `planLoad`
+ * produces. `planLoad` never rejects an input and never emits an out-of-bound
+ * blocker when a feasible layout exists; the cost machinery exists only to score
+ * plans (like the baseline) that DO bury freight.
  *
  * Pure + deterministic: imports only `@mm/domain` (types) + local pure modules;
  * stable sorts with a `loadBlockId` tie-break; no clock (`Date.now()`), no RNG

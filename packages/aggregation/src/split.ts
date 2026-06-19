@@ -1,4 +1,5 @@
 import type {
+  BlockKey,
   HandlingClass,
   LoadBlock,
   PlannerConfig,
@@ -42,19 +43,65 @@ export function splitBlock(
   // 1) Handling-incompatibility split (only when fragile AND heavy coexist).
   const handlingGroups = partitionByHandlingIncompatibility(members);
   if (handlingGroups.length > 1) {
-    return handlingGroups.flatMap((g, i) =>
-      splitBlock(buildLoadBlock(block.key, g, `#h${String(i)}`), g, config),
-    );
+    // Each group is single-handling-class. RE-DERIVE the key per group so its
+    // `handlingClass` matches the group's members (L2 — no stale class), and
+    // thread the `#h{i}` discriminator through any subsequent volume split so
+    // sub-block ids stay globally UNIQUE (M1 — the discriminator is never dropped).
+    return handlingGroups.flatMap((g, i) => {
+      const groupKey = withHandlingClass(block.key, g[0]!.handlingClass);
+      return splitFeasible(groupKey, g, config, `#h${String(i)}`);
+    });
   }
 
-  // 2) Volume split.
+  // 2) Volume split (no handling mix → the key already matches the members).
   if (block.totalVolume > config.maxBlockVolume) {
-    const bins = greedyVolumeBins(members, config.maxBlockVolume);
-    return bins.map((g, i) => buildLoadBlock(block.key, g, `#v${String(i)}`));
+    return splitByVolume(block.key, members, config, "");
   }
 
-  // Already feasible.
+  // Already feasible — return the original block untouched.
   return [block];
+}
+
+/**
+ * Split one handling-homogeneous group (key already matches its members) into
+ * feasible sub-blocks, preserving `parentSuffix` on every emitted id so distinct
+ * parents (e.g. distinct handling groups) never alias. Volume-splits when over
+ * cap; otherwise emits the single feasible block carrying the suffix.
+ */
+function splitFeasible(
+  key: BlockKey,
+  members: readonly PlanningPackage[],
+  config: PlannerConfig,
+  parentSuffix: string,
+): LoadBlock[] {
+  const totalVolume = members.reduce((s, p) => s + p.volume, 0);
+  if (totalVolume > config.maxBlockVolume) {
+    return splitByVolume(key, members, config, parentSuffix);
+  }
+  return [buildLoadBlock(key, members, parentSuffix)];
+}
+
+/**
+ * Volume-bin `members` under `key`, emitting one sub-block per bin with a
+ * `${parentSuffix}#v{j}` id suffix — `parentSuffix` is prepended so a volume
+ * split nested under a handling split keeps the parent's `#h{i}` discriminator
+ * (M1) and the bins remain unique.
+ */
+function splitByVolume(
+  key: BlockKey,
+  members: readonly PlanningPackage[],
+  config: PlannerConfig,
+  parentSuffix: string,
+): LoadBlock[] {
+  const bins = greedyVolumeBins(members, config.maxBlockVolume);
+  return bins.map((g, j) =>
+    buildLoadBlock(key, g, `${parentSuffix}#v${String(j)}`),
+  );
+}
+
+/** A copy of `key` with `handlingClass` overridden to match a handling group. */
+function withHandlingClass(key: BlockKey, handlingClass: HandlingClass): BlockKey {
+  return { ...key, handlingClass };
 }
 
 /**

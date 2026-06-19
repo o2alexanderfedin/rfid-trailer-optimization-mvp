@@ -10,8 +10,13 @@ import {
   readGeoKeyframes,
   runCatchup,
   serializeCatchup,
-} from "../src/index.js";
-import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js";
+} from "@mm/projections";
+import {
+  eventStoreView,
+  startPgFixture,
+  type FixtureDb,
+  type PgFixture,
+} from "./pg-fixture.js";
 
 /**
  * Plan 06 Task 1 — CATCH-UP projections (FND-08 audit timeline + geo-track).
@@ -22,13 +27,16 @@ import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js"
  *    idempotent (re-running does not duplicate rows).
  *  - geo-track yields deterministic per-trip keyframes along route geometry.
  *  - Truncate+replay rebuild yields identical audit + geo state.
+ *
+ * Hosted in `@mm/api` (depends on event-store + projections) so the workspace
+ * DAG stays acyclic — projections must not dev-depend on event-store.
  */
 
 const T0 = Date.parse("2026-04-01T00:00:00.000Z");
 const at = (ms: number): Date => new Date(T0 + ms);
 
 /** A view of the fixture handle as the catch-up runner's `Kysely<CatchupDb>`. */
-function catchupView(db: PgFixture["db"]): Kysely<CatchupDb> {
+function catchupView(db: FixtureDb): Kysely<CatchupDb> {
   return db as unknown as Kysely<CatchupDb>;
 }
 
@@ -37,7 +45,7 @@ function replayReadAll(
   db: Kysely<CatchupDb>,
   fromGlobalSeq: bigint,
 ): Promise<readonly StoredEventLike[]> {
-  return readAll(eventStoreView(db as unknown as PgFixture["db"]), fromGlobalSeq);
+  return readAll(eventStoreView(db as unknown as FixtureDb), fromGlobalSeq);
 }
 
 // --- Event builders ---------------------------------------------------------

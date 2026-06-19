@@ -119,12 +119,13 @@ const positiveWeight = z.number().positive();
 const utilFraction = z.number().gt(0).lte(1);
 
 /**
- * The planner configuration both pure packages consume — the single source of
- * tuning knobs (tech spec §7.3/§7.5/§7.6/§12). Defaults live in
- * {@link DEFAULT_PLANNER_CONFIG}; AGG-04 and all LOAD scoring import these,
- * never hard-coding weights.
+ * The per-field planner-config shape (no cross-field rules). Kept as a plain
+ * `ZodObject` so callers that need a PARTIAL config (e.g. the API merging one
+ * tuned knob over the defaults) can `.partial()` it — a `.refine()`d schema is a
+ * `ZodEffects` and has no `.partial()`. The cross-field invariants live on
+ * {@link plannerConfigSchema}, which wraps this object.
  */
-export const plannerConfigSchema = z.object({
+export const plannerConfigObjectSchema = z.object({
   /** §7.3 partial-LIFO hard gate: blockers above this ⇒ HARD infeasible. */
   maxAllowedBlockers: z.number().int().nonnegative(),
   /** AGG-03 split threshold (~one trailer-zone capacity), m³. */
@@ -150,6 +151,26 @@ export const plannerConfigSchema = z.object({
   /** §12.1 high-utilization quadratic weight. */
   wHigh: positiveWeight,
 });
+
+/**
+ * The planner configuration both pure packages consume — the single source of
+ * tuning knobs (tech spec §7.3/§7.5/§7.6/§12). Defaults live in
+ * {@link DEFAULT_PLANNER_CONFIG}; AGG-04 and all LOAD scoring import these,
+ * never hard-coding weights.
+ *
+ * Beyond the per-field constraints it adds a CROSS-FIELD invariant (L7): the
+ * utilization band must be ordered (`utilLow ≤ utilHigh`) so the §12.1 penalty
+ * band is non-empty and the scorer never sees an inverted band that the
+ * individual `(0,1]` field rules cannot catch. (`maxAllowedBlockers ≥ 0` is
+ * already enforced field-level via `.int().nonnegative()`.)
+ */
+export const plannerConfigSchema = plannerConfigObjectSchema.refine(
+  (c) => c.utilLow <= c.utilHigh,
+  {
+    message: "utilLow must be <= utilHigh (utilization band must not be inverted)",
+    path: ["utilLow"],
+  },
+);
 export type PlannerConfig = z.infer<typeof plannerConfigSchema>;
 
 /**
