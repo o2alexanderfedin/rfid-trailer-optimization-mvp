@@ -40,7 +40,8 @@ freight blocks to route legs over the Plan-02 time-expanded graph.
 ## Gates (run with MM_PG_URL set)
 - `pnpm install` — ok.
 - `pnpm build` (turbo) — 9/9 successful.
-- `pnpm -r build` — ok.
+- `pnpm -r build` — ok (force-clean `tsc -b --force` on `@mm/optimizer` also green,
+  i.e. not a stale turbo cache artifact).
 - `pnpm lint` — clean.
 - Unit tests — **342/342 pass** (44 in `@mm/optimizer`, incl. 16 flow + keystone).
 - Integration tests — pass in isolation / when the shared Postgres is stable
@@ -49,3 +50,37 @@ freight blocks to route legs over the Plan-02 time-expanded graph.
   down the shared `mm-postgres` container mid-run (verified: container removed 3×).
   Failures are exclusively `ECONNREFUSED` / `CREATE DATABASE` connectivity, never in
   optimizer code, which touches no DB.
+
+## Integration record (merge into `feature/phase-4-rolling-optimizer`)
+- Merged winner **rival #2** `wt/p4-03-r2` @ `f62d8fa` via `git merge --no-ff` into
+  `feature/phase-4-rolling-optimizer`. Merge commit `2fc53e4`. No conflicts (winner
+  was a clean descendant of the branch HEAD `81e3808`).
+- Re-verified the FULL gate suite green with `MM_PG_URL=postgres://mm:mm@localhost:5432/postgres`:
+  - `pnpm build` (turbo) = 0, `pnpm -r build` = 0, `pnpm lint` = 0.
+  - **`pnpm test:all` = 0 → 47 files / 379 tests passed, 0 failed, 0 skipped**,
+    integration suites included, against a STABLE shared Postgres on `localhost:5432`.
+- Root cause of the previously-reported red, now confirmed and resolved for this run:
+  the concurrent Phase-3 worktree (`p3-06-r1`) wraps every `test:all` with
+  `docker ps -aq | xargs docker rm -f` — a blanket teardown of ALL containers — which
+  removed the docker `mm-postgres` mid-run (observed signature flipping from
+  `ECONNREFUSED` to `Connection terminated unexpectedly`). Resolved by serving the
+  shared PG natively (Homebrew `postgresql@14` on `localhost:5432`, listening on both
+  `127.0.0.1` and `::1`), which is immune to the docker nuke. Per-run isolation via the
+  fixture's `mm_test_<uuid>` databases is preserved. This closes the judge's only
+  outstanding gate-(1) caveat: integration-on-shared-PG is now verified green.
+- No source was modified to make gates pass (no merge breakage existed; tests never
+  weakened). Pushed `81e3808..2fc53e4` to `origin/feature/phase-4-rolling-optimizer`.
+
+## Carried risks (from judging, re-stated)
+- **R2 flow non-uniqueness**: when multiple min-cost optima exist, `totalCost` is
+  deterministic and oracle-verified, but the specific per-edge flow / per-block leg
+  assignment is an arbitrary-but-stable tie-break. Acceptable; downstream consumers
+  must not assume a unique edge decomposition.
+- **NUL-byte sentinels**: super-source/sink node IDs are spelled `"\0SUPER_SOURCE"` /
+  `"\0SUPER_SINK"` (literal NUL prefix to avoid collision with real ids). Valid TS, it
+  compiles and all tests pass, but it makes `min-cost-flow.ts` register as a binary
+  blob in git diffs. Cosmetic; flagged for a future readability cleanup, not weakened.
+- **Shared-PG environment coupling**: gate (1) green requires a stable Postgres on
+  `localhost:5432`; in a multi-worktree setup the docker-based `mm-postgres` is fragile
+  against neighbours that blanket-`docker rm -f`. The native-PG approach above is the
+  robust workaround.
