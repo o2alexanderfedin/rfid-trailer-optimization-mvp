@@ -8,6 +8,7 @@
     "dev": "vite",
     "preview": "vite preview --port 4173",
     "lint": "eslint src test",
+    "test": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
