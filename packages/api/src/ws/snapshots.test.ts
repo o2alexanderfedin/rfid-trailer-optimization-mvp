@@ -30,7 +30,7 @@ import {
 
 const FAKE_DB = {} as unknown as ApiDb;
 
-function emptyPayload(simMs = 0): SnapshotPayload {
+function emptyPayload(): SnapshotPayload {
   return {
     trailers: [],
     hubs: [],
@@ -57,13 +57,16 @@ function emptyPayload(simMs = 0): SnapshotPayload {
       },
     },
   };
-  void simMs; // simMs will be supplied via broadcast() not the payload builder
 }
 
 /** Build a Fastify app + ws channel; returns { app, port, broadcast }. */
 async function buildTestApp(
-  buildPayload: SnapshotPayloadBuilder = () => Promise.resolve(emptyPayload()),
-): Promise<{ app: FastifyInstance; port: number; broadcast: (simMs: number) => Promise<WsEnvelope> }> {
+  buildPayload: SnapshotPayloadBuilder = (_db) => Promise.resolve(emptyPayload()),
+): Promise<{
+  app: FastifyInstance;
+  port: number;
+  broadcast: (simMs: number) => Promise<WsEnvelope>;
+}> {
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   const broadcast = attachSnapshotSocket(app, FAKE_DB, { buildPayload });
@@ -76,14 +79,6 @@ async function buildTestApp(
   return { app, port: address.port, broadcast };
 }
 
-function openSocket(port: number): Promise<WebSocket> {
-  return new Promise<WebSocket>((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-    socket.once("open", () => resolve(socket));
-    socket.once("error", reject);
-  });
-}
-
 function decodeText(data: RawData): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
@@ -94,18 +89,66 @@ function parseEnvelope(data: RawData): WsEnvelope {
   return JSON.parse(decodeText(data)) as WsEnvelope;
 }
 
-function nextMessage(socket: WebSocket): Promise<WsEnvelope> {
-  return new Promise<WsEnvelope>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("nextMessage timeout")), 5_000);
-    socket.once("message", (data: RawData) => {
-      clearTimeout(timer);
-      try {
-        resolve(parseEnvelope(data));
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
+/**
+ * Open a WebSocket that buffers all messages from the moment the socket is
+ * created (before "open" fires). This eliminates the race condition where a
+ * server pushes the initial snapshot before the test's message listener is set
+ * up (the message arrives in a microtask on the server, but the test's listener
+ * is set up synchronously after `await openSocket`, so the order is reliable —
+ * but we buffer to be safe across all Node.js event-loop orderings).
+ */
+function openSocketBuffered(
+  port: number,
+): Promise<{ socket: WebSocket; next: () => Promise<WsEnvelope> }> {
+  return new Promise((resolveOpen, rejectOpen) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const buf: WsEnvelope[] = [];
+    const waiters: Array<{
+      resolve: (v: WsEnvelope) => void;
+      reject: (e: unknown) => void;
+    }> = [];
+
+    socket.on("message", (data: RawData) => {
+      const env = parseEnvelope(data);
+      const waiter = waiters.shift();
+      if (waiter !== undefined) {
+        waiter.resolve(env);
+      } else {
+        buf.push(env);
       }
     });
-    socket.once("error", reject);
+    socket.on("error", (err) => {
+      for (const w of waiters) w.reject(err);
+      waiters.length = 0;
+    });
+
+    function next(): Promise<WsEnvelope> {
+      return new Promise<WsEnvelope>((resolve, reject) => {
+        const buffered = buf.shift();
+        if (buffered !== undefined) {
+          resolve(buffered);
+          return;
+        }
+        const timer = setTimeout(() => {
+          const idx = waiters.findIndex((w) => w.resolve === resolve);
+          if (idx !== -1) waiters.splice(idx, 1);
+          reject(new Error("nextMessage timeout after 5s"));
+        }, 5_000);
+        waiters.push({
+          resolve: (v) => {
+            clearTimeout(timer);
+            resolve(v);
+          },
+          reject: (e) => {
+            clearTimeout(timer);
+            reject(e);
+          },
+        });
+      });
+    }
+
+    socket.once("open", () => resolveOpen({ socket, next }));
+    socket.once("error", rejectOpen);
   });
 }
 
@@ -124,9 +167,9 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
   it("on connect, the client receives ONE { v:1, type:snapshot } envelope", async () => {
     const { app: a, port } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      const msg = await nextMessage(socket);
+      const msg = await next();
       expect(msg.v).toBe(1);
       expect(msg.type).toBe("snapshot");
       expect(typeof msg.seq).toBe("number");
@@ -139,11 +182,11 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
 
   it("snapshot payload contains trailers, hubs, routes, exceptionsOpen, kpis", async () => {
     const payload = emptyPayload();
-    const { app: a, port } = await buildTestApp(() => Promise.resolve(payload));
+    const { app: a, port } = await buildTestApp((_db) => Promise.resolve(payload));
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      const msg = await nextMessage(socket);
+      const msg = await next();
       if (msg.type !== "snapshot") throw new Error("expected snapshot");
       expect(Array.isArray(msg.payload.trailers)).toBe(true);
       expect(Array.isArray(msg.payload.hubs)).toBe(true);
@@ -158,9 +201,9 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
   it("first snapshot has seq=1", async () => {
     const { app: a, port } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      const msg = await nextMessage(socket);
+      const msg = await next();
       expect(msg.seq).toBe(1);
     } finally {
       socket.close();
@@ -179,10 +222,10 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
   it("broadcast(simMs) sends ONE { v:1, type:tick } envelope", async () => {
     const { app: a, port, broadcast } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      await nextMessage(socket); // consume the initial snapshot
-      const pending = nextMessage(socket);
+      await next(); // consume the initial snapshot
+      const pending = next();
       await broadcast(5000);
       const msg = await pending;
       expect(msg.v).toBe(1);
@@ -196,19 +239,17 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
   it("seq increments by exactly 1 per message (snapshot then ticks)", async () => {
     const { app: a, port, broadcast } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      const snap = await nextMessage(socket);
+      const snap = await next();
       expect(snap.seq).toBe(1);
 
-      const p1 = nextMessage(socket);
       await broadcast(1000);
-      const t1 = await p1;
+      const t1 = await next();
       expect(t1.seq).toBe(2);
 
-      const p2 = nextMessage(socket);
       await broadcast(2000);
-      const t2 = await p2;
+      const t2 = await next();
       expect(t2.seq).toBe(3);
     } finally {
       socket.close();
@@ -218,12 +259,11 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
   it("tick simMs reflects the simMs passed to broadcast()", async () => {
     const { app: a, port, broadcast } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      await nextMessage(socket); // consume initial snapshot
-      const p = nextMessage(socket);
+      await next(); // consume initial snapshot
       await broadcast(12345);
-      const tick = await p;
+      const tick = await next();
       expect(tick.simMs).toBe(12345);
     } finally {
       socket.close();
@@ -231,41 +271,34 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
   });
 
   it("tick payload carries ONLY changed entities (diffTick)", async () => {
-    // First broadcast: payload with one trailer
     let callCount = 0;
     const t1Payload: SnapshotPayload = {
       ...emptyPayload(),
-      trailers: [{
-        id: "T1", routeId: "R1", departMs: 1000, etaMs: 2000, state: "onTime",
-      }],
+      trailers: [{ id: "T1", routeId: "R1", departMs: 1000, etaMs: 2000, state: "onTime" }],
     };
     const t1Changed: SnapshotPayload = {
       ...emptyPayload(),
-      trailers: [{
-        id: "T1", routeId: "R1", departMs: 1000, etaMs: 3000, state: "onTime", // etaMs changed
-      }],
+      trailers: [{ id: "T1", routeId: "R1", departMs: 1000, etaMs: 3000, state: "onTime" }],
     };
-    const { app: a, port, broadcast } = await buildTestApp(() => {
+    const { app: a, port, broadcast } = await buildTestApp((_db) => {
       callCount += 1;
       return Promise.resolve(callCount <= 2 ? t1Payload : t1Changed);
     });
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      await nextMessage(socket); // initial snapshot
+      await next(); // initial snapshot (callCount=1 → t1Payload as baseline)
 
-      // First tick: same payload as connect snapshot → empty diff
-      const p1 = nextMessage(socket);
+      // Second call (callCount=2 → same t1Payload) → empty diff
       await broadcast(1000);
-      const tick1 = await p1;
+      const tick1 = await next();
       expect(tick1.type).toBe("tick");
       if (tick1.type !== "tick") throw new Error("expected tick");
       expect(Object.keys(tick1.payload)).toHaveLength(0);
 
-      // Second tick: etaMs changed → only T1 in trailers array
-      const p2 = nextMessage(socket);
+      // Third call (callCount=3 → t1Changed, etaMs differs) → only T1
       await broadcast(2000);
-      const tick2 = await p2;
+      const tick2 = await next();
       if (tick2.type !== "tick") throw new Error("expected tick");
       expect(tick2.payload.trailers).toHaveLength(1);
       expect(tick2.payload.trailers?.[0]?.id).toBe("T1");
@@ -278,12 +311,11 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
   it("unchanged tick sends empty payload {} (zero-noise invariant)", async () => {
     const { app: a, port, broadcast } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      await nextMessage(socket); // initial snapshot
-      const p = nextMessage(socket);
+      await next(); // initial snapshot
       await broadcast(1000);
-      const tick = await p;
+      const tick = await next();
       if (tick.type !== "tick") throw new Error("expected tick");
       expect(Object.keys(tick.payload)).toHaveLength(0);
     } finally {
@@ -294,18 +326,18 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
   it("T-01-19: N raw events within one tick still produce exactly ONE tick message", async () => {
     const { app: a, port, broadcast } = await buildTestApp();
     app = a;
-    const socket = await openSocket(port);
+    const { socket, next } = await openSocketBuffered(port);
     try {
-      await nextMessage(socket); // initial snapshot
+      await next(); // initial snapshot
 
       // Simulate N raw events all arriving in one tick: call broadcast() once.
-      // Collect ALL messages received within 200 ms — there should be exactly 1.
+      // Collect ALL messages received within 300 ms — there should be exactly 1.
       const messages: WsEnvelope[] = [];
       const done = new Promise<void>((resolve) => {
         socket.on("message", (data: RawData) => {
           messages.push(parseEnvelope(data));
         });
-        setTimeout(resolve, 200);
+        setTimeout(resolve, 300);
       });
 
       await broadcast(3000);
@@ -329,20 +361,28 @@ describe("ws snapshot channel: M-5 rejection on connect", () => {
 
   it("a rejecting buildPayload on connect closes the socket and does not throw unhandled", async () => {
     const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
     process.on("unhandledRejection", onUnhandled);
 
     try {
       const { app: a, port } = await buildTestApp(
-        () => Promise.reject(new Error("simulated transient DB failure")),
+        (_db) => Promise.reject(new Error("simulated transient DB failure")),
       );
       app = a;
 
       const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
       const closed = await new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => resolve(false), 5_000);
-        socket.once("close", () => { clearTimeout(timer); resolve(true); });
-        socket.once("error", () => { clearTimeout(timer); resolve(true); });
+        socket.once("close", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+        socket.once("error", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
       });
 
       expect(closed).toBe(true);

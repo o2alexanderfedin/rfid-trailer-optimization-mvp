@@ -207,8 +207,12 @@ export async function driveSimulation(
     // 4. Advance the catch-up projections (audit timeline + geo-track).
     await runCatchup(catchupView(opts.db), replayReadAll);
 
-    // 5. Push ONE batched snapshot per tick.
-    if (opts.broadcast !== undefined) await opts.broadcast();
+    // 5. Push ONE batched snapshot per tick. Supply the tick's domain timestamp
+    //    as the authoritative sim-clock milliseconds for the ws envelope.
+    if (opts.broadcast !== undefined) {
+      const tickMs = new Date(tick[0]!.occurredAt).getTime();
+      await opts.broadcast(tickMs);
+    }
   }
 
   return { ticks: ticks.length };

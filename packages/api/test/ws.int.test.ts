@@ -1,14 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, type RawData } from "ws";
-import { driveSimulation, type ApiDb, type SnapshotMessage } from "../src/index.js";
+import { driveSimulation, type ApiDb, type WsEnvelope } from "../src/index.js";
 import { buildServer, type BuiltServer } from "../src/server.js";
 import { startPgFixture, type PgFixture } from "./pg-fixture.js";
 
 /**
- * Plan 06 Task 2 — the ws snapshot channel against a REAL Postgres + listening
- * server. Connecting a ws client and ticking the sim pushes
- * `{ t:'snapshot', trailers:[...], hubs:[...] }` with trailer positions from
- * geo-track; messages are BATCHED PER TICK (Anti-Pattern 4), not per raw event.
+ * Plan 05-01 / Plan 06 Task 2 (updated) — the versioned ws envelope channel
+ * against a REAL Postgres + listening server.
+ *
+ * Updated from the legacy `{ t:'snapshot', trailers, hubs }` shape to the new
+ * VIZ-04 versioned envelope:
+ *   - connect → `{ v:1, type:"snapshot", seq, simMs, payload }`
+ *   - broadcast(simMs) → `{ v:1, type:"tick", seq, simMs, payload }`
+ * Messages are BATCHED PER TICK (Anti-Pattern 4), not per raw event.
  */
 
 const SEED = 4242;
@@ -21,34 +25,64 @@ function decodeText(data: RawData): string {
   return data.toString("utf8");
 }
 
-/** Parse a ws text frame as a `SnapshotMessage`. */
-function parseSnapshot(data: RawData): SnapshotMessage {
-  return JSON.parse(decodeText(data)) as SnapshotMessage;
+/** Parse a ws text frame as a `WsEnvelope`. */
+function parseEnvelope(data: RawData): WsEnvelope {
+  return JSON.parse(decodeText(data)) as WsEnvelope;
 }
 
-/** Resolve once the socket receives its next text message (parsed). */
-function nextMessage(socket: WebSocket): Promise<SnapshotMessage> {
-  return new Promise<SnapshotMessage>((resolve, reject) => {
-    socket.once("message", (data: RawData) => {
-      try {
-        resolve(parseSnapshot(data));
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
+/**
+ * Open a buffered socket: collects messages from creation time so tests never
+ * race between "open" resolving and the server's async initial-snapshot send.
+ */
+function openSocketBuffered(
+  url: string,
+): Promise<{ socket: WebSocket; next: () => Promise<WsEnvelope> }> {
+  return new Promise((resolveOpen, rejectOpen) => {
+    const socket = new WebSocket(url);
+    const buf: WsEnvelope[] = [];
+    const waiters: Array<{
+      resolve: (v: WsEnvelope) => void;
+      reject: (e: unknown) => void;
+    }> = [];
+
+    socket.on("message", (data: RawData) => {
+      const env = parseEnvelope(data);
+      const waiter = waiters.shift();
+      if (waiter !== undefined) {
+        waiter.resolve(env);
+      } else {
+        buf.push(env);
       }
     });
-    socket.once("error", reject);
+    socket.on("error", (err) => {
+      for (const w of waiters) w.reject(err);
+      waiters.length = 0;
+    });
+
+    function next(): Promise<WsEnvelope> {
+      return new Promise<WsEnvelope>((resolve, reject) => {
+        const buffered = buf.shift();
+        if (buffered !== undefined) {
+          resolve(buffered);
+          return;
+        }
+        const timer = setTimeout(
+          () => reject(new Error("nextMessage timeout")),
+          10_000,
+        );
+        waiters.push({
+          resolve: (v) => { clearTimeout(timer); resolve(v); },
+          reject: (e) => { clearTimeout(timer); reject(e); },
+        });
+      });
+    }
+
+    socket.once("open", () => resolveOpen({ socket, next }));
+    socket.once("error", rejectOpen);
   });
 }
 
-function openSocket(url: string): Promise<WebSocket> {
-  return new Promise<WebSocket>((resolve, reject) => {
-    const socket = new WebSocket(url);
-    socket.once("open", () => resolve(socket));
-    socket.once("error", reject);
-  });
-}
-
-describe("ws snapshot channel: batched per-tick trailer + hub snapshots", () => {
+describe("ws snapshot channel: versioned envelope (VIZ-04) against real Postgres", () => {
   let fx: PgFixture;
   let built: BuiltServer;
   let port: number;
@@ -72,80 +106,80 @@ describe("ws snapshot channel: batched per-tick trailer + hub snapshots", () => 
     await fx?.stop();
   });
 
-  it("pushes an initial snapshot on connect with hubs and trailer positions", async () => {
-    const socket = await openSocket(`ws://127.0.0.1:${port}/ws`);
+  it("pushes an initial snapshot envelope on connect with hubs and trailers in payload", async () => {
+    const { socket, next } = await openSocketBuffered(`ws://127.0.0.1:${port}/ws`);
     try {
-      const snap = await nextMessage(socket);
-      expect(snap.t).toBe("snapshot");
-      expect(Array.isArray(snap.hubs)).toBe(true);
-      expect(snap.hubs.length).toBeGreaterThanOrEqual(10);
-      expect(Array.isArray(snap.trailers)).toBe(true);
-      expect(snap.trailers.length).toBeGreaterThan(0);
-      const trailer = snap.trailers[0]!;
-      expect(typeof trailer.trailerId).toBe("string");
-      expect(typeof trailer.lon).toBe("number");
-      expect(typeof trailer.lat).toBe("number");
-      // Trailer position is a real WGS84 coordinate from the route geometry.
-      expect(trailer.lat).toBeGreaterThanOrEqual(-90);
-      expect(trailer.lat).toBeLessThanOrEqual(90);
+      const env = await next();
+      expect(env.v).toBe(1);
+      expect(env.type).toBe("snapshot");
+      expect(typeof env.seq).toBe("number");
+      expect(typeof env.simMs).toBe("number");
+      if (env.type !== "snapshot") throw new Error("expected snapshot");
+
+      expect(Array.isArray(env.payload.hubs)).toBe(true);
+      expect(env.payload.hubs.length).toBeGreaterThanOrEqual(10);
+
+      expect(Array.isArray(env.payload.trailers)).toBe(true);
+      expect(env.payload.trailers.length).toBeGreaterThan(0);
+
+      const trailer = env.payload.trailers[0]!;
+      expect(typeof trailer.id).toBe("string");
+      // New shape: routeId + departMs/etaMs (not lon/lat directly on the keyframe)
+      expect(typeof trailer.routeId).toBe("string");
+      expect(typeof trailer.departMs).toBe("number");
+      expect(typeof trailer.etaMs).toBe("number");
+      // state is one of the allowed values
+      expect(["onTime", "slaRisk", "late", "idle"]).toContain(trailer.state);
     } finally {
       socket.close();
     }
   });
 
-  it("broadcast() pushes exactly ONE batched snapshot per tick (not per event)", async () => {
-    const socket = await openSocket(`ws://127.0.0.1:${port}/ws`);
+  it("broadcast(simMs) pushes exactly ONE tick envelope per tick (not per event)", async () => {
+    const { socket, next } = await openSocketBuffered(`ws://127.0.0.1:${port}/ws`);
     try {
-      await nextMessage(socket); // consume the initial-connect snapshot.
+      const snap = await next(); // consume the initial-connect snapshot
+      expect(snap.type).toBe("snapshot");
+      const snapSeq = snap.seq;
 
-      // One broadcast() == one tick == exactly one snapshot message.
-      const received = nextMessage(socket);
-      const sent = await built.broadcast!();
-      const got = await received;
-
-      expect(got.t).toBe("snapshot");
-      expect(got.trailers.length).toBe(sent.trailers.length);
-      expect(got.hubs.length).toBe(sent.hubs.length);
-      // Trailers are sorted by id (deterministic, bounded message).
-      const ids = got.trailers.map((t) => t.trailerId);
-      expect([...ids].sort()).toEqual(ids);
+      // One broadcast() == one tick == exactly one tick message.
+      await built.broadcast!(0);
+      const tick = await next();
+      expect(tick.type).toBe("tick");
+      expect(tick.v).toBe(1);
+      expect(tick.seq).toBe(snapSeq + 1); // monotonic
     } finally {
       socket.close();
     }
   });
 
-  it("each tick (broadcast) sends exactly one snapshot — N ticks -> N messages", async () => {
-    const socket = await openSocket(`ws://127.0.0.1:${port}/ws`);
+  it("each broadcast(simMs) sends exactly one message — N ticks → N messages", async () => {
+    const { socket, next } = await openSocketBuffered(`ws://127.0.0.1:${port}/ws`);
     try {
-      await nextMessage(socket); // consume the initial-connect snapshot.
+      await next(); // consume the initial-connect snapshot
 
-      // Three ticks -> three snapshot messages, in order (one per tick, never a
-      // per-event flood). Collect exactly three then assert the count + shape.
-      const got: SnapshotMessage[] = [];
-      const collected = new Promise<void>((resolve, reject) => {
-        const onMessage = (data: RawData): void => {
-          try {
-            got.push(parseSnapshot(data));
-          } catch (err) {
-            reject(err instanceof Error ? err : new Error(String(err)));
-            return;
-          }
-          if (got.length === 3) {
-            socket.off("message", onMessage);
-            resolve();
-          }
-        };
-        socket.on("message", onMessage);
-      });
+      // Three ticks → three tick messages, in order (one per tick, never a
+      // per-event flood).
+      await built.broadcast!(1000);
+      await built.broadcast!(2000);
+      await built.broadcast!(3000);
 
-      await built.broadcast!();
-      await built.broadcast!();
-      await built.broadcast!();
-      await collected;
+      const t1 = await next();
+      const t2 = await next();
+      const t3 = await next();
 
-      expect(got).toHaveLength(3);
-      expect(got.every((m) => m.t === "snapshot")).toBe(true);
-      expect(got.every((m) => m.trailers.length > 0 && m.hubs.length >= 10)).toBe(true);
+      expect(t1.type).toBe("tick");
+      expect(t2.type).toBe("tick");
+      expect(t3.type).toBe("tick");
+
+      // seq is monotonically increasing
+      expect(t2.seq).toBe(t1.seq + 1);
+      expect(t3.seq).toBe(t2.seq + 1);
+
+      // simMs matches what was passed to broadcast()
+      expect(t1.simMs).toBe(1000);
+      expect(t2.simMs).toBe(2000);
+      expect(t3.simMs).toBe(3000);
     } finally {
       socket.close();
     }
