@@ -39,7 +39,30 @@ export { buildUnloadOrderMap } from "./unload-order.js";
 export { planLoad } from "./plan-load.js";
 
 // --- Independent feasibility validator (LOAD-04, anti-P1/anti-P2) ------------
-export { isFeasible, validatePlan } from "./validator.js";
+export { isFeasible, placementsFromSlices, validatePlan } from "./validator.js";
+
+// --- Soft scoring: rehandle + utilization (LOAD-06 / LOAD-07) -----------------
+export {
+  type BlockRehandle,
+  rehandleBreakdown,
+  rehandleScore,
+  scorePlan,
+  utilizationScore,
+} from "./scoring.js";
+
+// --- Loading instructions by zone (LOAD-08) ----------------------------------
+export {
+  type InstructionLine,
+  type LoadingInstructions,
+  instructions,
+  type ZoneInstruction,
+} from "./instructions.js";
+
+// --- Explainability: per-placement + plan-level rationale (LOAD-10) -----------
+export { planExplanation, placementRationale } from "./rationale.js";
+
+// --- Naive FIFO baseline planner (LOAD-09, shared scoring plumbing / P8) ------
+export { baselinePlan } from "./baseline.js";
 
 // --- Shared type contracts (P2 feasibility-vs-score separation baked in) ------
 export type {

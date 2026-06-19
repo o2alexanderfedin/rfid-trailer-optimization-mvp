@@ -45,7 +45,7 @@ import { buildUnloadOrderMap } from "./unload-order.js";
  * cannot be reasoned about); a hub not on the route sorts as the latest unload
  * (consistent with the planner's fallback) so it is never treated as rear-bound.
  */
-function placementsFromSlices(
+export function placementsFromSlices(
   plan: { readonly slices: readonly { readonly depth: number; readonly loadBlockIds: readonly string[] }[] },
   blocks: readonly LoadBlock[],
   orderMap: ReadonlyMap<string, number>,
