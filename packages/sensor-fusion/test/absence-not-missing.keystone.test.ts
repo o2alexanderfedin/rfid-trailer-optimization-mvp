@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ZoneEstimate } from "../src/fuse.js";
+import { fuseZone, type ZoneEstimate } from "../src/fuse.js";
+import { type RfidRead, windowObservations } from "../src/window.js";
+import { DEFAULT_FUSION_CONFIG, type FusionConfig } from "../src/config.js";
 import {
   DEFAULT_DETECTION_CONFIG,
   type DetectionConfig,
@@ -61,19 +63,61 @@ describe("anti-P6 keystone — absence of reads ⇒ ZERO exceptions, never 'miss
     expect(detectMissedUnload(plan, [], departedHub, cfg)).toEqual([]);
   });
 
-  it("a candidate's shape NEVER contains a 'missing'/'vanished' marker", () => {
-    // Even when a candidate DOES fire (positive disagreement), nothing in it
-    // encodes "missing". The only candidate kinds are wrong-trailer / missed-unload,
-    // both driven by a POSITIVE observation.
-    const wrong = detectWrongTrailer(
-      plan,
-      [observed("pkg-1", "trl-WRONG", 0.9)],
-      cfg,
+  it("REAL fusion→detection: a package WITH reads fires; a package with ZERO reads appears NOWHERE", () => {
+    // The discriminating invariant (not a string-grep): drive detection off
+    // ACTUAL fused estimates produced by the REAL `windowObservations` + `fuseZone`
+    // pipeline. pkg-1 gets a strong burst of reads on the WRONG trailer ⇒ a real
+    // ZoneEstimate above threshold ⇒ it fires. pkg-2 and pkg-3 get NO reads at all
+    // ⇒ no ZoneEstimate is produced for them ⇒ they can never enter detection.
+    const fusionCfg: FusionConfig = {
+      ...DEFAULT_FUSION_CONFIG,
+      readerZoneEvidence: { "rdr-rear": "rear" },
+    };
+
+    function strongReads(tagId: string, trailerId: string): RfidRead[] {
+      return Array.from({ length: 20 }, () => ({
+        tagId,
+        readerId: "rdr-rear",
+        antennaId: "ant-1",
+        trailerId,
+        hubId: "hub-1",
+        readerType: "dock-portal" as const,
+        dwellWindowId: "dw-1",
+        observedAt: "2026-06-19T10:00:00.000Z",
+        perReadConfidence: 1,
+        rssi: -45,
+      }));
+    }
+
+    // ONLY pkg-1 is read (on the wrong trailer). pkg-2 / pkg-3: ZERO reads.
+    const windowed = windowObservations(strongReads("tag-1", "trl-WRONG"), fusionCfg);
+    const est1 = fuseZone(
+      { packageId: "pkg-1", prior: fusionCfg.defaultPrior, trailerId: "trl-WRONG" },
+      windowed,
+      fusionCfg,
     );
-    const serialized = JSON.stringify(wrong).toLowerCase();
-    expect(serialized).not.toContain("missing");
-    expect(serialized).not.toContain("vanished");
-    expect(serialized).not.toContain("gone");
+    // The real engine produced a credible, ABOVE-THRESHOLD, bounded estimate.
+    expect(est1.confidence).toBeGreaterThan(cfg.confidenceThreshold);
+    expect(est1.confidence).toBeLessThan(1.0); // anti-P5b still holds end-to-end
+
+    // The OBSERVED layer contains EXACTLY the read package — never the unread ones.
+    const observedLayer: ZoneEstimate[] = [est1];
+
+    const fired = detectWrongTrailer(plan, observedLayer, cfg);
+
+    // PRESENCE: the read-and-disagreeing package DOES appear (the test can fire).
+    expect(fired.map((c) => c.packageId)).toContain("pkg-1");
+    // ABSENCE: the unread packages appear NOWHERE — absence is never "missing".
+    const flagged = new Set(fired.map((c) => c.packageId));
+    expect(flagged.has("pkg-2")).toBe(false);
+    expect(flagged.has("pkg-3")).toBe(false);
+    // Output size is bounded by the OBSERVED layer (1), not the plan (3).
+    expect(fired.length).toBeLessThanOrEqual(observedLayer.length);
+
+    // CONTROL (proves the test discriminates): feed the SAME plan an EMPTY
+    // observed layer (every package unread) ⇒ ZERO candidates. If detection ever
+    // treated planned-but-absent as "missing", this would be non-empty.
+    expect(detectWrongTrailer(plan, [], cfg)).toEqual([]);
   });
 
   it("PARTIALLY observed plan ⇒ only the OBSERVED-and-disagreeing package fires; unobserved produce NOTHING", () => {
