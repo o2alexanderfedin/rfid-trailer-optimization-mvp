@@ -6,6 +6,9 @@ confirmed_high: 0
 confirmed_medium: 6
 confirmed_low: 10
 total_confirmed: 16
+medium_resolved: 6
+resolution_commit: 083a2cfc6dbb6b81cfec054b79ac0ca5721a29d7
+resolution_source_commit: 5f53ead18fcd61d8b5bcbff013c38d785d15d208
 ---
 
 # Phase 1 — Code Review
@@ -17,6 +20,13 @@ total_confirmed: 16
 > No finding blocks the Phase-1 gate. The MEDIUM issues are real, bounded, and **future-triggerable**
 > (chiefly when Phase 4 / a background poller adds a concurrent writer). The LOW issues are carried
 > debt for later phases.
+>
+> **UPDATE 2026-06-19 — all 6 MEDIUM issues RESOLVED.** Merged via `--no-ff` merge commit
+> `083a2cf` (fix source `5f53ead`, "rival #2"). Each fix ships with a regression test (named per
+> issue below). Full gate re-verified green after the merge: `pnpm install`,
+> `pnpm -r build` (6/6), `pnpm lint` (0), `pnpm test:all` (126/126 across 21 files),
+> `pnpm --filter @mm/web test:e2e` (3/3, incl. the M-6 dev-StrictMode net-live spec). LOW issues
+> L-1..L-10 remain carried debt.
 
 ---
 
@@ -25,14 +35,21 @@ total_confirmed: 16
 | Severity | Count | Disposition |
 |----------|-------|-------------|
 | HIGH | 0 | — |
-| MEDIUM | 6 | Fix before Phase 4 concurrent-writer paths or any non-public deploy |
+| MEDIUM | 6 | **RESOLVED** in `083a2cf` (src `5f53ead`) — all 6 fixed + regression-tested |
 | LOW | 10 | Carried debt — schedule into later phases |
 
 ---
 
-## MEDIUM (6) — real, latent, future-triggerable
+## MEDIUM (6) — real, latent, future-triggerable — **ALL RESOLVED in `083a2cf`**
 
 ### M-1 · event-store · `readAll(fromGlobalSeq)` high-water cursor can permanently skip events under concurrent appends (identity gap)
+> **RESOLVED** — `083a2cf` (src `5f53ead`). `readAll` now reads with a low-water guard against
+> still-in-flight transactions (`packages/event-store/src/store.ts`), so an in-flight gap below the
+> cursor can no longer be skipped. **Guarding regression test:**
+> `packages/event-store/test/global-order.int.test.ts` →
+> `"a concurrent append BLOCKS until a lock-holding writer commits (allocation == commit order)"`
+> (the forced-blocking case that actually catches the gap) and
+> `"incremental readAll+checkpoint consumer applies BOTH concurrent cross-stream events with NO skip"`.
 **File:** `packages/event-store/src/store.ts:253-264` (readAll) · `schema.sql:23` (`global_seq` identity) · `appendToStream` `store.ts:77`
 **Kind:** determinism
 
@@ -69,6 +86,13 @@ Phase 4 adds a second writer.
 ---
 
 ### M-2 · event-store · Concurrent different-stream appends → commit order ≠ `global_seq` order (total order is allocation order, not commit order)
+> **RESOLVED** — `083a2cf` (src `5f53ead`). Same low-water-mark guard in `store.ts` makes
+> `readAll`/checkpoint consumers safe under truly-concurrent cross-stream appends: the checkpoint never
+> advances past a seq that could still have an uncommitted lower neighbor, so no committed event is
+> permanently skipped. **Guarding regression test:**
+> `packages/event-store/test/global-order.int.test.ts` →
+> `"incremental readAll+checkpoint consumer applies BOTH concurrent cross-stream events with NO skip"`
+> (forces the adverse interleaving: one tx held open at insert while the other commits first).
 **File:** `packages/event-store/src/store.ts` (appendToStream `:77`, readAll `:261`) · `schema.ts:98` (`global_seq` identity) · consumers `catchup.ts:149-157`, `inline.ts:254`
 **Kind:** concurrency
 
@@ -109,6 +133,14 @@ interleaving (hold one tx open at insert while the other commits first).
 ---
 
 ### M-3 · projections · Hub inventory removal-on-move depends on per-package load scans; `TrailerDeparted.packageIds` is ignored → departure without explicit `load` scans over-counts source-hub inventory
+> **RESOLVED** — `083a2cf` (src `5f53ead`). `hubInventoryReducer` now handles `TrailerDeparted` by
+> iterating `event.payload.packageIds` and removing each from its source-hub bucket
+> (`packages/projections/src/reducers/hub-inventory.ts`), making the manifest the single source of truth;
+> the per-package load scan becomes defensive/redundant. **Guarding regression test:**
+> `packages/projections/test/reducers.unit.test.ts` →
+> `"a departure decrements source-hub inventory from the packageIds manifest (no load scan)"`,
+> `"a departure removes only its manifest's packages, leaving others in inventory"`, and
+> `"an explicit load scan before departure stays correct (idempotent removal)"`.
 **File:** `packages/projections/src/reducers/hub-inventory.ts:174-177` (departure/arrival/dock no-ops), `:140-142` (`bucketForScan` load→null) · `packages/domain/src/events/schemas.ts:85-94` (`packageIds` required)
 **Kind:** correctness
 
@@ -141,6 +173,16 @@ after the event.
 ---
 
 ### M-4 · api-ws · Geo-arrival keyframe resolved by lexicographic leg-key guess, not the trailer's actual leg → mis-resolves when a hub has 2+ inbound legs
+> **RESOLVED** — `083a2cf` (src `5f53ead`). The lexicographic `arrivalPoint` guess is replaced by a
+> trip→leg map: `TrailerDeparted` records `tripId → legKey(fromHubId,toHubId)` and `TrailerArrivedAtHub`
+> looks up that trip's actual leg geometry (`packages/projections/src/reducers/geo-track.ts`), persisted
+> alongside `geo_route` (new `geo_inflight_trip` table — `schema.sql`/`schema.ts`/`catchup.ts`) so
+> incremental catch-up resolves identically to a full rebuild. **Guarding regression test:**
+> `packages/projections/test/geo-track.unit.test.ts` →
+> `"resolves the arrive keyframe by the trip's actual leg, not the lexicographically-smallest"`,
+> `"depart keyframe sits at the trip's origin (first vertex of the actual leg)"`, and
+> `"two trailers arriving at the same hub via different legs each land on their own leg"`; plus the
+> rebuild-equivalence additions in `packages/projections/test/audit-geo.int.test.ts`.
 **File:** `packages/projections/src/reducers/geo-track.ts:158-168` (`arrivalPoint`) · `schemas.ts:96-103` (`TrailerArrivedAtHub` carries `tripId`), `:85-94` (`TrailerDeparted` carries `fromHubId`/`toHubId`/`tripId`) · `simulation/src/network/routes.ts:92-114` (buildRoutes)
 **Kind:** correctness
 
@@ -174,6 +216,14 @@ depart `BBB->ZZZ`, assert the arrive keyframe lands on the `BBB->ZZZ` endpoint.
 ---
 
 ### M-5 · api-ws · Unhandled promise rejection on ws connect can crash the process (no `.catch` on `buildSnapshot`)
+> **RESOLVED** — `083a2cf` (src `5f53ead`). The fire-and-forget connect-path promise now carries a
+> `.catch` that logs the error and closes the socket so the client can reconnect cleanly
+> (`packages/api/src/ws/snapshots.ts`). **Guarding regression test:**
+> `packages/api/test/ws-rejection.test.ts` →
+> `"a rejecting buildSnapshot on connect closes the socket and does not throw unhandled"`.
+> Note: this rival (#2) scopes the fix to the ws connect path; the optional process-level
+> `unhandledRejection`/`uncaughtException` backstop suggested as defense-in-depth was **not** added,
+> so a stray rejection outside the ws connect path remains unguarded (carried as a minor follow-up).
 **File:** `packages/api/src/ws/snapshots.ts:105` · `buildSnapshot` `:59` · `queries.ts:191` (`readHubsFromLog`) · `catchup.ts:288` (`readGeoKeyframes`) · `main.ts:33`
 **Kind:** concurrency (reliability)
 
@@ -206,6 +256,16 @@ process-level `process.on('unhandledRejection', …)` in `main.ts`.
 ---
 
 ### M-6 · web-ol · Leak-guard e2e never exercises StrictMode double-mount; "created exactly once" unverified in dev, where it matters
+> **RESOLVED** — `083a2cf` (src `5f53ead`). `playwright.config.ts` adds a `chromium-dev` project that
+> runs the leak guard against a `vite dev` build (`:5173`) where React StrictMode's double-invoke is
+> ACTIVE; `MapView.tsx` exposes a net-live count (created − disposed) so the invariant can be asserted
+> directly under the dev double-mount. **Guarding regression test:**
+> `packages/web/test/strictmode.e2e.ts` →
+> `"dev StrictMode double-mounts the map but keeps exactly one LIVE instance"` (asserts net-live == 1).
+> Scope note: this rival tracks/asserts the map's **net-live == 1** invariant; the trailer-`VectorSource`
+> leak invariant is proven at the "not created twice" level rather than an explicit net-live==1 assertion
+> — a narrower coverage point than the strictly-more-complete alternative, but the live-leak invariant
+> (first instance disposed before the second) is verified.
 **File:** `packages/web/test/leak.e2e.ts:131-132` (and `map.e2e.ts:123,133`) · `packages/web/src/main.tsx:11-15` (`<StrictMode>`) · `playwright.config.ts:22` (build+preview = prod bundle) · `MapView.tsx:65` (create-once guard), `:125-126` (cleanup), `:51/53/69/84` (counters)
 **Kind:** correctness (test-coverage / invariant gap)
 
@@ -514,11 +574,14 @@ source line rather than only via a (slower) integration byte-equality failure.
 ## Disposition
 
 - **Gate:** PASSED — 0 HIGH, requirements coverage complete (see `01-VERIFICATION.md`).
-- **Before Phase 4 / concurrent-writer paths:** address **M-1, M-2** (event-store ordering) — these
-  become live data-loss footguns the moment the optimizer or a background poller writes concurrently
-  against the existing `readAll`/checkpoint consumers. Also fix **M-5** (ws crash) before any
-  longer-running/externally-reachable deploy.
-- **Opportunistic correctness hardening:** **M-3** (manifest as source of truth), **M-4** (trip-based
-  arrival leg), **M-6** (StrictMode net-live invariant) — each removes a latent correctness/robustness
-  trap whose data model is already present.
+- **MEDIUM (M-1..M-6): RESOLVED** — merged in `083a2cf` (src `5f53ead`, "rival #2"). All six fixes
+  ship with the regression tests named under each item above. Post-merge gate re-verified green:
+  `pnpm install`, `pnpm -r build` (6/6), `pnpm lint` (0), `pnpm test:all` (126/126 across 21 files),
+  `pnpm --filter @mm/web test:e2e` (3/3 incl. the dev-StrictMode M-6 spec).
+  - **M-1, M-2** (event-store ordering): low-water-mark guard in `readAll`; the data-loss footgun for
+    Phase 4 concurrent-writer paths is now closed and regression-locked.
+  - **M-5** (ws crash): connect-path rejection handler added. Carried follow-up: the optional
+    process-level `unhandledRejection` backstop was not added by this rival (defense-in-depth only).
+  - **M-3** (manifest as source of truth), **M-4** (trip-based arrival leg), **M-6** (StrictMode
+    net-live invariant): each latent correctness/robustness trap removed and regression-tested.
 - **Carried debt (LOW):** L-1..L-10 scheduled into later phases; none block Phase 1.
