@@ -57,3 +57,42 @@ shared Postgres). glpk.js asserted devDependency-only.
 - `packages/optimizer/src/graph/{time-expanded,glpk-oracle}.test.ts`
 - `packages/optimizer/src/{flow,vrptw,objective,repair,rolling}/index.ts` (placeholders)
 - `tsconfig.eslint.json` (added `@mm/optimizer` path mapping)
+
+---
+
+## Integration record
+
+**Winner:** rival #1 (`wt/p4-02-r1`, source sha `9199e274cd0908e165abb59992fba017f59b723f`).
+**Merged into:** `feature/phase-4-rolling-optimizer` via `--no-ff`
+(merge commit `0727f9a8ff8d226c4c571d185526ec29a2c1dc1b`, pushed to `origin`).
+Merge base was branch HEAD ⇒ pure addition (1128 insertions, 16 files, 0 deletions),
+no conflicts to resolve.
+
+**Requirement:** OPT-01 (optimizer scaffold + time-expanded hub graph).
+
+### Re-verified gates (this integration run, MM_PG_URL ⇒ shared Postgres)
+
+| Gate | Result |
+|------|--------|
+| `pnpm install` | clean (10 workspace projects) |
+| `pnpm build` (turbo) | 9/9 successful |
+| `pnpm -r build` | all packages Done (optimizer dist emitted in this worktree) |
+| `pnpm lint` (`eslint .`) | clean, exit 0 |
+| `pnpm test:all` | 363 passed / 44 files, exit 0 |
+
+### Carried risks (from judge)
+
+- **Trip-cost double-counting (Plan 03 interaction):** R1 bakes
+  `tripCostPerMin * travelMin` into `trip`-edge cost in the graph. If Plan 03 /
+  the Wave-2 objective layer (OPT-08) also adds a transport cost, costs could be
+  double-counted. R2 deliberately deferred this to Plan 03. Mitigation: the eager
+  cost is correct and testable now and trivially zeroed (set `tripCostPerMin: 0`
+  in `GraphConfig`); Plan 03 must decide whether trip transport cost lives in the
+  graph or the objective and avoid summing both.
+- **Parallel optimizer types vs `@mm/domain` reuse:** R1 defines its own
+  `OptimizerHub` / `OptimizerRoute` / `OptimizerNetwork` shapes rather than
+  reusing domain `Route`. Justified — domain `Route` lacks `travelMin` / capacity
+  — but slightly less DRY; a future consolidation is possible if the domain entity
+  gains those fields.
+- **Committed `.md` report:** R1's own `04-02-SUMMARY.md` was committed in the
+  worktree per the plan's explicit `<output>` block (now this file). Not noise.
