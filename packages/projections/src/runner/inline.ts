@@ -7,12 +7,16 @@ import type {
 import { OPERATIONAL_PROJECTIONS } from "../schema.js";
 import { DEFAULT_FUSION_CONFIG } from "@mm/sensor-fusion";
 import {
-  type OccurredEvent,
+  type ExceptionKind,
+  type ExceptionsState,
+  exceptionsReducer,
   emptyPackageLocationState,
   emptyTrailerStateMap,
   hubInventoryReducer,
   type HubInventoryState,
   makeZoneEstimateReducer,
+  type OccurredEvent,
+  type OpenException,
   type PackageLocationState,
   packageLocationReducer,
   type TagRegistryState,
@@ -304,6 +308,87 @@ async function applyZoneEstimate(
   }
 }
 
+async function applyExceptions(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  // Load the persisted exceptions slice + KPI counters into the reducer's state
+  // so the fold (and its idempotency) is identical live and on rebuild.
+  const [rows, kpi] = await Promise.all([
+    db.selectFrom("exceptions").selectAll().execute(),
+    db.selectFrom("exception_kpi").selectAll().executeTakeFirst(),
+  ]);
+  const open = new Map<string, OpenException>(
+    rows.map((r) => [
+      r.exception_id,
+      {
+        exceptionId: r.exception_id,
+        kind: asExceptionKind(r.kind),
+        packageId: r.package_id,
+        trailerId: r.trailer_id,
+        hubId: r.hub_id,
+        severity: asSeverity(r.severity),
+        recommendedAction: r.recommended_action,
+        confidence: r.confidence,
+        occurredAt: toIso(r.occurred_at),
+      },
+    ]),
+  );
+  const state: ExceptionsState = {
+    open,
+    totalExceptions: kpi === undefined ? 0 : Number(kpi.total_exceptions),
+    lowConfidenceExceptions:
+      kpi === undefined ? 0 : Number(kpi.low_confidence_exceptions),
+  };
+
+  const next = exceptionsReducer(state, toOccurred(replay));
+  if (next === state) return; // non-exception event ⇒ nothing to persist
+
+  for (const ex of next.open.values()) {
+    await db
+      .insertInto("exceptions")
+      .values({
+        exception_id: ex.exceptionId,
+        kind: ex.kind,
+        package_id: ex.packageId,
+        trailer_id: ex.trailerId,
+        hub_id: ex.hubId,
+        severity: ex.severity,
+        recommended_action: ex.recommendedAction,
+        confidence: ex.confidence,
+        occurred_at: ex.occurredAt,
+      })
+      .onConflict((oc) =>
+        oc.column("exception_id").doUpdateSet({
+          kind: ex.kind,
+          package_id: ex.packageId,
+          trailer_id: ex.trailerId,
+          hub_id: ex.hubId,
+          severity: ex.severity,
+          recommended_action: ex.recommendedAction,
+          confidence: ex.confidence,
+          occurred_at: ex.occurredAt,
+        }),
+      )
+      .execute();
+  }
+
+  await db
+    .insertInto("exception_kpi")
+    .values({
+      id: true,
+      total_exceptions: next.totalExceptions,
+      low_confidence_exceptions: next.lowConfidenceExceptions,
+    })
+    .onConflict((oc) =>
+      oc.column("id").doUpdateSet({
+        total_exceptions: next.totalExceptions,
+        low_confidence_exceptions: next.lowConfidenceExceptions,
+      }),
+    )
+    .execute();
+}
+
 type Applier = (db: Kysely<ProjectionDb>, replay: ReplayEvent) => Promise<void>;
 
 /** Each operational projection: its checkpoint name + its load/fold/persist step. */
@@ -317,6 +402,9 @@ const APPLIERS: ReadonlyArray<{ name: OperationalProjectionName; apply: Applier 
   // applyInline pass).
   { name: "tag-registry", apply: applyTagRegistry },
   { name: "zone-estimate", apply: applyZoneEstimate },
+  // The exceptions feed folds ONLY the detector's WrongTrailerDetected /
+  // MissedUnloadDetected; order vs the others is immaterial (disjoint events).
+  { name: "exceptions", apply: applyExceptions },
 ];
 
 /**
@@ -447,4 +535,64 @@ function asDistribution(
   value: Readonly<Record<string, number>>,
 ): Readonly<Record<"rear" | "middle" | "nose", number>> {
   return { rear: value.rear ?? 0, middle: value.middle ?? 0, nose: value.nose ?? 0 };
+}
+
+const EXCEPTION_KINDS = new Set(["wrong-trailer", "missed-unload"]);
+function asExceptionKind(value: string): ExceptionKind {
+  if (EXCEPTION_KINDS.has(value)) return value as ExceptionKind;
+  throw new Error(`Unknown exception kind in projection row: ${value}`);
+}
+
+const SEVERITIES = new Set(["info", "warning", "critical"]);
+function asSeverity(value: string): "info" | "warning" | "critical" {
+  if (SEVERITIES.has(value)) return value as "info" | "warning" | "critical";
+  throw new Error(`Unknown severity in projection row: ${value}`);
+}
+
+/**
+ * Read the current OPEN exceptions (SNS-04/05), deterministically ordered by
+ * `occurred_at` then `exception_id` — the stable feed order the API surfaces.
+ */
+export async function readOpenExceptions(
+  db: Kysely<ProjectionDb>,
+): Promise<readonly OpenException[]> {
+  const rows = await db
+    .selectFrom("exceptions")
+    .selectAll()
+    .orderBy("occurred_at", "asc")
+    .orderBy("exception_id", "asc")
+    .execute();
+  return rows.map((r) => ({
+    exceptionId: r.exception_id,
+    kind: asExceptionKind(r.kind),
+    packageId: r.package_id,
+    trailerId: r.trailer_id,
+    hubId: r.hub_id,
+    severity: asSeverity(r.severity),
+    recommendedAction: r.recommended_action,
+    confidence: r.confidence,
+    occurredAt: toIso(r.occurred_at),
+  }));
+}
+
+/** The persisted false-positive-rate KPI snapshot (SNS-04/05). */
+export interface ExceptionKpiSnapshot {
+  readonly totalExceptions: number;
+  readonly lowConfidenceExceptions: number;
+  /** `lowConfidenceExceptions / totalExceptions`, or 0 when none opened. */
+  readonly falsePositiveRate: number;
+}
+
+/** Read the false-positive-rate KPI counters as a queryable snapshot. */
+export async function readExceptionKpi(
+  db: Kysely<ProjectionDb>,
+): Promise<ExceptionKpiSnapshot> {
+  const kpi = await db.selectFrom("exception_kpi").selectAll().executeTakeFirst();
+  const total = kpi === undefined ? 0 : Number(kpi.total_exceptions);
+  const low = kpi === undefined ? 0 : Number(kpi.low_confidence_exceptions);
+  return {
+    totalExceptions: total,
+    lowConfidenceExceptions: low,
+    falsePositiveRate: total === 0 ? 0 : low / total,
+  };
 }

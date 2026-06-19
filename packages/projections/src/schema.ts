@@ -115,7 +115,38 @@ export interface ZoneEstimateTable {
   last_observed_at: ColumnType<Date, string | Date, string | Date>;
 }
 
+/**
+ * SNS-04/05: one OPEN exception row (wrong-trailer / missed-unload). `exception_id`
+ * is the stable identity so re-running detection is an idempotent upsert (T-03-16).
+ * `hub_id` is the missed-unload stop (nullable for wrong-trailer); `severity` +
+ * `recommended_action` make the exception auditable (T-03-18).
+ */
+export interface ExceptionsTable {
+  exception_id: string;
+  kind: string;
+  package_id: string;
+  trailer_id: string;
+  hub_id: string | null;
+  severity: string;
+  recommended_action: string;
+  confidence: number;
+  occurred_at: ColumnType<Date, string | Date, string | Date>;
+}
+
+/**
+ * SNS-04/05: the SINGLETON false-positive-rate KPI counters. `id` is a fixed
+ * `TRUE` so there is exactly one row. FP-rate = `low_confidence_exceptions /
+ * total_exceptions` — a REAL queryable ratio (the demo credibility metric).
+ */
+export interface ExceptionKpiTable {
+  id: ColumnType<boolean, boolean | undefined, never>;
+  total_exceptions: ColumnType<bigint, string | number, string | number>;
+  low_confidence_exceptions: ColumnType<bigint, string | number, string | number>;
+}
+
 export type PackageLocationRow = Selectable<PackageLocationTable>;
+export type ExceptionsRow = Selectable<ExceptionsTable>;
+export type ExceptionKpiRow = Selectable<ExceptionKpiTable>;
 export type TagRegistryRow = Selectable<TagRegistryTable>;
 export type ZoneEstimateRow = Selectable<ZoneEstimateTable>;
 export type TrailerStateRow = Selectable<TrailerStateTable>;
@@ -137,6 +168,8 @@ export interface ProjectionDatabase {
   hub_inventory: HubInventoryTable;
   tag_registry: TagRegistryTable;
   zone_estimate: ZoneEstimateTable;
+  exceptions: ExceptionsTable;
+  exception_kpi: ExceptionKpiTable;
   audit_timeline: AuditTimelineTable;
   geo_route: GeoRouteTable;
   geo_keyframe: GeoKeyframeTable;
@@ -155,6 +188,7 @@ export const OPERATIONAL_PROJECTIONS = [
   "hub-inventory",
   "tag-registry",
   "zone-estimate",
+  "exceptions",
 ] as const;
 
 export type OperationalProjectionName = (typeof OPERATIONAL_PROJECTIONS)[number];
@@ -229,6 +263,33 @@ CREATE TABLE IF NOT EXISTS zone_estimate (
   last_reliable_checkpoint TEXT,
   last_observed_at         TIMESTAMPTZ      NOT NULL,
   PRIMARY KEY (package_id, trailer_id)
+);
+
+-- SNS-04/05: the OPEN exceptions feed. One row per detected planned-vs-observed
+-- disagreement (wrong-trailer / missed-unload). exception_id is the stable
+-- identity so re-running detection is an idempotent upsert (no flood, T-03-16).
+-- severity + recommended_action make every exception auditable (T-03-18).
+CREATE TABLE IF NOT EXISTS exceptions (
+  exception_id      TEXT PRIMARY KEY,
+  kind              TEXT             NOT NULL,
+  package_id        TEXT             NOT NULL,
+  trailer_id        TEXT             NOT NULL,
+  hub_id            TEXT,
+  severity          TEXT             NOT NULL,
+  recommended_action TEXT            NOT NULL,
+  confidence        DOUBLE PRECISION NOT NULL,
+  occurred_at       TIMESTAMPTZ      NOT NULL
+);
+
+-- SNS-04/05: the singleton false-positive-rate KPI counters. total_exceptions is
+-- the distinct exceptions ever opened; low_confidence_exceptions is the subset
+-- below the secondary confidence band. FP-rate = low / total (a REAL queryable
+-- ratio, not a placeholder) — the demo metric proving the feed stays credible.
+CREATE TABLE IF NOT EXISTS exception_kpi (
+  id                        BOOLEAN PRIMARY KEY DEFAULT TRUE,
+  total_exceptions          BIGINT  NOT NULL DEFAULT 0,
+  low_confidence_exceptions BIGINT  NOT NULL DEFAULT 0,
+  CONSTRAINT exception_kpi_singleton CHECK (id)
 );
 
 -- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored
