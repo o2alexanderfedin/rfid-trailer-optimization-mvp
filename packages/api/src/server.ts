@@ -5,6 +5,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
+import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
@@ -55,6 +56,8 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   registerExceptionRoutes(app, deps.db);
   // POST /plan — the pure load-planning pipeline (LOAD-08). Read-only, DB-free.
   registerPlanRoutes(app);
+  // Plan 05-04: GET /trailers/:id/plan (VIZ-05) + GET /trailers/:id/history (UI-02).
+  registerPlanDetailRoutes(app, deps.db);
   // Plan 05-03: GET /kpis + GET /kpis/comparison (UI-03/UI-04 backend).
   registerKpiRoutes(app, deps.db);
 
