@@ -131,4 +131,28 @@ describe("runEpoch (OPT-04/05/06 pure rolling core)", () => {
     runEpoch(EPOCH, inp, DEFAULT_OBJECTIVE_WEIGHTS);
     expect(JSON.stringify(inp.twinSnapshot)).toBe(before);
   });
+
+  it("CAPACITY (FIX 1): an off-route block's volume still counts toward demand (gate not bypassable)", () => {
+    // The trailer's route is H2,H3 (capacity 20). Its blocks fit those stops with
+    // volume 6+8=14 ≤ 20. But it ALSO carries an extra block destined for H9 — a
+    // hub NOT on its route. Previously that off-route volume was silently dropped
+    // from the capacity demand, so a trailer could be loaded beyond capacity yet
+    // still pass the gate. With the fix, EVERY assigned block contributes its
+    // volume, so 6+8+10 = 24 > 20 ⇒ the candidate is flagged INFEASIBLE.
+    const snap = snapshot();
+    (snap.trailers[0] as { blocks: { blockId: string; nextUnloadHubId: string; volume: number }[] }).blocks = [
+      { blockId: "B1", nextUnloadHubId: "H2", volume: 6 },
+      { blockId: "B2", nextUnloadHubId: "H3", volume: 8 },
+      // Off-route block: H9 is not in the trailer's route — its volume must NOT vanish.
+      { blockId: "B3", nextUnloadHubId: "H9", volume: 10 },
+    ];
+    const overInput: EpochInput = { events: [departed("T1", "H1", "H2")], twinSnapshot: snap };
+
+    const result = runEpoch(EPOCH, overInput, DEFAULT_OBJECTIVE_WEIGHTS);
+    const rec = result.recommendations.find((r) => r.trailerId === "T1");
+    expect(rec).toBeDefined();
+    // Total assigned volume (24) exceeds capacity (20) ⇒ infeasible, not accepted.
+    expect(rec!.feasible).toBe(false);
+    expect(result.accepted).toBeNull();
+  });
 });
