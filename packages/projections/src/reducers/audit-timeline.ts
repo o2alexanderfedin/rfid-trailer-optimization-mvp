@@ -86,11 +86,16 @@ export function auditTimelineReducer(
         hubId: event.payload.hubId,
         scanType: null,
       };
+    // The remaining events imply no audit-timeline entry. Plan-lifecycle events
+    // (PlanGenerated/PlanAccepted, OPT-04) are optimizer concerns, not package
+    // ledger entries, so they no-op here too.
     case "HubRegistered":
     case "RouteRegistered":
     case "TrailerDeparted":
     case "TrailerArrivedAtHub":
     case "TrailerDocked":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return null;
     default:
       return assertNeverAudit(event);

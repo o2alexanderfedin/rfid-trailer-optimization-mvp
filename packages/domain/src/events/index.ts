@@ -10,6 +10,8 @@ export type {
   TrailerDeparted,
   TrailerArrivedAtHub,
   TrailerDocked,
+  PlanGenerated,
+  PlanAccepted,
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
@@ -23,4 +25,6 @@ export {
   trailerDepartedSchema,
   trailerArrivedAtHubSchema,
   trailerDockedSchema,
+  planGeneratedSchema,
+  planAcceptedSchema,
 } from "./schemas.js";

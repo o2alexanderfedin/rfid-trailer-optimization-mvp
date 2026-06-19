@@ -153,11 +153,15 @@ export function geoTrackReducer(
         ],
       };
     }
+    // No geometry change. Plan-lifecycle events (PlanGenerated/PlanAccepted,
+    // OPT-04) carry no position, so they produce no keyframe.
     case "HubRegistered":
     case "PackageCreated":
     case "PackageScanned":
     case "PackageArrivedAtHub":
     case "TrailerDocked":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return { state, keyframes: [] };
     default:
       return assertNeverGeo(event);
