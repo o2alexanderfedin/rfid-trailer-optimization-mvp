@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildTwin } from "./twin.js";
 import type { OptimizerScope } from "./types.js";
-import type { TwinSnapshot } from "./types.js";
+import type { TwinBlock, TwinSnapshot } from "./types.js";
 
 /**
  * OPT-04: the optimizer evaluates candidates on a `structuredClone` planning-twin
@@ -56,9 +56,11 @@ describe("buildTwin (OPT-04 structuredClone sandbox)", () => {
     const twin = buildTwin(FULL_SCOPE, src);
 
     // Mutate the twin's nested structures.
-    (twin.trailers[0]!.blocks as { blockId: string }[]).push({
+    (twin.trailers[0]!.blocks as TwinBlock[]).push({
       blockId: "INJECTED",
-    } as never);
+      nextUnloadHubId: "H2",
+      volume: 1,
+    });
     (twin.trailers[0] as { departureMin: number }).departureMin = -999;
 
     // Source is untouched.
