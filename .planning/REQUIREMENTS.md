@@ -115,17 +115,66 @@ Explicitly excluded — documented to prevent scope creep (from spec §4/§19.2 
 
 ## Traceability
 
-Populated during roadmap creation — each v1 requirement maps to exactly one phase.
+Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals and success criteria.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(to be assigned by roadmapper)_ | — | Pending |
+| FND-01 | Phase 1 | Pending |
+| FND-02 | Phase 1 | Pending |
+| FND-03 | Phase 1 | Pending |
+| FND-04 | Phase 1 | Pending |
+| FND-05 | Phase 1 | Pending |
+| FND-06 | Phase 1 | Pending |
+| FND-07 | Phase 1 | Pending |
+| FND-08 | Phase 1 | Pending |
+| SIM-01 | Phase 1 | Pending |
+| SIM-02 | Phase 1 | Pending |
+| VIZ-01 | Phase 1 | Pending |
+| AGG-01 | Phase 2 | Pending |
+| AGG-02 | Phase 2 | Pending |
+| AGG-03 | Phase 2 | Pending |
+| AGG-04 | Phase 2 | Pending |
+| LOAD-01 | Phase 2 | Pending |
+| LOAD-02 | Phase 2 | Pending |
+| LOAD-03 | Phase 2 | Pending |
+| LOAD-04 | Phase 2 | Pending |
+| LOAD-05 | Phase 2 | Pending |
+| LOAD-06 | Phase 2 | Pending |
+| LOAD-07 | Phase 2 | Pending |
+| LOAD-08 | Phase 2 | Pending |
+| LOAD-09 | Phase 2 | Pending |
+| LOAD-10 | Phase 2 | Pending |
+| SNS-01 | Phase 3 | Pending |
+| SNS-02 | Phase 3 | Pending |
+| SNS-03 | Phase 3 | Pending |
+| SNS-04 | Phase 3 | Pending |
+| SNS-05 | Phase 3 | Pending |
+| SIM-03 | Phase 3 | Pending |
+| OPT-01 | Phase 4 | Pending |
+| OPT-02 | Phase 4 | Pending |
+| OPT-03 | Phase 4 | Pending |
+| OPT-04 | Phase 4 | Pending |
+| OPT-05 | Phase 4 | Pending |
+| OPT-06 | Phase 4 | Pending |
+| OPT-07 | Phase 4 | Pending |
+| OPT-08 | Phase 4 | Pending |
+| SIM-04 | Phase 5 | Pending |
+| VIZ-02 | Phase 5 | Pending |
+| VIZ-03 | Phase 5 | Pending |
+| VIZ-04 | Phase 5 | Pending |
+| VIZ-05 | Phase 5 | Pending |
+| UI-01 | Phase 5 | Pending |
+| UI-02 | Phase 5 | Pending |
+| UI-03 | Phase 5 | Pending |
+| UI-04 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 48 total (FND 8, AGG 4, LOAD 10, SNS 5, OPT 8, SIM 4, VIZ 5, UI 4)
-- Mapped to phases: 0 ⚠️ (pending roadmap)
-- Unmapped: 48 ⚠️
+- Mapped to phases: 48 ✓
+- Unmapped: 0 ✓
+
+**Per-phase counts:** Phase 1 = 11 (FND 8 + SIM-01/02 + VIZ-01) · Phase 2 = 14 (AGG 4 + LOAD 10) · Phase 3 = 6 (SNS 5 + SIM-03) · Phase 4 = 8 (OPT 8) · Phase 5 = 9 (SIM-04 + VIZ-02..05 + UI 4)
 
 ---
 *Requirements defined: 2026-06-18*
-*Last updated: 2026-06-18 after initial definition*
+*Last updated: 2026-06-18 after roadmap traceability mapping (48/48 mapped to 5 phases)*
