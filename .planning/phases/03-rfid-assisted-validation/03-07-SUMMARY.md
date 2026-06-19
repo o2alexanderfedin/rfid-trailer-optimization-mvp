@@ -158,3 +158,63 @@ lockstep with the existing ws snapshot channel.
 3. **Single-fixture noisy run.** The int test asserts properties (discriminating
    FP-rate, bounded feed) rather than exact counts, so it is robust to minor
    engine retuning; exact-count assertions were deliberately avoided.
+
+---
+
+## Integration addendum (merge into `feature/phase-3-rfid-assisted-validation`)
+
+This plan was run as a two-rival tournament (`wt/p3-07-r1`, `wt/p3-07-r2`).
+**Rival #2** won and was merged via `--no-ff` (commit
+`3f6660ea29f9f82a835e7732d7ff18933825eb37`) — a clean merge, no conflicts.
+Both rival worktrees and branches were removed and pruned after merge.
+
+### Requirements delivered
+
+- **SNS-04** — RFID/sensor exceptions surfaced as an actionable feed
+  (`GET /exceptions`, `GET /exceptions/kpi`) with severity + recommendedAction
+  and a false-positive-rate KPI that discriminates credible signal from marginal
+  noise (no-flood honored).
+- **SNS-05** — planned-vs-observed validation tightened at the API boundary: the
+  driver feeds the detector the EXACT just-departed hub set (vs the MVP
+  `in_transit` inference) and a `PackageCreated` dest-hub index, closing Plan 06's
+  carried risks #1/#2; per-package zone estimate surfaced (`GET /packages/:id/zone`,
+  zone + confidence < 1.0, NO coordinates, 404 for unobserved).
+
+### Integration gate results (re-verified post-merge on the feature branch)
+
+- `pnpm install` — clean (lockfile up to date).
+- `pnpm build` (turbo) — **9/9 successful**.
+- `pnpm -r build` — all 10 packages compiled (fresh `tsc -b` + `vite build`).
+- `pnpm lint` — clean (eslint, 0 problems).
+- `pnpm test:all` — **456 passed / 456, across 57 files**; the
+  Testcontainers-backed integration suite (`queries.int.test.ts`,
+  `exceptions.int.test.ts`) ran green in full — the suspected startup flake did
+  NOT materialize on this run.
+
+### Carried risks at integration (per judge)
+
+1. **Integration-suite container-startup sensitivity.** The judge observed a
+   full-suite flake where `queries.int.test.ts`'s `beforeAll` Testcontainers
+   startup timed out under heavy parallel load — disproved as a code defect
+   (8/8 in isolation), but it signals the integration suite is sensitive to
+   container-startup contention on a loaded machine. **Action for CI (both
+   rivals share this):** raise vitest `hookTimeout` and/or limit integration
+   concurrency (single-fork / reduced `maxConcurrency`) so a loaded runner does
+   not produce intermittent reds. Rival 1 was only luckier on ordering, not
+   structurally safer.
+2. **Fusion-engine calibration band is a shared dependency.** Detection relies on
+   the anti-P5b fusion engine's saturated argmax (~0.34 threshold; saturated
+   argmax confidence sits near ~0.40, so Plan-04's 0.6 default is unreachable).
+   If the fusion config (cap / entropy floor / prior) changes, the band must be
+   re-derived. Rival #2 centralizes this in ONE file (`detection-config.ts`,
+   `PRODUCTION_DETECTION_CONFIG` + calibrated `severityFor`) — lower retune risk
+   than rival 1's split between `DEMO_DETECTION_CONFIG` and the inherited
+   `severityFor`.
+3. **Severity pinned to the first sighting (intentional anti-flood, deferred
+   YAGNI).** An exception's severity is fixed at its first detection tick and does
+   NOT escalate as corroborating evidence accrues. If Phase 5 needs escalation,
+   add an upsert-on-higher-confidence rule to the exceptions reducer.
+4. **Per-trailer zone manifest unimplemented (YAGNI).** `GET /trailers/:id/zones`
+   is not provided; only the per-package zone estimate is surfaced. Acceptable
+   per the plan's or-clause — Phase 5 drives per-package drill-down, not a
+   trailer-wide zone map.
