@@ -38,7 +38,7 @@ describe("skeleton spine: append -> inline projection -> GET /hubs", () => {
     // Event persisted in the log...
     const stream = await readStream(fx.db, `hub-${MEMPHIS.hubId}`);
     expect(stream).toHaveLength(1);
-    expect(stream[0]?.event_type).toBe("HubRegistered");
+    expect(stream[0]?.event.type).toBe("HubRegistered");
     expect(stream[0]?.version).toBe(1);
 
     // ...and the inline projection upserted the hub in the SAME transaction.
