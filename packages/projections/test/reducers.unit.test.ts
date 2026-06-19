@@ -225,6 +225,43 @@ describe("hubInventoryReducer (FND-07)", () => {
     expect(state.hubs.get("MEM")?.inbound).toEqual([]);
     expect(state.hubs.get("DFW")?.inbound).toEqual(["P1"]);
   });
+
+  // M-3 (FND-07): TrailerDeparted carries an authoritative `packageIds` manifest.
+  // A departure WITHOUT explicit per-package `load` scans must still decrement the
+  // SOURCE hub's inventory using that manifest — otherwise the package lingers in
+  // an outbound/staged bucket forever and over-counts source-hub inventory.
+  it("a departure decrements source-hub inventory from the packageIds manifest (no load scan)", () => {
+    const state = foldHub([
+      evt(scanned("P1", "MEM", "outbound"), at(0)), // staged outbound, NO load scan
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(1_000)),
+    ]);
+    const mem = state.hubs.get("MEM");
+    expect(mem?.outbound).toEqual([]);
+    expect(mem?.inbound).toEqual([]);
+    expect(mem?.staged).toEqual([]);
+  });
+
+  it("a departure removes only its manifest's packages, leaving others in inventory", () => {
+    const state = foldHub([
+      evt(scanned("P1", "MEM", "outbound"), at(0)),
+      evt(scanned("P2", "MEM", "outbound"), at(1_000)),
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(2_000)),
+    ]);
+    const mem = state.hubs.get("MEM");
+    expect(mem?.outbound).toEqual(["P2"]); // P2 stays; only P1 departed
+  });
+
+  it("an explicit load scan before departure stays correct (idempotent removal)", () => {
+    const state = foldHub([
+      evt(scanned("P1", "MEM", "outbound"), at(0)),
+      evt(scanned("P1", "MEM", "load"), at(1_000)), // canonical path: load scan
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(2_000)), // redundant now
+    ]);
+    const mem = state.hubs.get("MEM");
+    expect(mem?.outbound).toEqual([]);
+    expect(mem?.staged).toEqual([]);
+    expect(mem?.inbound).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

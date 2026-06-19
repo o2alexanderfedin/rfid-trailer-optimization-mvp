@@ -76,12 +76,25 @@ export interface GeoKeyframeTable {
   lat: number;
 }
 
+/**
+ * Geo-track (catch-up / M-4): the in-flight trip -> leg index. A `TrailerDeparted`
+ * inserts the trip's leg; the matching `TrailerArrivedAtHub` reads it to resolve
+ * the correct arrival leg, then deletes the row. Persisted so incremental
+ * catch-up resolves identically to a full rebuild across passes.
+ */
+export interface GeoInflightTripTable {
+  trip_id: string;
+  from_hub_id: string;
+  to_hub_id: string;
+}
+
 export type PackageLocationRow = Selectable<PackageLocationTable>;
 export type TrailerStateRow = Selectable<TrailerStateTable>;
 export type HubInventoryRow = Selectable<HubInventoryTable>;
 export type AuditTimelineRow = Selectable<AuditTimelineTable>;
 export type GeoRouteRow = Selectable<GeoRouteTable>;
 export type GeoKeyframeRow = Selectable<GeoKeyframeTable>;
+export type GeoInflightTripRow = Selectable<GeoInflightTripTable>;
 
 /**
  * The projection tables this package owns. The inline applier/rebuild driver
@@ -96,6 +109,7 @@ export interface ProjectionDatabase {
   audit_timeline: AuditTimelineTable;
   geo_route: GeoRouteTable;
   geo_keyframe: GeoKeyframeTable;
+  geo_inflight_trip: GeoInflightTripTable;
 }
 
 /**
@@ -194,5 +208,16 @@ CREATE TABLE IF NOT EXISTS geo_keyframe (
   lon        DOUBLE PRECISION NOT NULL,
   lat        DOUBLE PRECISION NOT NULL,
   PRIMARY KEY (trailer_id, trip_id, kind)
+);
+
+-- CATCH-UP (M-4): the in-flight trip -> leg index. A \`TrailerDeparted\` records
+-- the trip's ACTUAL leg here; the matching \`TrailerArrivedAtHub\` reads it to
+-- place the arrival keyframe on the correct leg (vs a lexicographic guess), then
+-- deletes the row. Persisting it makes incremental catch-up resolve identically
+-- to a full rebuild even when departure and arrival fall in different passes.
+CREATE TABLE IF NOT EXISTS geo_inflight_trip (
+  trip_id     TEXT PRIMARY KEY,
+  from_hub_id TEXT NOT NULL,
+  to_hub_id   TEXT NOT NULL
 );
 `;

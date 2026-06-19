@@ -7,6 +7,33 @@ import { ConcurrencyError } from "./errors.js";
 /** Postgres SQLSTATE for unique_violation (the UNIQUE(stream_id, version) backstop). */
 const PG_UNIQUE_VIOLATION = "23505";
 
+/**
+ * Fixed advisory-lock key for the append log (M-1 / M-2). A single
+ * transaction-scoped `pg_advisory_xact_lock(GLOBAL_ORDER_LOCK_KEY)` taken at the
+ * START of every append transaction — BEFORE the IDENTITY `events` insert —
+ * serializes the `global_seq` ALLOCATION section across all writers, so the
+ * allocation order equals the COMMIT order. This closes the in-flight gap window
+ * where two concurrent appends to DIFFERENT streams could commit out of
+ * `global_seq` order and let a high-water `readAll`+checkpoint consumer
+ * permanently skip a committed event.
+ *
+ * The lock is held only across the insert(s), not user code, so contention is
+ * bounded to the (fast) write itself; it is `xact`-scoped so it releases
+ * automatically on COMMIT or ROLLBACK (no leak on conflict). Same-stream
+ * concurrency is still additionally guarded by the per-stream version CAS.
+ *
+ * ARCHITECTURE.md (Pattern 1) sanctions advisory locks for multi-writer global
+ * ordering; this is that mechanism, scoped to the minimal critical section.
+ */
+const GLOBAL_ORDER_LOCK_KEY = 4_021_07n; // arbitrary fixed app-wide constant.
+
+/** Take the transaction-scoped global-order advisory lock (M-1 / M-2). */
+async function lockGlobalOrder(trx: Transaction<Database>): Promise<void> {
+  await sql`SELECT pg_advisory_xact_lock(${sql.lit(
+    GLOBAL_ORDER_LOCK_KEY.toString(),
+  )}::bigint)`.execute(trx);
+}
+
 function isUniqueViolation(err: unknown): boolean {
   return (
     typeof err === "object" &&
@@ -75,6 +102,9 @@ export async function appendToStream(
 
   try {
     return await db.transaction().execute(async (trx) => {
+      // Serialize global_seq allocation == commit order across all writers
+      // (M-1 / M-2). Taken FIRST so it covers the IDENTITY insert below.
+      await lockGlobalOrder(trx);
       await casStreamVersion(trx, streamId, expectedVersion, validated.length);
 
       let version = expectedVersion;
@@ -286,6 +316,8 @@ export async function append(
 
   try {
     await db.transaction().execute(async (trx) => {
+      // Same global-order serialization as appendToStream (M-1 / M-2).
+      await lockGlobalOrder(trx);
       await casStreamVersion(trx, streamId, expectedVersion, validated.length);
 
       let version = expectedVersion;

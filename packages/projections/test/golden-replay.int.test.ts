@@ -145,8 +145,11 @@ describe("GOLDEN REPLAY: live twin == rebuilt-from-log twin, byte-identical (FND
     expect(liveTwin.trailerState.get(P("T1"))?.status).toBe("docked");
     expect(liveTwin.trailerState.get(P("T1"))?.assignedPackageIds).toEqual([P("A"), P("B")]);
     expect(liveTwin.trailerState.get(P("T2"))?.status).toBe("in_transit");
-    // B was loaded (removed from hub inventory); C ended outbound at DFW.
-    expect(liveTwin.hubInventory.get(P("DFW"))?.outbound).toEqual([P("C")]);
+    // B was loaded (removed from hub inventory). C was staged outbound at DFW
+    // then DEPARTED on T2 (DFW->LAX) whose manifest names C — so the departure
+    // decrements source-hub inventory from the manifest (M-3 / FND-07), leaving
+    // DFW.outbound EMPTY (C physically left; it must not over-count at DFW).
+    expect(liveTwin.hubInventory.get(P("DFW"))?.outbound).toEqual([]);
 
     // --- REBUILD: truncate + reset checkpoints + replay from global_seq=0 ----
     await rebuildProjections(proj, replayReadAll);

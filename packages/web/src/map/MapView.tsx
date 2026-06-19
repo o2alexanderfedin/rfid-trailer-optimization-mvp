@@ -49,6 +49,8 @@ export function MapView(): React.JSX.Element {
   const trailerSourceRef = useRef<VectorSource | null>(null);
   /** How many distinct ol/Map instances this component has created (leak guard). */
   const mapInstancesRef = useRef(0);
+  /** How many ol/Map instances this component has DISPOSED (M-6 net-live guard). */
+  const mapDisposedRef = useRef(0);
   /** How many distinct trailer VectorSources have been created (leak guard). */
   const trailerSourceInstancesRef = useRef(0);
   /** How many ws snapshots have been applied (proves live updates flow). */
@@ -83,6 +85,14 @@ export function MapView(): React.JSX.Element {
     mapRef.current = map;
     mapInstancesRef.current += 1;
     setAttr("data-map-instances", mapInstancesRef.current);
+    // Net-live = created - disposed. This is the invariant that matters (M-6):
+    // under React StrictMode (dev) the effect runs mount→cleanup→remount, so the
+    // CUMULATIVE created count reaches 2, but the first map is disposed in the
+    // cleanup, so net-live must stay 1 — proving no live map leaks.
+    setAttr(
+      "data-map-net-live",
+      mapInstancesRef.current - mapDisposedRef.current,
+    );
     setAttr("data-hub-count", 0);
     setAttr("data-route-count", 0);
     setAttr("data-trailer-count", 0);
@@ -122,6 +132,13 @@ export function MapView(): React.JSX.Element {
       });
       map.setTarget(undefined);
       map.dispose();
+      mapDisposedRef.current += 1;
+      // Net-live drops back to (created - disposed); under StrictMode this is the
+      // window between mount1's cleanup and mount2's create where net-live == 0.
+      setAttr(
+        "data-map-net-live",
+        mapInstancesRef.current - mapDisposedRef.current,
+      );
       mapRef.current = null;
       trailerSourceRef.current = null;
     };

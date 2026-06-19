@@ -70,3 +70,14 @@ CREATE TABLE IF NOT EXISTS geo_keyframe (
   lat        DOUBLE PRECISION NOT NULL,
   PRIMARY KEY (trailer_id, trip_id, kind)
 );
+
+-- CATCH-UP (M-4): the in-flight trip -> leg index. A `TrailerDeparted` records
+-- the trip's ACTUAL leg here; the matching `TrailerArrivedAtHub` reads it to
+-- place the arrival keyframe on the correct leg (vs a lexicographic guess), then
+-- deletes the row. Persisting it makes incremental catch-up resolve identically
+-- to a full rebuild even when departure and arrival fall in different passes.
+CREATE TABLE IF NOT EXISTS geo_inflight_trip (
+  trip_id     TEXT PRIMARY KEY,
+  from_hub_id TEXT NOT NULL,
+  to_hub_id   TEXT NOT NULL
+);

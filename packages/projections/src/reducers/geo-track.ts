@@ -44,15 +44,28 @@ export interface GeoKeyframe {
 }
 
 /**
- * Internal fold state: the route geometry index, keyed by the directed hub pair
- * `from->to`. Immutable snapshot replaced on each `RouteRegistered`.
+ * Internal fold state for geo-track:
+ *  - `routes`   : the route geometry index, keyed by the directed hub pair
+ *                 `from->to`. Replaced on each `RouteRegistered`.
+ *  - `inflight` : the in-flight trip -> leg-key index (M-4). On `TrailerDeparted`
+ *                 we record `tripId -> legKey(fromHubId,toHubId)`; on
+ *                 `TrailerArrivedAtHub` we look up the trip's ACTUAL leg to place
+ *                 the arrival keyframe (never a lexicographic guess), then drop
+ *                 the entry. This makes arrival resolution correct when a hub has
+ *                 2+ inbound legs with distinct terminal vertices.
+ *
+ * Both are immutable snapshots replaced on each fold step.
  */
 export interface GeoTrackState {
   readonly routes: ReadonlyMap<string, readonly LonLat[]>;
+  readonly inflight: ReadonlyMap<string, string>;
 }
 
 /** The empty starting state for a fresh fold or rebuild-from-zero. */
-export const emptyGeoTrackState: GeoTrackState = { routes: new Map() };
+export const emptyGeoTrackState: GeoTrackState = {
+  routes: new Map(),
+  inflight: new Map(),
+};
 
 /**
  * Directed hub-pair key for the route index. Uses `->` as the separator; hub ids
@@ -87,16 +100,20 @@ export function geoTrackReducer(
         legKey(event.payload.fromHubId, event.payload.toHubId),
         event.payload.geometry,
       );
-      return { state: { routes }, keyframes: [] };
+      return { state: { ...state, routes }, keyframes: [] };
     }
     case "TrailerDeparted": {
-      const geom = state.routes.get(
-        legKey(event.payload.fromHubId, event.payload.toHubId),
-      );
-      const point = endpoint(geom, "first");
-      if (point === null) return { state, keyframes: [] };
+      const key = legKey(event.payload.fromHubId, event.payload.toHubId);
+      // Record the trip's ACTUAL leg so the matching arrival resolves it exactly
+      // (M-4) — never by a lexicographic guess over all legs into the hub.
+      const inflight = new Map(state.inflight);
+      inflight.set(event.payload.tripId, key);
+      const nextState = { ...state, inflight };
+
+      const point = endpoint(state.routes.get(key), "first");
+      if (point === null) return { state: nextState, keyframes: [] };
       return {
-        state,
+        state: nextState,
         keyframes: [
           {
             trailerId: event.payload.trailerId,
@@ -110,13 +127,20 @@ export function geoTrackReducer(
       };
     }
     case "TrailerArrivedAtHub": {
-      // The arrival hub is the destination of the leg the trip is completing;
-      // its position is the last vertex of any leg INTO that hub. We resolve the
-      // matching leg by destination hub from the route index.
-      const point = arrivalPoint(state, event.payload.hubId);
-      if (point === null) return { state, keyframes: [] };
+      // Resolve the arrival keyframe from the trip's ACTUAL leg (recorded at
+      // departure), taking that leg's terminal vertex — correct even when the
+      // arrival hub has 2+ inbound legs with distinct endpoints (M-4). The leg is
+      // then dropped from the in-flight index (the trip's leg is complete).
+      const key = state.inflight.get(event.payload.tripId);
+      const inflight = new Map(state.inflight);
+      inflight.delete(event.payload.tripId);
+      const nextState = { ...state, inflight };
+
+      const geom = key === undefined ? undefined : state.routes.get(key);
+      const point = endpoint(geom, "last");
+      if (point === null) return { state: nextState, keyframes: [] };
       return {
-        state,
+        state: nextState,
         keyframes: [
           {
             trailerId: event.payload.trailerId,
@@ -147,24 +171,6 @@ function endpoint(
 ): LonLat | null {
   if (geom === undefined || geom.length === 0) return null;
   return which === "first" ? geom[0]! : geom[geom.length - 1]!;
-}
-
-/**
- * The destination position for an arrival at `hubId`: the last vertex of any
- * registered leg whose destination is `hubId`. All legs into a hub end at the
- * hub's coordinate (exact endpoints, see `greatCircle`), so any such leg yields
- * the same point — we pick deterministically by sorted leg key.
- */
-function arrivalPoint(state: GeoTrackState, hubId: string): LonLat | null {
-  const suffix = `->${hubId}`;
-  let best: { key: string; point: LonLat } | null = null;
-  for (const [key, geom] of state.routes) {
-    if (!key.endsWith(suffix)) continue;
-    const point = endpoint(geom, "last");
-    if (point === null) continue;
-    if (best === null || key < best.key) best = { key, point };
-  }
-  return best === null ? null : best.point;
 }
 
 function assertNeverGeo(event: never): never {

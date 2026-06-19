@@ -21,6 +21,11 @@ import { type OccurredEvent, assertNeverEvent } from "./reducer.js";
  *
  * `scanType` "load" means the package was loaded onto a trailer that is leaving:
  * it is removed from hub inventory entirely (its location moves to the trailer).
+ * `TrailerDeparted` additionally removes EVERY package in its `packageIds`
+ * manifest from the source hub (FND-07 / M-3): the manifest is the authoritative
+ * record of what left, so a departure without explicit per-package `load` scans
+ * still decrements source-hub inventory. The two paths are idempotent — removing
+ * an already-removed package is a no-op.
  *
  * Bucket contents are exposed as id arrays SORTED by id, so the serialized /
  * persisted form is byte-stable regardless of insertion order (P3 → FND-04).
@@ -168,10 +173,21 @@ export function hubInventoryReducer(
         bucket === null ? null : { hubId: event.payload.hubId, bucket },
       );
     }
+    case "TrailerDeparted":
+      // FND-07 (M-3): the departure's `packageIds` is the AUTHORITATIVE manifest
+      // of what physically left the source hub. Decrement source-hub inventory
+      // directly from it (removing each package from wherever it currently sits)
+      // so a departure without explicit per-package `load` scans cannot leave
+      // packages lingering in a source bucket and over-count inventory. This is
+      // idempotent with the `load`-scan path: a package already removed is a
+      // no-op (`placePackage(..., null)` on an absent package leaves state intact).
+      return event.payload.packageIds.reduce(
+        (acc, packageId) => placePackage(acc, packageId, null),
+        state,
+      );
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
-    case "TrailerDeparted":
     case "TrailerArrivedAtHub":
     case "TrailerDocked":
       return state;

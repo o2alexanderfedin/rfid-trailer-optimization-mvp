@@ -158,12 +158,45 @@ async function runAuditTimeline(
   return applied;
 }
 
-/** Load the persisted route geometry index (keyed by directed hub pair). */
-async function loadRouteIndex(db: Kysely<CatchupDb>): Promise<GeoTrackState> {
-  const rows = await db.selectFrom("geo_route").selectAll().execute();
+/**
+ * Load the persisted geo-track fold state: the route geometry index (keyed by
+ * directed hub pair) AND the in-flight trip -> leg index (M-4). Seeding `inflight`
+ * from `geo_inflight_trip` lets the incremental catch-up resolve an arrival whose
+ * departure was folded in an earlier pass, identically to a full rebuild.
+ */
+async function loadGeoTrackState(db: Kysely<CatchupDb>): Promise<GeoTrackState> {
+  const [routeRows, inflightRows] = await Promise.all([
+    db.selectFrom("geo_route").selectAll().execute(),
+    db.selectFrom("geo_inflight_trip").selectAll().execute(),
+  ]);
   const routes = new Map<string, readonly [number, number][]>();
-  for (const r of rows) routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
-  return { routes };
+  for (const r of routeRows) routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
+  const inflight = new Map<string, string>();
+  for (const r of inflightRows) {
+    inflight.set(r.trip_id, legKey(r.from_hub_id, r.to_hub_id));
+  }
+  return { routes, inflight };
+}
+
+/** Record a trip's in-flight leg (M-4), idempotent on the trip id. */
+async function upsertInflightTrip(
+  db: Kysely<CatchupDb>,
+  tripId: string,
+  fromHubId: string,
+  toHubId: string,
+): Promise<void> {
+  await db
+    .insertInto("geo_inflight_trip")
+    .values({ trip_id: tripId, from_hub_id: fromHubId, to_hub_id: toHubId })
+    .onConflict((oc) =>
+      oc.column("trip_id").doUpdateSet({ from_hub_id: fromHubId, to_hub_id: toHubId }),
+    )
+    .execute();
+}
+
+/** Drop a completed trip from the in-flight index (M-4). */
+async function deleteInflightTrip(db: Kysely<CatchupDb>, tripId: string): Promise<void> {
+  await db.deleteFrom("geo_inflight_trip").where("trip_id", "=", tripId).execute();
 }
 
 /** Idempotent upsert of one route geometry into the persisted index. */
@@ -196,18 +229,25 @@ async function runGeoTrack(
   readAll: ReadAllEvents,
 ): Promise<number> {
   const from = await readCheckpoint(db, "geo-track");
-  let state = await loadRouteIndex(db);
+  let state = await loadGeoTrackState(db);
 
   const events = await readAll(db, from);
   let applied = 0;
   for (const stored of events) {
-    if (stored.event.type === "RouteRegistered") {
-      await upsertRoute(
+    const { event } = stored;
+    if (event.type === "RouteRegistered") {
+      await upsertRoute(db, event.payload.fromHubId, event.payload.toHubId, event.payload.geometry);
+    } else if (event.type === "TrailerDeparted") {
+      // Persist the trip's leg so a later-pass arrival resolves it (M-4).
+      await upsertInflightTrip(
         db,
-        stored.event.payload.fromHubId,
-        stored.event.payload.toHubId,
-        stored.event.payload.geometry,
+        event.payload.tripId,
+        event.payload.fromHubId,
+        event.payload.toHubId,
       );
+    } else if (event.type === "TrailerArrivedAtHub") {
+      // The trip's leg is consumed by the arrival; drop it from the index (M-4).
+      await deleteInflightTrip(db, event.payload.tripId);
     }
     const step = geoTrackReducer(state, stored);
     state = step.state;
@@ -248,7 +288,9 @@ export async function rebuildCatchup(
   db: Kysely<CatchupDb>,
   readAll: ReadAllEvents,
 ): Promise<CatchupResult> {
-  await sql`TRUNCATE TABLE audit_timeline, geo_route, geo_keyframe`.execute(db);
+  await sql`TRUNCATE TABLE audit_timeline, geo_route, geo_keyframe, geo_inflight_trip`.execute(
+    db,
+  );
   for (const projection of CATCHUP_PROJECTIONS) {
     await db
       .insertInto("projection_checkpoints")
