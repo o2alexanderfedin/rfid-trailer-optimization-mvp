@@ -1,31 +1,15 @@
-import { useEffect, useState } from "react";
-import { SkeletonMap } from "./SkeletonMap.js";
-import { fetchHubs, type HubDto } from "./hubs.js";
+import { MapView } from "./map/MapView.js";
 
-export function App() {
-  const [hubs, setHubs] = useState<readonly HubDto[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchHubs(controller.signal)
-      .then(setHubs)
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      controller.abort();
-    };
-  }, []);
-
+/**
+ * The web shell (VIZ-01). A thin header over the live OpenLayers USA map. The
+ * map owns its own data lifecycle (fetches hubs + routes on mount, subscribes
+ * to the ws snapshot channel for live trailers), so `App` stays a pure layout.
+ */
+export function App(): React.JSX.Element {
   return (
     <div className="app">
-      <header className="app__header">
-        Middle-Mile Live Map — {hubs.length} hub{hubs.length === 1 ? "" : "s"}
-        {error !== null ? ` (error: ${error})` : ""}
-      </header>
-      <SkeletonMap hubs={hubs} />
+      <header className="app__header">Middle-Mile Live Map</header>
+      <MapView />
     </div>
   );
 }

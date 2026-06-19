@@ -11,6 +11,9 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,
+        // Forward the `/api/ws` snapshot channel as a real websocket upgrade so
+        // live trailer points work under `pnpm dev` (VIZ-01 human-verify).
+        ws: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
       },
     },
