@@ -41,7 +41,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A live-vs-rebuilt CI test passes: dropping every projection and rebuilding it purely by replaying the event log (strictly by global sequence) yields byte-identical state to the live run.
   4. Concurrent appends to the same stream are rejected by a `UNIQUE(stream_id, version)` optimistic-concurrency guard (the conflicting writer reloads and retries), and re-applying an already-processed event is a no-op (idempotent projections).
   5. A thin OpenLayers + OSM web slice renders all hubs and routes across the USA and shows simulated trailers as points driven by the geo-track projection — the empty-but-live map centerpiece.
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+- [x] 01-01-PLAN.md — Walking skeleton: monorepo + OrbStack Postgres + one event → inline projection → API read → live OSM map with one real hub (FND-01) + SKELETON.md
+- [x] 01-02-PLAN.md — Domain: closed versioned DomainEvent union + zod-validated typed ingestion boundary (FND-01, FND-03)
+- [x] 01-03-PLAN.md — Event store: append-only JSONB + optimistic concurrency (UNIQUE(stream_id,version) + ConcurrencyError + retry) + global ordering (FND-01, FND-02)
+- [x] 01-04-PLAN.md — Operational projections: pure reducers, idempotent inline fold, truncate+replay golden-replay test (FND-04, FND-05, FND-06, FND-07)
+- [x] 01-05-PLAN.md — Simulation: ~10 US metro hubs + great-circle routes + seeded deterministic event stream driving projections (SIM-01, SIM-02)
+- [x] 01-06-PLAN.md — Query API + audit-timeline + geo-track projections + ws snapshots (FND-05, FND-06, FND-07, FND-08)
+- [x] 01-07-PLAN.md — Live OpenLayers + OSM web slice: hubs + routes + live trailer points with leak guard (VIZ-01)
 **UI hint**: yes
 
 Notes: This phase bakes in the foundation's HIGH-cost-to-retrofit invariants. Enforce determinism (P3: pure (state,event) reducers, no `Date.now()`/`Math.random()`/unstable sort in handlers, timestamps from event payloads, replay by `global_seq` only), optimistic concurrency (P4: `UNIQUE(stream_id, version)` + retry-on-conflict — the sim and, later, the optimizer are concurrent writers), idempotent projections (P5a: per-projection last-seq fold), and event `schemaVersion` discriminators on the closed `DomainEvent` union (P11). The simulator is pulled in here deliberately — it is the only data source for every later phase — and the thin geo-only map slice is stood up now to de-risk OpenLayers before the optimizer lands. A `Clock` abstraction separates domain time (`occurred_at`) from wall time (`recorded_at`). Map full animation/interaction is deferred to Phase 5; this slice only proves hubs + routes + points render live without leaks.
@@ -114,7 +122,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Operational Data Foundation + Live Map Spike | 0/TBD | Not started | - |
+| 1. Operational Data Foundation + Live Map Spike | 7/7 | ✅ Complete | 2026-06-19 |
 | 2. Load Planning | 0/TBD | Not started | - |
 | 3. RFID-Assisted Validation | 0/TBD | Not started | - |
 | 4. Rolling Optimizer | 0/TBD | Not started | - |

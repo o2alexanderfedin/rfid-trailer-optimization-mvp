@@ -1,0 +1,33 @@
+{
+  "name": "mm-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.19.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "eslint .",
+    "test": "vitest run --project unit",
+    "test:all": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@types/node": "22.12.0",
+    "@vitest/coverage-v8": "4.1.9",
+    "eslint": "9.39.4",
+    "testcontainers": "12.0.3",
+    "tsx": "4.22.4",
+    "turbo": "2.9.18",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.61.1",
+    "vitest": "4.1.9"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

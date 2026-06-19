@@ -1,0 +1,128 @@
+import { z } from "zod";
+import {
+  hubSchema,
+  lonLatSchema,
+  sizeClassSchema,
+} from "../entities/index.js";
+
+/**
+ * One zod schema per Phase-1 event type, composed into a single closed
+ * `z.discriminatedUnion("type", [...])` — the runtime mirror of the
+ * hand-written `DomainEvent` union (events/domain-event.ts).
+ *
+ * Discipline:
+ *  - Every event carries an explicit `schemaVersion` literal (P11). An
+ *    unsupported version fails the literal, so old/future shapes are *rejected*,
+ *    never silently coerced (threat T-01-06).
+ *  - Payloads are `.strict()` so an unexpected/extra field is a hard error at
+ *    the ingestion boundary (threat T-01-05), preventing untyped JSONB drift.
+ *  - `id` reuses a non-empty-string constraint so empty ids are rejected.
+ */
+
+const id = z.string().min(1);
+
+/** The current schema version for every Phase-1 event. */
+export const PHASE1_SCHEMA_VERSION = 1 as const;
+const schemaVersion = z.literal(PHASE1_SCHEMA_VERSION);
+
+/**
+ * Build a `{ type, schemaVersion, payload }` event schema from a payload shape.
+ * Keeps all eight definitions DRY and uniform (KISS).
+ */
+function eventSchema<TType extends string, TShape extends z.ZodRawShape>(
+  type: TType,
+  payload: z.ZodObject<TShape>,
+) {
+  return z.object({
+    type: z.literal(type),
+    schemaVersion,
+    payload: payload.strict(),
+  });
+}
+
+// --- Per-event payloads -----------------------------------------------------
+
+export const hubRegisteredSchema = eventSchema("HubRegistered", hubSchema);
+
+export const routeRegisteredSchema = eventSchema(
+  "RouteRegistered",
+  z.object({
+    routeId: id,
+    fromHubId: id,
+    toHubId: id,
+    geometry: z.array(lonLatSchema),
+  }),
+);
+
+export const packageCreatedSchema = eventSchema(
+  "PackageCreated",
+  z.object({
+    packageId: id,
+    originHubId: id,
+    destHubId: id,
+    sizeClass: sizeClassSchema,
+    weight: z.number().positive(),
+  }),
+);
+
+export const packageScannedSchema = eventSchema(
+  "PackageScanned",
+  z.object({
+    packageId: id,
+    hubId: id,
+    scanType: z.enum(["inbound", "outbound", "load", "unload"]),
+  }),
+);
+
+export const packageArrivedAtHubSchema = eventSchema(
+  "PackageArrivedAtHub",
+  z.object({
+    packageId: id,
+    hubId: id,
+  }),
+);
+
+export const trailerDepartedSchema = eventSchema(
+  "TrailerDeparted",
+  z.object({
+    trailerId: id,
+    fromHubId: id,
+    toHubId: id,
+    tripId: id,
+    packageIds: z.array(id),
+  }),
+);
+
+export const trailerArrivedAtHubSchema = eventSchema(
+  "TrailerArrivedAtHub",
+  z.object({
+    trailerId: id,
+    hubId: id,
+    tripId: id,
+  }),
+);
+
+export const trailerDockedSchema = eventSchema(
+  "TrailerDocked",
+  z.object({
+    trailerId: id,
+    hubId: id,
+    dockDoorId: id,
+  }),
+);
+
+/**
+ * The closed discriminated union, keyed on `type`. zod rejects any `type`
+ * outside this list (unknown-event-type guard) and any payload that fails its
+ * per-event schema.
+ */
+export const domainEventSchema = z.discriminatedUnion("type", [
+  hubRegisteredSchema,
+  routeRegisteredSchema,
+  packageCreatedSchema,
+  packageScannedSchema,
+  packageArrivedAtHubSchema,
+  trailerDepartedSchema,
+  trailerArrivedAtHubSchema,
+  trailerDockedSchema,
+]);
