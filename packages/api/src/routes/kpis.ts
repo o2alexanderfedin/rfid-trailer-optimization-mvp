@@ -2,13 +2,14 @@
  * `GET /kpis` + `GET /kpis/comparison` — read-only KPI dashboard endpoints.
  *
  * Plan 05-03, Task 3 (UI-03 + UI-04). Thin handlers: validate → compute → DTO.
- * No event-store writes; DB handle accepted but not used in the current
- * implementation (future: read live projection counts for onTime tallies).
+ * No event-store writes.
  *
  * Design (mirrors exceptions.ts + plan.ts conventions — KISS/DIP):
- *  - `GET /kpis`: returns the live operational KpiSnapshot. Currently computed
- *    from static defaults (the live operational twin wiring is Plan 05-05). The
- *    shape and the `baseline` sub-object already match the ws envelope KpiSnapshot
+ *  - `GET /kpis`: returns the live operational KpiSnapshot wired to live
+ *    projections (Plan 05-05). Reads: trailer count from `trailer_state`,
+ *    open exceptions + FP-rate from Phase-3 projections, and the latest
+ *    optimizer rehandle score from `RollingOptimizerService.latestResult()`.
+ *    The shape and `baseline` sub-object match the ws envelope KpiSnapshot
  *    so the dashboard reads one shape from both REST and ws (Plan 05-01).
  *  - `GET /kpis/comparison`: returns the seed-deterministic money slide from
  *    `computeComparison` (demo seed). Both routes are read-only.
@@ -26,35 +27,88 @@ import {
   type KpiComparison,
 } from "../kpis/comparison.js";
 import type { ApiDb } from "./queries.js";
+import { readOpenExceptions, readExceptionKpi } from "@mm/projections";
+import type { RollingOptimizerService } from "../optimizer/rolling-service.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Live KPI reader
 // ---------------------------------------------------------------------------
 
 /**
- * Build the default operational KPI inputs. The live projection wiring (onTime
- * tallies from the event log) is deferred to Plan 05-05; for now these default
- * to 100% on-time (no departures/arrivals yet processed in the demo session).
- * The exception counts default to 0 (same reason). This zero-state is honest:
- * it reflects the pre-run state, and the ws envelope starts with the same zeros.
+ * Read the live KpiSnapshot from the operational twin projections + the rolling
+ * optimizer's latest result (Plan 05-05 wiring).
+ *
+ * - `trailerCount`: total rows in `trailer_state`.
+ * - `optimizerRehandleScore`: sum of `breakdown.rehandle` across latest recs.
+ *   Since `DEFAULT_OBJECTIVE_WEIGHTS.rehandle === 1`, `breakdown.rehandle` IS
+ *   the raw `rehandleScore` (no un-weighting needed).
+ * - `openExceptions` / `exceptionKpi`: from Phase-3 projection reads.
+ * - `utilizationFraction`: estimated from `assignedPackageIds` counts vs a
+ *   fixed capacity proxy (30 packages per trailer = §8 DEFAULT_PLANNER_CONFIG).
+ *   This is a proxy — on-time departure/arrival tallies require a dedicated
+ *   event-log scan that is out of scope for the MVP (tracked as a stub).
  */
-function defaultKpiSnapshot(): KpiSnapshot {
+async function readLiveKpiSnapshot(
+  db: ApiDb,
+  optimizer: RollingOptimizerService,
+): Promise<KpiSnapshot> {
+  // 1. Trailer count + estimated utilization from projection.
+  const trailerRows = await db
+    .selectFrom("trailer_state")
+    .select(["trailer_id", "assigned_package_ids"])
+    .execute();
+  const trailerCount = trailerRows.length;
+
+  // Estimate utilization: avg (assignedPackageCount / PROXY_CAPACITY) across
+  // all trailers. PROXY_CAPACITY = 30 packages (§8 demo config).
+  const PROXY_CAPACITY = 30;
+  let totalUtilization = 0;
+  for (const row of trailerRows) {
+    const pkgIds = row.assigned_package_ids;
+    const pkgCount =
+      Array.isArray(pkgIds) ? pkgIds.length
+      : typeof pkgIds === "string" ? (JSON.parse(pkgIds) as unknown[]).length
+      : 0;
+    totalUtilization += Math.min(1, pkgCount / PROXY_CAPACITY);
+  }
+  const utilizationFraction = trailerCount > 0 ? totalUtilization / trailerCount : 0;
+
+  // 2. Latest optimizer rehandle score (sum of per-trailer rehandle breakdown terms).
+  //    `breakdown.rehandle = rehandleScore * weights.rehandle` and
+  //    `DEFAULT_OBJECTIVE_WEIGHTS.rehandle === 1`, so this equals raw rehandleScore.
+  const latestResult = optimizer.latestResult();
+  let optimizerRehandleScore = 0;
+  if (latestResult !== null) {
+    for (const rec of latestResult.recommendations) {
+      optimizerRehandleScore += rec.breakdown.rehandle;
+    }
+  }
+
+  // 3. Exception projections (Phase-3 SNS-04/05).
+  // ApiDb = Kysely<Database & ProjectionDb>; the projection reads only need
+  // Kysely<ProjectionDb> — we cast through `unknown` (Database ⊃ ProjectionDb).
+  type ProjectionHandle = Parameters<typeof readOpenExceptions>[0];
+  const projDb = db as unknown as ProjectionHandle;
+  const [openExceptions, exceptionKpi] = await Promise.all([
+    readOpenExceptions(projDb),
+    readExceptionKpi(projDb),
+  ]);
+
+  // 4. Compute the KPI snapshot (pure, deterministic).
   const base = computeKpis({
-    optimizerRehandleScore: 0,
-    optimizerUtilizationScore: 0,
-    utilizationFraction: 0,
-    trailerCount: 0,
-    onTimeDepartureCount: 0,
-    onTimeArrivalCount: 0,
-    totalDepartureCount: 0,
+    optimizerRehandleScore,
+    optimizerUtilizationScore: 0, // not surfaced; utilization from breakdown proxy
+    utilizationFraction,
+    trailerCount,
+    onTimeDepartureCount: 0, // stub: requires event-log scan (tracked in SUMMARY)
+    onTimeArrivalCount: 0,   // stub: requires event-log scan (tracked in SUMMARY)
+    totalDepartureCount: 0,  // stub: 0 → onTimeDeparture defaults to 1.0 in computeKpis
     totalArrivalCount: 0,
-    openExceptions: [],
-    exceptionKpi: { totalExceptions: 0, lowConfidenceExceptions: 0, falsePositiveRate: 0 },
+    openExceptions,
+    exceptionKpi,
   });
 
-  // Build the baseline sub-object: same zero-state (no sim run yet).
   const baselineKpis = { ...base };
-
   return { ...base, baseline: baselineKpis };
 }
 
@@ -64,15 +118,21 @@ function defaultKpiSnapshot(): KpiSnapshot {
 
 /**
  * Register `GET /kpis` and `GET /kpis/comparison` on `app`.
- * `db` is the composition-root handle (future: used for live projection reads).
+ *
+ * `db` is the composition-root handle; `optimizer` supplies the latest
+ * rolling-epoch result for rehandle score extraction (Plan 05-05 live wiring).
  */
-export function registerKpiRoutes(app: FastifyInstance, _db: ApiDb): void {
+export function registerKpiRoutes(
+  app: FastifyInstance,
+  db: ApiDb,
+  optimizer: RollingOptimizerService,
+): void {
   // --- GET /kpis — operational KPI snapshot --------------------------------
   // Returns the live KpiSnapshot (incl. baseline sub-object). Shape matches the
   // ws envelope KpiSnapshot (Plan 05-01), so the dashboard reads one shape from
   // both REST and ws (single source of truth for the KPI DTO contract).
-  app.get("/kpis", (): KpiSnapshot => {
-    return defaultKpiSnapshot();
+  app.get("/kpis", async (): Promise<KpiSnapshot> => {
+    return readLiveKpiSnapshot(db, optimizer);
   });
 
   // --- GET /kpis/comparison — money slide ----------------------------------

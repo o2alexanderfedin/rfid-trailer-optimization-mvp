@@ -30,7 +30,6 @@ import type { Kysely } from "kysely";
 import type { ApiDb } from "../routes/queries.js";
 import { PRODUCTION_DETECTION_CONFIG } from "../detection-config.js";
 import type { Broadcast } from "../ws/snapshots.js";
-import type { RollingLoop } from "../optimizer/live-loop.js";
 
 /**
  * The demo sim driver: consumes `@mm/simulation` to populate the event store +

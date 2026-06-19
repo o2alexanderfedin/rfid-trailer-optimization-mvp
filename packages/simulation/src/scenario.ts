@@ -20,7 +20,7 @@
  * All entropy comes from the injected `rng`.
  */
 
-import type { DomainEvent, PackageCreated, TrailerDocked } from "@mm/domain";
+import type { PackageCreated, TrailerDocked } from "@mm/domain";
 import type { Rng } from "./rng.js";
 import type { SimulatedEvent } from "./engine.js";
 import { USA_HUBS } from "./network/hubs.js";

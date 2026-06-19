@@ -8,8 +8,13 @@ import { registerPlanRoutes } from "./routes/plan.js";
 import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
+import { registerScenarioRoutes } from "./routes/scenario.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
+import { RollingLoop } from "./optimizer/live-loop.js";
+import { buildTwinSnapshot } from "./optimizer/twin-snapshot.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
+import { SimController } from "./sim/sim-controller.js";
+import type { SnapshotDb } from "./optimizer/twin-snapshot.js";
 
 /**
  * The composition root: builds the full Fastify query API (FND-05/06/07/08) plus
@@ -17,6 +22,11 @@ import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
  * store + projection tables. Kept a factory (no global state) so integration
  * tests `app.inject()` / connect a ws client against a Testcontainer, and the
  * runnable entrypoint (`main.ts`) passes a live connection.
+ *
+ * SIM-04 additions (Plan 05-05):
+ *  - `RollingLoop` is built and wired so the live optimizer runs per tick.
+ *  - `SimController` is built and wired to `POST /scenario`.
+ *  - Both are returned in `BuiltServer` for the sim driver (`main.ts`).
  *
  * This SUPERSEDES the Plan 01 skeleton server: `GET /hubs` is preserved (now
  * served from the projected `hubs` table), and the FND query + ws surfaces are
@@ -29,6 +39,16 @@ export interface ServerDeps {
   readonly db: ApiDb;
   /** Toggle the realtime ws channel (default true). */
   readonly enableWs?: boolean;
+  /**
+   * SIM-04: how many ticks to drive during a scenario re-opt (default 5).
+   * A short window triggers one optimizer epoch and returns recommendations.
+   */
+  readonly scenarioReoptTicks?: number;
+  /**
+   * SIM-04: the base seed to use for scenario re-opt runs (default 4242).
+   * Must match the seed used by the initial `driveSimulation` call in `main.ts`.
+   */
+  readonly simSeed?: number;
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -38,6 +58,17 @@ export interface BuiltServer {
   readonly broadcast: Broadcast | undefined;
   /** The rolling optimizer shell (OPT-04/05/06) — the only stateful writer. */
   readonly optimizer: RollingOptimizerService;
+  /**
+   * SIM-04: The live rolling-optimizer loop (wraps the optimizer service + snapshot).
+   * The sim driver calls `loop.tick(...)` per tick. Exposed for `main.ts` wiring.
+   */
+  readonly loop: RollingLoop;
+  /**
+   * SIM-04: The scenario controller (injected into `POST /scenario`).
+   * The sim driver gets the loop from the server so that `driveSimulation`
+   * can call `loop.tick()` per tick and produce live recommendations.
+   */
+  readonly simController: SimController;
 }
 
 /** Build the Fastify server (REST query routes + optional ws snapshots). */
@@ -58,9 +89,6 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   registerPlanRoutes(app);
   // Plan 05-04: GET /trailers/:id/plan (VIZ-05) + GET /trailers/:id/history (UI-02).
   registerPlanDetailRoutes(app, deps.db);
-  // Plan 05-03: GET /kpis + GET /kpis/comparison (UI-03/UI-04 backend).
-  registerKpiRoutes(app, deps.db);
-
   // The rolling optimizer shell (OPT-04/05/06) + its read-only recommendations
   // endpoint. The service owns the ONE write path (PlanAccepted); the route reads.
   // The optimizer only appends to the event store, so it views the handle as the
@@ -70,12 +98,40 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   });
   registerOptimizerRoutes(app, optimizer);
 
+  // Plan 05-03 / Plan 05-05 (live wiring): GET /kpis + GET /kpis/comparison.
+  // Pass `optimizer` so the KPI endpoint can read the latest rolling-epoch result
+  // for the rehandle score (SIM-04 critical live wiring).
+  registerKpiRoutes(app, deps.db, optimizer);
+
+  // SIM-04 / OPT-02: The live rolling-optimizer loop (Plan 05-02).
+  // `buildSnapshot` reads the current live projections to assemble the TwinSnapshot.
+  // The sim driver calls `loop.tick(...)` per tick so the optimizer runs live.
+  const snapshotDb = deps.db as unknown as SnapshotDb;
+  const loop = new RollingLoop({
+    service: optimizer,
+    buildSnapshot: () => buildTwinSnapshot(snapshotDb),
+    freezeWindowMin: 15,
+  });
+
   let broadcast: Broadcast | undefined;
   if (deps.enableWs ?? true) {
     await app.register(fastifyWebsocket);
     broadcast = attachSnapshotSocket(app, deps.db);
   }
 
+  // SIM-04: The scenario controller — wires `POST /scenario` to a short
+  // scenario re-opt run using the live loop + broadcast.
+  const simSeed = deps.simSeed ?? 4242;
+  const reoptTicks = deps.scenarioReoptTicks ?? 5;
+  const simController = new SimController({
+    db: deps.db,
+    seed: simSeed,
+    reoptTicks,
+    loop,
+    broadcast,
+  });
+  registerScenarioRoutes(app, simController);
+
   await app.ready();
-  return { app, broadcast, optimizer };
+  return { app, broadcast, optimizer, loop, simController };
 }

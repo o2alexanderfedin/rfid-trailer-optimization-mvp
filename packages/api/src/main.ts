@@ -11,23 +11,30 @@ import type { ApiDb } from "./routes/queries.js";
  * store + projections), drives a short deterministic demo simulation to populate
  * the read models, and serves the query API + ws snapshots. A background ticker
  * keeps pushing snapshots so a freshly-connected map client always animates.
+ *
+ * SIM-04 addition: the rolling optimizer loop is wired into the sim driver so
+ * each tick triggers a scoped re-optimization. `POST /scenario` injects knobs
+ * into a fresh re-opt window, making the optimizer's response visible live.
  */
 async function main(): Promise<void> {
+  const seed = Number(process.env.SIM_SEED ?? 4242);
   const db = createDb() as unknown as ApiDb;
   await migrate(db as unknown as Parameters<typeof migrate>[0]);
   await sql.raw(PROJECTIONS_SCHEMA_SQL).execute(db);
 
-  const { app, broadcast } = await buildServer({ db });
+  const { app, broadcast, loop } = await buildServer({ db, simSeed: seed });
   app.addHook("onClose", async () => {
     await db.destroy();
   });
 
-  const seed = Number(process.env.SIM_SEED ?? 4242);
   const durationTicks = Number(process.env.SIM_TICKS ?? 120);
   // Enable seeded RFID emission so the WHOLE Phase-3 pipeline runs on the live
   // demo (reads -> fused zone estimates -> per-tick detector -> exception feed).
   // Without `rfid` the driver gates detection off and the feature is invisible.
-  await driveSimulation({ db, seed, durationTicks, rfid: DEMO_RFID_CONFIG, broadcast });
+  //
+  // SIM-04: `loop` is the live rolling-optimizer (RollingLoop) — it fires per
+  // tick so the optimizer runs on the live path and recommendations are visible.
+  await driveSimulation({ db, seed, durationTicks, rfid: DEMO_RFID_CONFIG, broadcast, loop });
 
   const port = Number(process.env.PORT ?? 3001);
   await app.listen({ port, host: "0.0.0.0" });
