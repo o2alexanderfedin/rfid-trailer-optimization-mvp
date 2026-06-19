@@ -50,6 +50,17 @@ export {
   utilizationScore,
 } from "./scoring.js";
 
+// --- Loading instructions by zone (LOAD-08) ----------------------------------
+export {
+  type InstructionLine,
+  type LoadingInstructions,
+  instructions,
+  type ZoneInstruction,
+} from "./instructions.js";
+
+// --- Explainability: per-placement + plan-level rationale (LOAD-10) -----------
+export { planExplanation, placementRationale } from "./rationale.js";
+
 // --- Shared type contracts (P2 feasibility-vs-score separation baked in) ------
 export type {
   FeasibilityResult,
