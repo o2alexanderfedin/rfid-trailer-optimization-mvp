@@ -62,3 +62,42 @@ the Phase-1 spine or prior plans (the `@mm/api` seed still imports `MEMPHIS` /
 - SIM-01 ✅ — ~10 real US metro hubs + great-circle hub-and-spoke routes.
 - SIM-02 ✅ — seeded, deterministic tick/event-queue engine, virtual clock,
   byte-identical replay, drives projections.
+
+## Integration (merged into feature/phase-1-operational-data-foundation-live-map-spike)
+
+Winner: rival #1, branch `wt/p1-05-r1`, source sha
+`6a43a8b189231a9725f96a11cb682a5f058ef390`. Merged via `git merge --no-ff`
+(no conflicts — the winner was a linear addition of `packages/simulation` plus
+this summary on top of plan-04 HEAD `ef1ecfe`).
+
+Gates re-verified post-merge in the MAIN repo against real Postgres via
+Testcontainers on OrbStack (docker available):
+
+| Gate              | Result |
+|-------------------|--------|
+| `pnpm install`    | OK (lockfile up to date; only pre-existing cyclic-workspace WARN) |
+| `pnpm -r build`   | OK (6 buildable packages incl. `@mm/simulation`) |
+| `pnpm lint`       | OK (eslint clean) |
+| `pnpm test:all`   | OK — 15 files / **101 tests** passed (incl. real Postgres integration) |
+
+## Carried risks (from cross-rival judging — revisit before later phases)
+
+1. **End-to-end DB-projection proof is on a SHORT stream only.** R1's integration
+   test deliberately proves drives-projections on a short stream
+   (`durationTicks=31`) because the pre-existing `@mm/projections` `applyInline`
+   is O(events × table). The large byte-identical stream is proven only by the
+   pure unit test, not end-to-end through the DB. (R2 shared the same constraint
+   at `TICKS=36`.) When projection volume grows, add an incremental-read path
+   before asserting large streams end-to-end through Postgres.
+2. **Int-test correctness assertions are looser (non-emptiness / membership).**
+   R1's integration oracle checks non-emptiness and membership rather than exact
+   projected state per aggregate (R2 asserted exact projected state, giving
+   marginally stronger end-to-end proof). A subtle projection mismatch is less
+   likely to be caught by R1's int-test suite — tighten to exact-state assertions
+   if downstream consumers depend on precise projected values.
+3. **Skeleton hub swap MIA → IND.** R1 swapped the skeleton's MIA for IND; both
+   are valid continental-USA hubs. No functional risk; noted for traceability if
+   any later phase hard-codes the original hub set.
+4. **Pre-existing api ↔ event-store cyclic-workspace-dependency pnpm WARN.**
+   Present in both rivals and unrelated to this plan. Cosmetic at install time;
+   worth resolving when the workspace dep graph is next revisited.
