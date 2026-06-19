@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
+import { registerPlanRoutes } from "./routes/plan.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
 
 /**
@@ -42,6 +43,8 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
 
   app.get("/health", () => ({ status: "ok" }));
   registerQueryRoutes(app, deps.db);
+  // POST /plan — the pure load-planning pipeline (LOAD-08). Read-only, DB-free.
+  registerPlanRoutes(app);
 
   let broadcast: Broadcast | undefined;
   if (deps.enableWs ?? true) {

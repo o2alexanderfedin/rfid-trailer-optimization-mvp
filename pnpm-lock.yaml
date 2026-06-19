@@ -50,12 +50,18 @@ importers:
       '@fastify/websocket':
         specifier: 11.2.0
         version: 11.2.0
+      '@mm/aggregation':
+        specifier: workspace:*
+        version: link:../aggregation
       '@mm/domain':
         specifier: workspace:*
         version: link:../domain
       '@mm/event-store':
         specifier: workspace:*
         version: link:../event-store
+      '@mm/load-planner':
+        specifier: workspace:*
+        version: link:../load-planner
       '@mm/projections':
         specifier: workspace:*
         version: link:../projections

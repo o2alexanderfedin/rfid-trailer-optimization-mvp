@@ -18,8 +18,10 @@
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@mm/aggregation": "workspace:*",
     "@mm/domain": "workspace:*",
     "@mm/event-store": "workspace:*",
+    "@mm/load-planner": "workspace:*",
     "@mm/projections": "workspace:*",
     "@mm/simulation": "workspace:*",
     "@fastify/websocket": "11.2.0",
