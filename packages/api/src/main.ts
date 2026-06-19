@@ -3,6 +3,7 @@ import { PROJECTIONS_SCHEMA_SQL } from "@mm/projections";
 import { sql } from "kysely";
 import { buildServer } from "./server.js";
 import { driveSimulation } from "./sim/driver.js";
+import { DEMO_RFID_CONFIG } from "./detection-config.js";
 import type { ApiDb } from "./routes/queries.js";
 
 /**
@@ -23,7 +24,10 @@ async function main(): Promise<void> {
 
   const seed = Number(process.env.SIM_SEED ?? 4242);
   const durationTicks = Number(process.env.SIM_TICKS ?? 120);
-  await driveSimulation({ db, seed, durationTicks, broadcast });
+  // Enable seeded RFID emission so the WHOLE Phase-3 pipeline runs on the live
+  // demo (reads -> fused zone estimates -> per-tick detector -> exception feed).
+  // Without `rfid` the driver gates detection off and the feature is invisible.
+  await driveSimulation({ db, seed, durationTicks, rfid: DEMO_RFID_CONFIG, broadcast });
 
   const port = Number(process.env.PORT ?? 3001);
   await app.listen({ port, host: "0.0.0.0" });

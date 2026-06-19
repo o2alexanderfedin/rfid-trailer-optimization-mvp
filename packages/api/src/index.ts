@@ -17,7 +17,7 @@ export type {
   ExceptionKpiDto,
   ZoneEstimateDto,
 } from "./routes/exceptions.js";
-export { PRODUCTION_DETECTION_CONFIG } from "./detection-config.js";
+export { PRODUCTION_DETECTION_CONFIG, DEMO_RFID_CONFIG } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";

@@ -1,5 +1,6 @@
 import type { Severity } from "@mm/domain";
 import type { DetectionConfig, SlaImpact } from "@mm/projections";
+import type { RfidSimConfig } from "@mm/simulation";
 
 /**
  * The ONE production detection calibration band (resolves the Plan-06 carried
@@ -63,4 +64,34 @@ export const PRODUCTION_DETECTION_CONFIG: DetectionConfig = {
   confidenceThreshold: 0.34,
   highConfidenceThreshold: HIGH_CONFIDENCE_THRESHOLD,
   severityFor: calibratedSeverityFor,
+};
+
+/**
+ * The RFID emission profile the LIVE demo entrypoint (`main.ts`) drives. Without
+ * it the runnable app passes NO `rfid` option, the entire Phase-3 pipeline is
+ * gated off (`driver.ts`: detection runs iff `rfid !== undefined`), and the
+ * demo produces zero zone estimates and zero exceptions — the feature goes dark.
+ *
+ * ## Calibration (seed 4242, 120 ticks, {@link PRODUCTION_DETECTION_CONFIG})
+ * `wrongZoneRate` is the corruption knob (per-read P(read tagged to the wrong
+ * zone/trailer token)). The sim default 0.03 is too low for a reliable demo. An
+ * empirical sweep over the EXACT live path (seed 4242 / 120 ticks / production
+ * detection) produced the wrong-trailer exception counts:
+ *
+ *   wrongZoneRate  0.08 → 5    0.10 → 9    0.12 → 8    0.15 → 15    0.20 → 17
+ *
+ * 0.10 lands at 9 — squarely in the demo-credible 3–12 band, clearly visible yet
+ * realistic (10% wrong-zone reads, NOT cranked to the 0.5 of the forced unit
+ * tests). `missRate` 0.05 keeps reads dense enough to corroborate across the
+ * dwell window; `antennaBurst` 6 exercises the fusion windowing. The other knobs
+ * inherit the sim defaults (RSSI bases/noise, 0.85 confidence cap).
+ *
+ * NOTE: `missed-unload` stays 0 on the live path (deferred to Phase 5 — needs
+ * over-carry + return-leg `TrailerDeparted(fromHubId=spoke)` trip modeling); the
+ * wrong-trailer feed is the visible Phase-3 centerpiece.
+ */
+export const DEMO_RFID_CONFIG: Partial<RfidSimConfig> = {
+  wrongZoneRate: 0.1,
+  missRate: 0.05,
+  antennaBurst: 6,
 };
