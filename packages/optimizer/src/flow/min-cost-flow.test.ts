@@ -142,6 +142,48 @@ describe("minCostFlow — Successive Shortest Path solver (OPT-02)", () => {
     );
   });
 
+  it("FIX 2: coalesces same-sign duplicate-nodeId supplies (sums amounts) ⇒ same as one entry", () => {
+    // Two Supply entries for the SAME source node "S" (1 + 2) must behave exactly
+    // like a single coalesced supply of 3 — the contract is one supply per node
+    // with Σ amount == 0. Likewise the sink "T" is split (-1 + -2). The coalesced
+    // single-entry form is the canonical reference; the duplicate form must match.
+    const split = minCostFlow(DIAMOND, [
+      { nodeId: "S", amount: 1 },
+      { nodeId: "S", amount: 2 },
+      { nodeId: "T", amount: -1 },
+      { nodeId: "T", amount: -2 },
+    ]);
+
+    expect(split.feasible).toBe(true);
+    expect(split.totalCost).toBe(9);
+    expect([...split.flowByEdgeId.entries()].sort()).toEqual(
+      [...minCostFlow(DIAMOND, DIAMOND_SUPPLIES).flowByEdgeId.entries()].sort(),
+    );
+  });
+
+  it("FIX 2: coalesces MIXED-sign duplicate-nodeId supplies (net amount) ⇒ same as one entry", () => {
+    // The SAME node "S" appears as +3 and -1 ⇒ a NET supply of +2. Without
+    // coalescing, the constructor wires BOTH a super-source→S(cap 3) arc AND an
+    // S→super-sink(cap 1) arc, creating a phantom S→T short-circuit that inflates
+    // totalSupply to 3 and routes a spurious circulating unit. Coalescing first
+    // collapses it to a single +2 supply — identical to writing +2 directly.
+    const coalesced = minCostFlow(DIAMOND, [
+      { nodeId: "S", amount: 2 },
+      { nodeId: "T", amount: -2 },
+    ]);
+    const mixed = minCostFlow(DIAMOND, [
+      { nodeId: "S", amount: 3 },
+      { nodeId: "S", amount: -1 },
+      { nodeId: "T", amount: -2 },
+    ]);
+
+    expect(mixed.feasible).toBe(coalesced.feasible);
+    expect(mixed.totalCost).toBe(coalesced.totalCost);
+    expect([...mixed.flowByEdgeId.entries()].sort()).toEqual(
+      [...coalesced.flowByEdgeId.entries()].sort(),
+    );
+  });
+
   it("splits flow across multiple sources and sinks (multi-commodity-free)", () => {
     // Two sources s1,s2 each +1; two sinks t1,t2 each -1; direct edges only.
     const g = graphOf([
