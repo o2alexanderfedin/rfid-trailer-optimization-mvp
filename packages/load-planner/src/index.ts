@@ -61,6 +61,9 @@ export {
 // --- Explainability: per-placement + plan-level rationale (LOAD-10) -----------
 export { planExplanation, placementRationale } from "./rationale.js";
 
+// --- Naive FIFO baseline planner (LOAD-09, shared scoring plumbing / P8) ------
+export { baselinePlan } from "./baseline.js";
+
 // --- Shared type contracts (P2 feasibility-vs-score separation baked in) ------
 export type {
   FeasibilityResult,
