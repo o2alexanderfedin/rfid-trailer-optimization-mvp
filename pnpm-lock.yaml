@@ -118,6 +118,25 @@ importers:
       '@mm/domain':
         specifier: workspace:*
         version: link:../domain
+    devDependencies:
+      '@mm/event-store':
+        specifier: workspace:*
+        version: link:../event-store
+      '@mm/projections':
+        specifier: workspace:*
+        version: link:../projections
+      '@testcontainers/postgresql':
+        specifier: 12.0.3
+        version: 12.0.3
+      '@types/pg':
+        specifier: 8.20.0
+        version: 8.20.0
+      kysely:
+        specifier: 0.29.2
+        version: 0.29.2
+      pg:
+        specifier: 8.22.0
+        version: 8.22.0
 
   packages/web:
     dependencies:
