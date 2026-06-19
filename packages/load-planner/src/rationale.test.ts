@@ -109,6 +109,26 @@ describe("placementRationale — plain-English per placement (LOAD-10)", () => {
     expect(text.toLowerCase()).toMatch(/min|rehandle/);
   });
 
+  it("L6: the zone label tracks the block's ACTUAL slice, not a drifted placement.depth", () => {
+    // The block LB-H3 physically sits in the DEEPEST (nose) slice of a 3-slice
+    // trailer. We hand the rationale a Placement whose `depth` is WRONG (0 = rear)
+    // to simulate caller-depth drift. The label must follow the physical slice
+    // (nose), never the stale placement depth (rear).
+    const route = linearRoute(3);
+    const blocks = [block("LB-H1", "H1"), block("LB-H2", "H2"), block("LB-H3", "H3")];
+    const plan: LoadPlan = {
+      trailerId: "TR",
+      slices: [slice(0, ["LB-H1"], 1), slice(1, ["LB-H2"], 1), slice(2, ["LB-H3"], 1)],
+      placements: [],
+    };
+    // Drifted depth: claims rear (0) though LB-H3 is at the nose slice (depth 2).
+    const drifted: Placement = { loadBlockId: "LB-H3", depth: 0, unloadOrder: 2 };
+    const text = placementRationale(drifted, plan, blocks, route, config);
+    expect(text).toContain("LB-H3");
+    expect(text.toLowerCase()).toContain("nose"); // ACTUAL slice zone
+    expect(text.toLowerCase()).not.toContain("rear"); // NOT the drifted depth
+  });
+
   it("returns a NON-EMPTY rationale for every placement of a plan", () => {
     const route = linearRoute(2);
     const blocks = [block("LB-X", "H2", 3), block("LB-T", "H1", 2)];

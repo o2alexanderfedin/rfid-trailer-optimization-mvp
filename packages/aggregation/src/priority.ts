@@ -9,10 +9,13 @@ import { type SlaClass, SLA_CLASS_WEIGHT } from "@mm/domain";
  *
  *   priority = SLA_CLASS_WEIGHT[slaClass] - deadlineFraction
  *
- * where `deadlineFraction ∈ [0, 1)` is a strictly-increasing bounded map of the
- * deadline. Because the SLA weights are integers spaced by ≥ 1 and the deadline
- * term is strictly < 1, a higher SLA weight ALWAYS outranks any deadline — SLA
- * dominance can never be bought out by a sooner deadline (the lexicographic
+ * where `deadlineFraction ∈ [0, 1)` is a strictly-increasing, LINEAR map of the
+ * deadline over a fixed horizon (`d / HORIZON`, capped just below 1). Linear (not
+ * the old asymptotic `d / (d + scale)`) so precision is uniform across the whole
+ * range — close far-future deadlines stay distinguishable instead of collapsing
+ * to a tie (L3). Because the SLA weights are integers spaced by ≥ 1 and the
+ * deadline term is strictly < 1, a higher SLA weight ALWAYS outranks any deadline
+ * — SLA dominance can never be bought out by a sooner deadline (the lexicographic
  * guarantee AGG-04 requires). Within an equal SLA class, a smaller (earlier)
  * deadline subtracts less ⇒ a higher priority.
  *
@@ -31,11 +34,22 @@ export interface PrioritizableBlock {
 }
 
 /**
- * Scale (ms) for the bounded deadline term. `d / (d + SCALE)` maps any
- * non-negative deadline into `[0, 1)` while staying strictly increasing in `d`,
- * so the term never reaches 1 and never crosses an integer SLA-weight boundary.
+ * The deadline horizon (ms since the fixed epoch) the bounded deadline term
+ * normalizes against — `Date.UTC(3000, 0, 1)`, comfortably beyond any realistic
+ * MVP deadline. A LINEAR map `d / HORIZON` (rather than the asymptotic
+ * `d / (d + scale)`) keeps the term's precision UNIFORM across the whole range:
+ * the old fold crowded large deadlines toward 1, so sub-millisecond differences
+ * at realistic far-future deadlines (~year 2040+) collapsed to a tie (L3). The
+ * linear map distinguishes deadlines down to ~0.01 ms anywhere in the horizon.
  */
-const DEADLINE_SCALE_MS = 1_000_000_000;
+const DEADLINE_HORIZON_MS = Date.UTC(3000, 0, 1);
+
+/**
+ * Keep the deadline term STRICTLY below 1 (so it can never reach an integer
+ * SLA-weight boundary): the largest representable double < 1. A deadline at the
+ * full horizon maps to this, never to exactly 1.
+ */
+const MAX_FRACTION = 1 - Number.EPSILON;
 
 /**
  * AGG-04 lexicographic priority as a single comparable number (higher = served
@@ -45,6 +59,9 @@ export function blockPriority(block: PrioritizableBlock): number {
   const slaWeight = SLA_CLASS_WEIGHT[block.slaClass];
   // Clamp to ≥ 0 defensively; deadlines are non-negative by the domain schema.
   const d = block.deadline > 0 ? block.deadline : 0;
-  const deadlineFraction = d / (d + DEADLINE_SCALE_MS); // ∈ [0, 1)
+  // Linear normalization into [0, 1): uniform precision, so two close deadlines
+  // stay distinguishable. Deadlines past the horizon clamp to MAX_FRACTION
+  // (documented edge — they all rank equal-latest, never crossing the SLA tier).
+  const deadlineFraction = Math.min(d / DEADLINE_HORIZON_MS, 1) * MAX_FRACTION;
   return slaWeight - deadlineFraction;
 }

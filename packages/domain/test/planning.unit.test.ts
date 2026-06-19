@@ -258,4 +258,26 @@ describe("PlannerConfig + DEFAULT_PLANNER_CONFIG (spec §7/§12 defaults)", () =
       plannerConfigSchema.parse({ ...DEFAULT_PLANNER_CONFIG, volCost: -1 }),
     ).toThrow();
   });
+
+  it("rejects an INVERTED utilization band (utilLow > utilHigh) — L7 cross-field", () => {
+    // Each edge is individually a valid (0,1] fraction, but the BAND is inverted.
+    // A per-field schema accepts this; the cross-field refinement must reject it.
+    expect(() =>
+      plannerConfigSchema.parse({
+        ...DEFAULT_PLANNER_CONFIG,
+        utilLow: 0.9,
+        utilHigh: 0.75,
+      }),
+    ).toThrow();
+  });
+
+  it("accepts an equal band edge (utilLow === utilHigh) — boundary is inclusive", () => {
+    expect(() =>
+      plannerConfigSchema.parse({
+        ...DEFAULT_PLANNER_CONFIG,
+        utilLow: 0.8,
+        utilHigh: 0.8,
+      }),
+    ).not.toThrow();
+  });
 });

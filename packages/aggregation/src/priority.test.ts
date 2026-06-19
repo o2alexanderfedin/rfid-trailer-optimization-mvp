@@ -58,4 +58,21 @@ describe("blockPriority", () => {
       blockPriority(block("priority", 42)),
     );
   });
+
+  it("L3: orders two same-SLA blocks with realistic FAR-FUTURE deadlines 1ms apart", () => {
+    // ms-since-epoch deadlines for ~year 2060. The old asymptotic fold
+    // `d/(d+1e9)` crowds large deadlines near 1, so sub-2ms gaps TIED. The fold
+    // must distinguish even a 1 ms difference across the realistic horizon.
+    const d1 = Date.UTC(2060, 5, 1); // ~2.85e12 ms
+    expect(blockPriority(block("standard", d1))).toBeGreaterThan(
+      blockPriority(block("standard", d1 + 1)),
+    );
+  });
+
+  it("L3: SLA dominance still holds at far-future deadlines (no buy-out)", () => {
+    const far = Date.UTC(2999, 0, 1);
+    expect(blockPriority(block("express", far))).toBeGreaterThan(
+      blockPriority(block("economy", 0)),
+    );
+  });
 });

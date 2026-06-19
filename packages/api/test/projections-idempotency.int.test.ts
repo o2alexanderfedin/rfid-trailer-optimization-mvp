@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DomainEvent } from "@mm/domain";
 import { appendToStream, readAll } from "@mm/event-store";
-import { applyInline, projectionView, readOperationalTwin } from "../src/index.js";
+import { applyInline, projectionView, readOperationalTwin } from "@mm/projections";
 import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js";
 
 /**
@@ -12,6 +12,9 @@ import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js"
  * `projection_checkpoints.last_seq` gates the skip (the event's global_seq is
  * at/below the stored last_seq). This proves the fold can never double-count on
  * restart/replay/at-least-once delivery.
+ *
+ * Hosted in `@mm/api` (depends on event-store + projections) so the workspace
+ * DAG stays acyclic — projections must not dev-depend on event-store.
  */
 
 const T0 = Date.parse("2026-03-01T00:00:00.000Z");
