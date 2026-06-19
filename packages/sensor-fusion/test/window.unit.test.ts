@@ -58,6 +58,37 @@ describe("windowObservations", () => {
     expect(out).toHaveLength(4);
   });
 
+  it("does NOT collide id-tuples that share a naive delimiter-less concatenation", () => {
+    // Under the old `${tagId}${readerId}${dwellWindowId}` (no delimiter), the
+    // tuple (tag="AB", reader="C", dwell="D") and (tag="A", reader="BC", dwell="D")
+    // both flatten to "ABCD" and would be MERGED into one observation. The keying
+    // must keep them DISTINCT — proving the delimiter is load-bearing.
+    const reads: RfidRead[] = [
+      read({ tagId: "AB", readerId: "C", rssi: -55, dwellWindowId: "D" }),
+      read({ tagId: "A", readerId: "BC", rssi: -55, dwellWindowId: "D" }),
+    ];
+    const out = windowObservations(reads, cfg);
+    expect(out).toHaveLength(2);
+    // Each observation is its own single read, not a merged 2-read window.
+    expect(out.every((o) => o.readCount === 1)).toBe(true);
+    // And both original tuples survive distinctly.
+    const tuples = out.map((o) => `${o.tagId}|${o.readerId}|${o.dwellWindowId}`);
+    expect(new Set(tuples).size).toBe(2);
+    expect(tuples).toContain("AB|C|D");
+    expect(tuples).toContain("A|BC|D");
+  });
+
+  it("does NOT collide a tag/dwell shift that the delimiter-less concat would merge", () => {
+    // (reader="A", dwell="BC") vs (reader="AB", dwell="C") both flatten to the
+    // same tail "ABC" with a fixed tag — distinct groups under a real delimiter.
+    const reads: RfidRead[] = [
+      read({ tagId: "tag-X", readerId: "A", rssi: -55, dwellWindowId: "BC" }),
+      read({ tagId: "tag-X", readerId: "AB", rssi: -55, dwellWindowId: "C" }),
+    ];
+    const out = windowObservations(reads, cfg);
+    expect(out).toHaveLength(2);
+  });
+
   it("aggregates RSSI as the 90th-percentile, NOT the mean (multipath-drop-skewed sample)", () => {
     // A realistic dwell burst: a body of solid reads around -55 with a handful of
     // deep multipath DROPS to -95. The mean is dragged DOWN by the drops

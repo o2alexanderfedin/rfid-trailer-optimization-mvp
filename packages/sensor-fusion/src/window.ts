@@ -113,9 +113,15 @@ export function windowObservations(
   return observations;
 }
 
-/** Build the stable composite grouping key. */
+/**
+ * Build the stable composite grouping key. The three id parts are joined with the
+ * ASCII Unit Separator (U+001F) — a control char that cannot appear in any tag /
+ * reader / dwell id — so distinct tuples never collide via delimiter-less concat
+ * (e.g. tag "AB"+reader "C" vs tag "A"+reader "BC").
+ */
+const KEY_SEP = "";
 function groupKey(tagId: string, readerId: string, dwellWindowId: string): string {
-  return `${tagId}${readerId}${dwellWindowId}`;
+  return `${tagId}${KEY_SEP}${readerId}${KEY_SEP}${dwellWindowId}`;
 }
 
 /**
