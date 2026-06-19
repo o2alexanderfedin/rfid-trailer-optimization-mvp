@@ -52,6 +52,27 @@ export {
   hubInventoryReducer,
 } from "./reducers/hub-inventory.js";
 
+// --- SNS-02: tag -> package registry (inline, decision-critical) -------------
+export type { TagRegistryState } from "./reducers/tag-registry.js";
+export {
+  emptyTagRegistryState,
+  resolveTag,
+  tagRegistryReducer,
+} from "./reducers/tag-registry.js";
+
+// --- SNS-02/03: latest fused zone estimate per (packageId, trailerId) --------
+export type {
+  ResolveTag,
+  ZoneEstimateDeps,
+  ZoneEstimateState,
+} from "./reducers/zone-estimate.js";
+export {
+  DEFAULT_DWELL_WINDOW_MS,
+  emptyZoneEstimateState,
+  makeZoneEstimateReducer,
+  zoneEstimateKey,
+} from "./reducers/zone-estimate.js";
+
 // --- FND-08 (catch-up): package audit timeline -------------------------------
 export type {
   AuditTimelineEntry,
@@ -74,9 +95,14 @@ export type {
   PackageLocationTable,
   TrailerStateTable,
   HubInventoryTable,
+  TagRegistryTable,
+  TagRegistryRow,
+  ZoneEstimateTable,
+  ZoneEstimateRow,
   AuditTimelineTable,
   GeoRouteTable,
   GeoKeyframeTable,
+  OperationalProjectionName,
   CatchupProjectionName,
 } from "./schema.js";
 export {

@@ -88,7 +88,36 @@ export interface GeoInflightTripTable {
   to_hub_id: string;
 }
 
+/**
+ * SNS-02: the tag -> package registry row. Built from `PackageCreated.rfidTagId`;
+ * `tag_id` is the identity so re-applying a registration is an idempotent upsert.
+ */
+export interface TagRegistryTable {
+  tag_id: string;
+  package_id: string;
+}
+
+/**
+ * SNS-02/03: the latest fused zone estimate per `(package_id, trailer_id)`. The
+ * OBSERVED layer made queryable. `confidence` is the bounded posterior mass of
+ * `estimated_zone` (STRICTLY < 1.0 — anti-P5b, inherited from the fusion engine).
+ * `posterior` is the full JSONB distribution for auditing. `last_reliable_checkpoint`
+ * is the carried-forward known-good anchor (nullable). `(package_id, trailer_id)`
+ * is the identity so re-applying a read is an idempotent upsert.
+ */
+export interface ZoneEstimateTable {
+  package_id: string;
+  trailer_id: string;
+  estimated_zone: string;
+  confidence: number;
+  posterior: ColumnType<Readonly<Record<string, number>>, string, string>;
+  last_reliable_checkpoint: string | null;
+  last_observed_at: ColumnType<Date, string | Date, string | Date>;
+}
+
 export type PackageLocationRow = Selectable<PackageLocationTable>;
+export type TagRegistryRow = Selectable<TagRegistryTable>;
+export type ZoneEstimateRow = Selectable<ZoneEstimateTable>;
 export type TrailerStateRow = Selectable<TrailerStateTable>;
 export type HubInventoryRow = Selectable<HubInventoryTable>;
 export type AuditTimelineRow = Selectable<AuditTimelineTable>;
@@ -106,6 +135,8 @@ export interface ProjectionDatabase {
   package_location: PackageLocationTable;
   trailer_state: TrailerStateTable;
   hub_inventory: HubInventoryTable;
+  tag_registry: TagRegistryTable;
+  zone_estimate: ZoneEstimateTable;
   audit_timeline: AuditTimelineTable;
   geo_route: GeoRouteTable;
   geo_keyframe: GeoKeyframeTable;
@@ -122,6 +153,8 @@ export const OPERATIONAL_PROJECTIONS = [
   "package-location",
   "trailer-state",
   "hub-inventory",
+  "tag-registry",
+  "zone-estimate",
 ] as const;
 
 export type OperationalProjectionName = (typeof OPERATIONAL_PROJECTIONS)[number];
@@ -173,6 +206,29 @@ CREATE TABLE IF NOT EXISTS hub_inventory (
   inbound  JSONB NOT NULL DEFAULT '[]'::jsonb,
   outbound JSONB NOT NULL DEFAULT '[]'::jsonb,
   staged   JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+
+-- SNS-02: the tag -> package registry, folded from PackageCreated.rfidTagId.
+-- tag_id is the identity so re-applying a registration is an idempotent upsert;
+-- an unmapped tag simply has no row (resolves to undefined, never an exception).
+CREATE TABLE IF NOT EXISTS tag_registry (
+  tag_id     TEXT PRIMARY KEY,
+  package_id TEXT NOT NULL
+);
+
+-- SNS-02/03: the latest fused zone estimate per (package_id, trailer_id) — the
+-- OBSERVED layer made queryable. confidence is the bounded posterior mass of
+-- estimated_zone (STRICTLY < 1.0, anti-P5b). posterior is the full distribution
+-- (JSONB) for auditing; last_reliable_checkpoint is the carried-forward anchor.
+CREATE TABLE IF NOT EXISTS zone_estimate (
+  package_id               TEXT             NOT NULL,
+  trailer_id               TEXT             NOT NULL,
+  estimated_zone           TEXT             NOT NULL,
+  confidence               DOUBLE PRECISION NOT NULL,
+  posterior                JSONB            NOT NULL,
+  last_reliable_checkpoint TEXT,
+  last_observed_at         TIMESTAMPTZ      NOT NULL,
+  PRIMARY KEY (package_id, trailer_id)
 );
 
 -- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored

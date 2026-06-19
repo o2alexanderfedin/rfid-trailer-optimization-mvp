@@ -20,4 +20,11 @@ describe("PROJECTIONS_SCHEMA_SQL mirrors schema.sql exactly", () => {
     expect(PROJECTIONS_SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS trailer_state");
     expect(PROJECTIONS_SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS hub_inventory");
   });
+
+  it("declares the Phase-3 tag-registry + zone-estimate tables (SNS-02/03)", () => {
+    expect(PROJECTIONS_SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS tag_registry");
+    expect(PROJECTIONS_SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS zone_estimate");
+    // zone_estimate's identity is the (package_id, trailer_id) composite key.
+    expect(PROJECTIONS_SCHEMA_SQL).toContain("PRIMARY KEY (package_id, trailer_id)");
+  });
 });

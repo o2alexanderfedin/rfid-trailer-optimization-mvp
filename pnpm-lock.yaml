@@ -130,6 +130,9 @@ importers:
       '@mm/domain':
         specifier: workspace:*
         version: link:../domain
+      '@mm/sensor-fusion':
+        specifier: workspace:*
+        version: link:../sensor-fusion
       kysely:
         specifier: 0.29.2
         version: 0.29.2
