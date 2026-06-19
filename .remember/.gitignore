@@ -1,0 +1,5 @@
+# Track durable memory (*.md) only; ignore runtime churn
+tmp/
+logs/
+*.pid
+*.local
