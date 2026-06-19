@@ -15,7 +15,7 @@ export type {
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
-  PHASE1_SCHEMA_VERSION,
+  EVENT_SCHEMA_VERSION,
   domainEventSchema,
   hubRegisteredSchema,
   routeRegisteredSchema,

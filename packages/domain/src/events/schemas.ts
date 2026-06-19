@@ -21,9 +21,9 @@ import {
 
 const id = z.string().min(1);
 
-/** The current schema version for every Phase-1 event. */
-export const PHASE1_SCHEMA_VERSION = 1 as const;
-const schemaVersion = z.literal(PHASE1_SCHEMA_VERSION);
+/** The current schema version for every domain event (Phase-1 + Phase-4 plan events). */
+export const EVENT_SCHEMA_VERSION = 1 as const;
+const schemaVersion = z.literal(EVENT_SCHEMA_VERSION);
 
 /**
  * Build a `{ type, schemaVersion, payload }` event schema from a payload shape.

@@ -66,7 +66,7 @@ export {
   packageArrivedAtHubSchema,
   packageCreatedSchema,
   packageScannedSchema,
-  PHASE1_SCHEMA_VERSION,
+  EVENT_SCHEMA_VERSION,
   planAcceptedSchema,
   planGeneratedSchema,
   routeRegisteredSchema,
