@@ -125,6 +125,19 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
+  packages/optimizer:
+    dependencies:
+      '@mm/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@mm/load-planner':
+        specifier: workspace:*
+        version: link:../load-planner
+    devDependencies:
+      glpk.js:
+        specifier: 5.0.0
+        version: 5.0.0
+
   packages/projections:
     dependencies:
       '@mm/domain':
@@ -1580,6 +1593,10 @@ packages:
   globals@14.0.0:
     resolution: {integrity: sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==}
     engines: {node: '>=18'}
+
+  glpk.js@5.0.0:
+    resolution: {integrity: sha512-ni6nVv/EZVLs4dbN13Vy/H9pDTCjhB9oTlJ7tYi3e7zT6GCunUZJ0DuwCaJhmNc25sQUm6Ra18VaaMY8/fMWWw==}
+    engines: {node: '>=20'}
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
@@ -3817,6 +3834,10 @@ snapshots:
       path-scurry: 1.11.1
 
   globals@14.0.0: {}
+
+  glpk.js@5.0.0:
+    dependencies:
+      pako: 2.1.0
 
   graceful-fs@4.2.11: {}
 
