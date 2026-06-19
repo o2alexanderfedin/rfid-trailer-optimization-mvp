@@ -1,0 +1,27 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, sans-serif;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app__header {
+  padding: 0.5rem 1rem;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.app__map {
+  flex: 1 1 auto;
+  min-height: 0;
+}
