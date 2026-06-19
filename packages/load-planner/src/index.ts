@@ -38,6 +38,9 @@ export { buildUnloadOrderMap } from "./unload-order.js";
 // --- Greedy route-aware planner (LOAD-03 / LOAD-05) --------------------------
 export { planLoad } from "./plan-load.js";
 
+// --- Independent feasibility validator (LOAD-04, anti-P1/anti-P2) ------------
+export { isFeasible, validatePlan } from "./validator.js";
+
 // --- Shared type contracts (P2 feasibility-vs-score separation baked in) ------
 export type {
   FeasibilityResult,
