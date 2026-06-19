@@ -59,6 +59,33 @@ CREATE TABLE IF NOT EXISTS zone_estimate (
   PRIMARY KEY (package_id, trailer_id)
 );
 
+-- SNS-04/05: the OPEN exceptions feed. One row per detected planned-vs-observed
+-- disagreement (wrong-trailer / missed-unload). exception_id is the stable
+-- identity so re-running detection is an idempotent upsert (no flood, T-03-16).
+-- severity + recommended_action make every exception auditable (T-03-18).
+CREATE TABLE IF NOT EXISTS exceptions (
+  exception_id      TEXT PRIMARY KEY,
+  kind              TEXT             NOT NULL,
+  package_id        TEXT             NOT NULL,
+  trailer_id        TEXT             NOT NULL,
+  hub_id            TEXT,
+  severity          TEXT             NOT NULL,
+  recommended_action TEXT            NOT NULL,
+  confidence        DOUBLE PRECISION NOT NULL,
+  occurred_at       TIMESTAMPTZ      NOT NULL
+);
+
+-- SNS-04/05: the singleton false-positive-rate KPI counters. total_exceptions is
+-- the distinct exceptions ever opened; low_confidence_exceptions is the subset
+-- below the secondary confidence band. FP-rate = low / total (a REAL queryable
+-- ratio, not a placeholder) — the demo metric proving the feed stays credible.
+CREATE TABLE IF NOT EXISTS exception_kpi (
+  id                        BOOLEAN PRIMARY KEY DEFAULT TRUE,
+  total_exceptions          BIGINT  NOT NULL DEFAULT 0,
+  low_confidence_exceptions BIGINT  NOT NULL DEFAULT 0,
+  CONSTRAINT exception_kpi_singleton CHECK (id)
+);
+
 -- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored
 -- event that names a package; global_seq is the identity AND the strict order.
 CREATE TABLE IF NOT EXISTS audit_timeline (

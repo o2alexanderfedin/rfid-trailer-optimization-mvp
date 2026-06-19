@@ -27,4 +27,11 @@ describe("PROJECTIONS_SCHEMA_SQL mirrors schema.sql exactly", () => {
     // zone_estimate's identity is the (package_id, trailer_id) composite key.
     expect(PROJECTIONS_SCHEMA_SQL).toContain("PRIMARY KEY (package_id, trailer_id)");
   });
+
+  it("declares the Phase-3 exceptions feed + false-positive KPI tables (SNS-04/05)", () => {
+    expect(PROJECTIONS_SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS exceptions");
+    expect(PROJECTIONS_SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS exception_kpi");
+    // The exceptions feed is keyed by the stable exception_id (idempotent upsert).
+    expect(PROJECTIONS_SCHEMA_SQL).toContain("exception_id      TEXT PRIMARY KEY");
+  });
 });

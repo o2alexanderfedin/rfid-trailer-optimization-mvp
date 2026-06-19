@@ -73,6 +73,21 @@ export {
   zoneEstimateKey,
 } from "./reducers/zone-estimate.js";
 
+// --- SNS-04/05: open exceptions feed + false-positive-rate KPI ---------------
+export type {
+  ExceptionKind,
+  ExceptionsState,
+  OpenException,
+} from "./reducers/exceptions.js";
+export {
+  emptyExceptionsState,
+  exceptionId,
+  exceptionsReducer,
+  falsePositiveRate,
+  FALSE_POSITIVE_SEVERITY,
+  openExceptions,
+} from "./reducers/exceptions.js";
+
 // --- FND-08 (catch-up): package audit timeline -------------------------------
 export type {
   AuditTimelineEntry,
@@ -99,6 +114,10 @@ export type {
   TagRegistryRow,
   ZoneEstimateTable,
   ZoneEstimateRow,
+  ExceptionsTable,
+  ExceptionsRow,
+  ExceptionKpiTable,
+  ExceptionKpiRow,
   AuditTimelineTable,
   GeoRouteTable,
   GeoKeyframeTable,
@@ -110,10 +129,43 @@ export {
   OPERATIONAL_PROJECTIONS,
   CATCHUP_PROJECTIONS,
 } from "./schema.js";
-export type { ReplayEvent, OperationalTwin, ProjectionDb } from "./runner/inline.js";
-export { applyInline, readOperationalTwin, projectionView } from "./runner/inline.js";
+export type {
+  ReplayEvent,
+  OperationalTwin,
+  ProjectionDb,
+  ExceptionKpiSnapshot,
+} from "./runner/inline.js";
+export {
+  applyInline,
+  readOperationalTwin,
+  projectionView,
+  readOpenExceptions,
+  readExceptionKpi,
+} from "./runner/inline.js";
 export type { ReadAllEvents } from "./runner/rebuild.js";
 export { rebuildProjections, serializeTwin } from "./runner/rebuild.js";
+
+// --- SNS-04/05: the detector (PLANNED vs OBSERVED ⇒ exception events) --------
+export type {
+  AppendExceptions,
+  DetectorReads,
+  ProjectionReadDeps,
+  RunDetectionOptions,
+} from "./detector.js";
+export { makeProjectionReads, planDetection, runDetection } from "./detector.js";
+
+// Re-export the (pure) detection config + types from @mm/sensor-fusion so the
+// API/sim composition root can configure detection WITHOUT taking a direct
+// dependency on @mm/sensor-fusion (it already depends on @mm/projections).
+export type {
+  DetectionConfig,
+  MissedUnloadCandidate,
+  PlannedAssignment,
+  SlaImpact,
+  WrongTrailerCandidate,
+  ZoneEstimate,
+} from "@mm/sensor-fusion";
+export { DEFAULT_DETECTION_CONFIG } from "@mm/sensor-fusion";
 
 // --- Catch-up runner (async poller + rebuild + read side) --------------------
 export type {

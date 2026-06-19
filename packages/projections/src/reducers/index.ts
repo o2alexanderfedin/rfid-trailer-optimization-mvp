@@ -42,3 +42,18 @@ export {
   makeZoneEstimateReducer,
   zoneEstimateKey,
 } from "./zone-estimate.js";
+
+// --- SNS-04/05: open exceptions feed + false-positive-rate KPI --------------
+export type {
+  ExceptionKind,
+  ExceptionsState,
+  OpenException,
+} from "./exceptions.js";
+export {
+  emptyExceptionsState,
+  exceptionId,
+  exceptionsReducer,
+  falsePositiveRate,
+  FALSE_POSITIVE_SEVERITY,
+  openExceptions,
+} from "./exceptions.js";

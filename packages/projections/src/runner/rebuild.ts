@@ -47,7 +47,7 @@ export async function rebuildProjections(
 ): Promise<void> {
   // 1. Drop derived state. CASCADE is unnecessary (no FKs into these tables);
   //    RESTART IDENTITY is moot (no identity columns) — kept simple (KISS).
-  await sql`TRUNCATE TABLE package_location, trailer_state, hub_inventory, tag_registry, zone_estimate`.execute(
+  await sql`TRUNCATE TABLE package_location, trailer_state, hub_inventory, tag_registry, zone_estimate, exceptions, exception_kpi`.execute(
     db,
   );
 
