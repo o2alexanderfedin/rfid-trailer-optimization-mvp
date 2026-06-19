@@ -7,6 +7,7 @@ import type {
   packageScannedSchema,
   rfidObservedSchema,
   routeRegisteredSchema,
+  severitySchema,
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
   trailerDockedSchema,
@@ -52,6 +53,12 @@ export type TrailerArrivedAtHub = z.infer<typeof trailerArrivedAtHubSchema>;
 export type TrailerDocked = z.infer<typeof trailerDockedSchema>;
 
 // --- Phase-3 events (RFID-assisted validation, SNS-01/04/05) ----------------
+/**
+ * Exception severity — the fixed, closed taxonomy (`info | warning | critical`)
+ * shared by both detection events, so the exception feed has a single, stable
+ * ranking vocabulary. Inferred from {@link severitySchema} (one source of truth).
+ */
+export type Severity = z.infer<typeof severitySchema>;
 /** A single RFID observation of a tag at a reader/antenna (SNS-01). OBSERVED layer. */
 export type RfidObserved = z.infer<typeof rfidObservedSchema>;
 /** A package observed in a trailer other than the planned one (SNS-04). */
