@@ -26,3 +26,7 @@ export type {
   RunSimulationOptions,
 } from "./engine.js";
 export { simulate, runSimulation } from "./engine.js";
+
+// --- SIM-03: seeded probabilistic RFID emission -----------------------------
+export type { RfidSimConfig, ReaderType, EmitRfidReadsArgs } from "./rfid.js";
+export { emitRfidReads, resolveRfidConfig, DEFAULT_RFID_CONFIG } from "./rfid.js";
