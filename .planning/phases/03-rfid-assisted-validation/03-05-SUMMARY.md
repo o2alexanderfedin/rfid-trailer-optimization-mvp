@@ -46,3 +46,15 @@ Both are idempotent (per-projection `last_seq` checkpoint, P5a), checkpointed, a
 - `pnpm -r build` — all packages Done.
 - `pnpm lint` — clean (no `any`; no `Date.now`/`Math.random` in new src).
 - `pnpm test:all` — 431/431 across 53 files (was 375 unit baseline; prior phases all still green).
+
+## Integration verdict (rival #1 selected)
+
+Merged into `feature/phase-3-rfid-assisted-validation` via `--no-ff` (merge commit `af8ed2a`, picking `5b3c597`). Post-merge gates re-verified GREEN in the main repo: `pnpm install` clean · `pnpm build` (turbo) 9/9 · `pnpm -r build` all 10 packages Done · `pnpm lint` clean · `pnpm test:all` 431/431 across 53 files. No merge-only breakage; no test weakening.
+
+## Carried risks (from judge)
+
+- **asDistribution deserializer is lenient.** R1's `asDistribution` silently defaults a missing posterior zone key to `0` rather than throwing, which could mask malformed JSONB on read (R2's `asPosterior` was stricter here). Practical risk is LOW: the persisted posterior is always written by the same fusion engine, so a malformed key cannot arise in normal operation. Flag for future hardening if external writers ever touch `zone_estimate.posterior`.
+- **Single-read dwell-window fold (identical to R2).** Both rivals fuse one `RfidObserved` per event via `windowObservations([read])` with a single-element array, so cross-event dwell-window collapse relies on the fusion cap (0.85) + entropy floor (2%) rather than literal multi-read window merging. Acceptable and identical between rivals, but a future plan will need true burst batching if the simulator begins emitting multi-read windows in a single event.
+- **Latent dwell-window configurability.** R1's deterministic `floor(occurredAtMs / dwellWindowMs)` dwell-window id is unused for cross-event collapse given the single-read fold, so the added `dwellWindowMs` / `readerTypes` configuration surface is latent (not yet exercised end-to-end). No correctness impact today; revisit when multi-read batching lands.
+
+Neither risk affects gate-passing or SNS-02 correctness as verified.
