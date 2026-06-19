@@ -103,11 +103,15 @@ export function trailerStateReducer(
       });
       return next;
     }
+    // No physical trailer-state change. Plan-lifecycle events (PlanGenerated/
+    // PlanAccepted, OPT-04) are optimizer concerns, so they no-op here.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
     case "PackageScanned":
     case "PackageArrivedAtHub":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);
