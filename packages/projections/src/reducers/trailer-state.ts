@@ -106,6 +106,8 @@ export function trailerStateReducer(
     // Phase-3 RFID/detection events are no-ops for trailer state — observed
     // evidence is projected separately (later Phase-3 plans), keeping the
     // scan-driven trailer read model independent of RFID fusion (anti-P6).
+    // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) are
+    // optimizer concerns with no physical trailer-state change, so they no-op.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -114,6 +116,8 @@ export function trailerStateReducer(
     case "RfidObserved":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);

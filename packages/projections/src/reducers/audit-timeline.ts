@@ -89,6 +89,8 @@ export function auditTimelineReducer(
     // Phase-3 RFID/detection events are no-ops for this read model — they are
     // surfaced by their own dedicated projections (later Phase-3 plans), keeping
     // observed evidence separate from the planned audit timeline (anti-P6).
+    // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) are
+    // optimizer concerns, not package ledger entries, so they no-op here too.
     case "HubRegistered":
     case "RouteRegistered":
     case "TrailerDeparted":
@@ -97,6 +99,8 @@ export function auditTimelineReducer(
     case "RfidObserved":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return null;
     default:
       return assertNeverAudit(event);

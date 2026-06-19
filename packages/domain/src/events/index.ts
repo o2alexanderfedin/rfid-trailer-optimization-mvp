@@ -14,10 +14,12 @@ export type {
   RfidObserved,
   WrongTrailerDetected,
   MissedUnloadDetected,
+  PlanGenerated,
+  PlanAccepted,
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
-  PHASE1_SCHEMA_VERSION,
+  EVENT_SCHEMA_VERSION,
   domainEventSchema,
   hubRegisteredSchema,
   routeRegisteredSchema,
@@ -31,4 +33,6 @@ export {
   rfidObservedSchema,
   wrongTrailerDetectedSchema,
   missedUnloadDetectedSchema,
+  planGeneratedSchema,
+  planAcceptedSchema,
 } from "./schemas.js";

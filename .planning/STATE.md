@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: ""
-last_updated: "2026-06-19 (Phase 3 finalized + merged)"
-last_activity: "2026-06-19 — Phase 3 adversarial review (12 findings, 1 HIGH blocker) → 5 fixes TDD'd (enable-RFID blocker incl. calibrated DEMO_RFID_CONFIG=9 wrong-trailer exceptions; groupKey delimiter; exceptionId escalation; 2 keystones mutation-pinned). Gate green (turbo 9/9, 463 tests). Merged feature/phase-3 → develop."
+last_updated: "2026-06-19 (Phase 4 finalized + merged)"
+last_activity: "2026-06-19 — Phase 4 adversarial review (0 blockers; optimizer matched 1153-instance glpk fuzz) → 4 fixes TDD'd (capacity-gate, supply-coalesce, EVENT_SCHEMA_VERSION rename, phantom-blocker). Merged feature/phase-4 → develop (additive event-union + reducer conflicts resolved; 4 cross-phase exhaustiveness breaks fixed). Gate green (turbo 10/10, 587 tests)."
 progress:
   total_phases: 5
-  completed_phases: 3
-  total_plans: 20
-  completed_plans: 20
-  percent: 60
+  completed_phases: 4
+  total_plans: 26
+  completed_plans: 26
+  percent: 80
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-18)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** Phase 4 — Rolling Optimizer (finalize + merge)
+**Current focus:** Phase 5 — Simulation + Visualization Wrapper (final phase)
 
 ## Current Position
 
-Phase: 4 of 5 (Rolling Optimizer) — finalize + merge next; already built on feature/phase-4-rolling-optimizer (review done, 0 blockers)
-Plan: Phases 1, 2 & 3 complete + merged to develop
-Status: Phase 3 ✅ COMPLETE — adversarial review (12 findings, 1 HIGH blocker, 2 MED) → 5 fixes TDD'd + merged. Gate green (turbo 9/9, 463 tests). SNS-05 live-firing deferred to Phase 5 (SIM-04). Carried 5 LOW debt (03-REVIEW.md).
-Last activity: 2026-06-19 — Phase 3 finalized & merged to develop. Next: Phase 4 finalize (capacity-gate MED + LOWs; OPT-02/05/06/07 live-wiring partials fold into Phase 5) → merge → develop.
+Phase: 5 of 5 (Simulation + Visualization Wrapper) — next; greenfield frontend. Research DONE (05-RESEARCH.md via Google AI Mode + ol docs).
+Plan: Phases 1, 2, 3 & 4 complete + merged to develop
+Status: Phase 4 ✅ COMPLETE — review (0 blockers; SSP min-cost-flow matched 1153-instance glpk fuzz) → 4 fixes TDD'd + merged. Gate green (turbo 10/10, 587 tests). OPT-02/05/06/07 live-wiring deferred to Phase 5 (SIM-04 dep). Carried 3 LOW debt (04-REVIEW.md).
+Last activity: 2026-06-19 — Phase 4 finalized & merged to develop. Next: Phase 5 (discuss → UI-spec → plan → rival-execute → review → merge) — also absorbs OPT live-wiring (rolling loop + repair endpoint).
 
-Progress: [██████░░░░] 60% (3 of 5 phases complete)
+Progress: [████████░░] 80% (4 of 5 phases complete)
 
 ## Performance Metrics
 

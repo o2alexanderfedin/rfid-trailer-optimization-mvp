@@ -20,6 +20,16 @@ export type {
 export { PRODUCTION_DETECTION_CONFIG, DEMO_RFID_CONFIG } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
+export { registerOptimizerRoutes } from "./routes/optimizer.js";
+export type {
+  OptimizerRecommendationsDto,
+  RecommendationDto,
+} from "./routes/optimizer.js";
+export { RollingOptimizerService } from "./optimizer/rolling-service.js";
+export type {
+  RollingEpochOutcome,
+  RollingOptimizerDeps,
+} from "./optimizer/rolling-service.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
   Broadcast,

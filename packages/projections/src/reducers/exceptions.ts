@@ -186,6 +186,8 @@ export function exceptionsReducer(
     }
     // Every non-detection event is a no-op: the feed surfaces ONLY positive
     // planned-vs-observed disagreements, never absence (anti-P6 end-to-end).
+    // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) are
+    // optimizer concerns, not detection evidence, so they no-op here too.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -195,6 +197,8 @@ export function exceptionsReducer(
     case "TrailerArrivedAtHub":
     case "TrailerDocked":
     case "RfidObserved":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);

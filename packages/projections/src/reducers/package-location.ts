@@ -76,6 +76,8 @@ export function packageLocationReducer(
     // Phase-3 RFID/detection events do not change scan-derived package location
     // — the fused zone estimate is a separate read model (later Phase-3 plans).
     // Anti-P6: absence of an RFID read never changes a package's known location.
+    // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) don't
+    // move packages, so they no-op here.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -85,6 +87,8 @@ export function packageLocationReducer(
     case "RfidObserved":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);

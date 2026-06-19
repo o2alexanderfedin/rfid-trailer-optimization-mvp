@@ -23,6 +23,7 @@
     "@mm/domain": "workspace:*",
     "@mm/event-store": "workspace:*",
     "@mm/load-planner": "workspace:*",
+    "@mm/optimizer": "workspace:*",
     "@mm/projections": "workspace:*",
     "@mm/simulation": "workspace:*",
     "@fastify/websocket": "11.2.0",

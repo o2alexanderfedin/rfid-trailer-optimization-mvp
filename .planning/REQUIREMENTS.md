@@ -51,14 +51,16 @@
 
 ### Rolling Optimizer (OPT)
 
-- [ ] **OPT-01**: The system builds a time-expanded hub-network graph (hub@time nodes; trip/wait/cross-dock/load/unload edges)
-- [ ] **OPT-02**: The system assigns freight blocks to route legs via min-cost flow, minimizing transport + waiting + handling + SLA-lateness + missed-connection cost under edge/hub capacity and time-window constraints
-- [ ] **OPT-03**: The system performs VRP/VRPTW-style trailer/truck route planning, producing stop sequence, departure/arrival times, and utilization estimate
-- [ ] **OPT-04**: The optimizer evaluates candidate plans on a sandboxed planning twin with no operational side effects until a plan is accepted
-- [ ] **OPT-05**: The system re-optimizes on a rolling horizon, triggered periodically and by events, scoped to only the affected hubs/trailers/blocks
-- [ ] **OPT-06**: The optimizer honors freeze windows (no changes to trailers departing within the configured window unless critical) and is idempotent per epoch/scope (no plan thrashing)
-- [ ] **OPT-07**: Local repair produces recovery recommendations — split, reassign, hold, or over-carry — when a plan is infeasible or high-cost, each with a rationale
-- [ ] **OPT-08**: Plan selection minimizes the weighted objective function (miles, driver time, dock wait, handling, rehandle, SLA lateness, utilization, over-carry penalties)
+- [x] **OPT-01**: The system builds a time-expanded hub-network graph (hub@time nodes; trip/wait/cross-dock/load/unload edges)
+- [x] **OPT-02**: The system assigns freight blocks to route legs via min-cost flow, minimizing transport + waiting + handling + SLA-lateness + missed-connection cost under edge/hub capacity and time-window constraints*
+- [x] **OPT-03**: The system performs VRP/VRPTW-style trailer/truck route planning, producing stop sequence, departure/arrival times, and utilization estimate
+- [x] **OPT-04**: The optimizer evaluates candidate plans on a sandboxed planning twin with no operational side effects until a plan is accepted
+- [x] **OPT-05**: The system re-optimizes on a rolling horizon, triggered periodically and by events, scoped to only the affected hubs/trailers/blocks*
+- [x] **OPT-06**: The optimizer honors freeze windows (no changes to trailers departing within the configured window unless critical) and is idempotent per epoch/scope (no plan thrashing)*
+- [x] **OPT-07**: Local repair produces recovery recommendations — split, reassign, hold, or over-carry — when a plan is infeasible or high-cost, each with a rationale*
+- [x] **OPT-08**: Plan selection minimizes the weighted objective function (miles, driver time, dock wait, handling, rehandle, SLA lateness, utilization, over-carry penalties)
+
+> *OPT-02/05/06/07: the algorithms/libraries are delivered + verified (SSP min-cost-flow matched a 1153-instance glpk LP fuzz exactly; rolling shell, freeze/idempotency, and local-repair are unit-tested). The remaining gap is **live wiring** — a periodic/event-triggered rolling loop on the API + a repair-surfacing endpoint + min-cost-flow on the live assignment path. This is deferred to Phase 5, whose SIM-04 "visible re-optimization" depends on that live loop. See 04-REVIEW.md.*
 
 ### Simulation Engine (SIM)
 
@@ -150,14 +152,14 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals an
 | SNS-04 | Phase 3 | Complete |
 | SNS-05 | Phase 3 | Complete* |
 | SIM-03 | Phase 3 | Complete |
-| OPT-01 | Phase 4 | Pending |
-| OPT-02 | Phase 4 | Pending |
-| OPT-03 | Phase 4 | Pending |
-| OPT-04 | Phase 4 | Pending |
-| OPT-05 | Phase 4 | Pending |
-| OPT-06 | Phase 4 | Pending |
-| OPT-07 | Phase 4 | Pending |
-| OPT-08 | Phase 4 | Pending |
+| OPT-01 | Phase 4 | Complete |
+| OPT-02 | Phase 4 | Complete* |
+| OPT-03 | Phase 4 | Complete |
+| OPT-04 | Phase 4 | Complete |
+| OPT-05 | Phase 4 | Complete* |
+| OPT-06 | Phase 4 | Complete* |
+| OPT-07 | Phase 4 | Complete* |
+| OPT-08 | Phase 4 | Complete |
 | SIM-04 | Phase 5 | Pending |
 | VIZ-02 | Phase 5 | Pending |
 | VIZ-03 | Phase 5 | Pending |

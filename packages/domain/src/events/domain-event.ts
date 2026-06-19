@@ -5,6 +5,8 @@ import type {
   packageArrivedAtHubSchema,
   packageCreatedSchema,
   packageScannedSchema,
+  planAcceptedSchema,
+  planGeneratedSchema,
   rfidObservedSchema,
   routeRegisteredSchema,
   severitySchema,
@@ -66,6 +68,20 @@ export type WrongTrailerDetected = z.infer<typeof wrongTrailerDetectedSchema>;
 /** A package still aboard after its unload hub departed (SNS-05). */
 export type MissedUnloadDetected = z.infer<typeof missedUnloadDetectedSchema>;
 
+// --- Phase-4 plan-lifecycle events (OPT-04) ---------------------------------
+
+/**
+ * A candidate plan was produced over the twin (purely observational — OPT-04
+ * mandates NO side effect on evaluation). Carries the weighted objective and a
+ * hard feasibility flag kept distinct from the score (anti-P2).
+ */
+export type PlanGenerated = z.infer<typeof planGeneratedSchema>;
+
+/**
+ * The ONE operational side effect when a candidate plan is committed (OPT-04).
+ */
+export type PlanAccepted = z.infer<typeof planAcceptedSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -83,7 +99,9 @@ export type DomainEvent =
   | TrailerDocked
   | RfidObserved
   | WrongTrailerDetected
-  | MissedUnloadDetected;
+  | MissedUnloadDetected
+  | PlanGenerated
+  | PlanAccepted;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

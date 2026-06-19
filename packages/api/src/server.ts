@@ -1,8 +1,12 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import type { Kysely } from "kysely";
+import type { Database } from "@mm/event-store";
 import fastifyWebsocket from "@fastify/websocket";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
+import { registerOptimizerRoutes } from "./routes/optimizer.js";
+import { RollingOptimizerService } from "./optimizer/rolling-service.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
 
 /**
@@ -30,6 +34,8 @@ export interface BuiltServer {
   readonly app: FastifyInstance;
   /** Push one batched snapshot to every ws client; `undefined` when ws is off. */
   readonly broadcast: Broadcast | undefined;
+  /** The rolling optimizer shell (OPT-04/05/06) — the only stateful writer. */
+  readonly optimizer: RollingOptimizerService;
 }
 
 /** Build the Fastify server (REST query routes + optional ws snapshots). */
@@ -49,6 +55,15 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // POST /plan — the pure load-planning pipeline (LOAD-08). Read-only, DB-free.
   registerPlanRoutes(app);
 
+  // The rolling optimizer shell (OPT-04/05/06) + its read-only recommendations
+  // endpoint. The service owns the ONE write path (PlanAccepted); the route reads.
+  // The optimizer only appends to the event store, so it views the handle as the
+  // event-store schema (the same narrowing the sim driver uses).
+  const optimizer = new RollingOptimizerService({
+    db: deps.db as unknown as Kysely<Database>,
+  });
+  registerOptimizerRoutes(app, optimizer);
+
   let broadcast: Broadcast | undefined;
   if (deps.enableWs ?? true) {
     await app.register(fastifyWebsocket);
@@ -56,5 +71,5 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   }
 
   await app.ready();
-  return { app, broadcast };
+  return { app, broadcast, optimizer };
 }

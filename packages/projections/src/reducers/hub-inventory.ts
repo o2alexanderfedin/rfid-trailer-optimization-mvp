@@ -187,7 +187,9 @@ export function hubInventoryReducer(
       );
     // Phase-3 RFID/detection events are no-ops for hub inventory — observed
     // evidence is projected separately (later Phase-3 plans), never folded into
-    // the planned inventory read model (anti-P6).
+    // the planned inventory read model (anti-P6). Phase-4 plan-lifecycle events
+    // (PlanGenerated/PlanAccepted, OPT-04) don't move packages between hubs, so
+    // they no-op here too.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -196,6 +198,8 @@ export function hubInventoryReducer(
     case "RfidObserved":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);

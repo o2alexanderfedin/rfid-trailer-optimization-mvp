@@ -110,7 +110,14 @@ Notes: Detection must follow load planning because it compares *planned* (from s
   3. The optimizer re-optimizes on a rolling horizon (periodic + event-triggered, scoped to only affected hubs/trailers/blocks), evaluating candidates on a sandboxed planning twin with no operational side effects until a plan is accepted (then a single PlanGenerated/PlanAccepted event).
   4. Freeze windows are honored (no changes to trailers departing within the window unless critical) and replanning is idempotent per epoch/scope — identical input yields an identical plan, with a churn penalty and deterministic tie-breaks so plans don't thrash.
   5. Local repair produces recovery recommendations — split, reassign, hold, or over-carry — each with a rationale, and plan selection minimizes the weighted objective (miles, driver time, dock wait, handling, rehandle, SLA lateness, utilization, over-carry penalties).
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [x] 04-01-PLAN.md — Domain: add PlanGenerated/PlanAccepted to the closed event union + zod + contract.assert (OPT-04)
+- [x] 04-02-PLAN.md — Scaffold @mm/optimizer (pure core; reuses @mm/load-planner; glpk.js devDep) + time-expanded hub graph (OPT-01)
+- [x] 04-03-PLAN.md — Min-cost flow: pure-TS Successive Shortest Path + glpk.js exact-LP oracle keystone + freight assignment (OPT-02)
+- [x] 04-04-PLAN.md — VRPTW: cheapest-insertion construction + 2-opt/or-opt local search; loads gated by reused validatePlan (OPT-03)
+- [x] 04-05-PLAN.md — Weighted objective + feasibility-hard-gate keystone selection + local repair split/reassign/hold/over-carry (OPT-07, OPT-08)
+- [x] 04-06-PLAN.md — Rolling shell: scoped epoch + structuredClone twin sandbox + freeze/idempotency keystone + @mm/api service/endpoint (OPT-04, OPT-05, OPT-06)
 
 Notes: This is where engineering risk concentrates — there is no maintained JS min-cost-flow or VRP/OR-Tools binding, so the min-cost flow (Successive Shortest Paths), VRPTW heuristic, and the layered pipeline are custom TypeScript over `graphology`/`ngraph.path`, with **glpk.js (WASM) held in reserve as a correctness oracle** for small instances. Defend against P7 (plan thrashing) with a hard freeze window enforced in the input builder, a `planChurnPenalty` anchoring to the previous plan, and stable id-based tie-breaks / fixed seed. Defend against P9 (graph explosion) with coarse 15-min time nodes, tight affected-scope pruning, and a small demo network — track solver runtime as a KPI. Defend against P12 (numerical issues) by scaling all costs to integers and validating against hand-computed small cases and the glpk.js oracle. Flagged for `/gsd-research-phase`: which JS/TS approach for min-cost flow + VRPTW (pure-TS SSP vs glpk.js LP vs OR-Tools-WASM/child-process bridge). The optimizer owns the planning twin and is a concurrent event-store writer — re-verify Phase 1's optimistic concurrency holds.
 
@@ -140,5 +147,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Operational Data Foundation + Live Map Spike | 7/7 | ✅ Complete | 2026-06-19 |
 | 2. Load Planning | 6/6 | ✅ Complete | 2026-06-19 |
 | 3. RFID-Assisted Validation | 7/7 | ✅ Complete | 2026-06-19 |
-| 4. Rolling Optimizer | 0/TBD | Not started | - |
+| 4. Rolling Optimizer | 6/6 | ✅ Complete | 2026-06-19 |
 | 5. Simulation + Visualization Wrapper | 0/TBD | Not started | - |

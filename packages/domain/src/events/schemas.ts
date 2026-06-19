@@ -21,9 +21,9 @@ import {
 
 const id = z.string().min(1);
 
-/** The current schema version for every Phase-1 event. */
-export const PHASE1_SCHEMA_VERSION = 1 as const;
-const schemaVersion = z.literal(PHASE1_SCHEMA_VERSION);
+/** The current schema version for every domain event (Phase-1 + Phase-4 plan events). */
+export const EVENT_SCHEMA_VERSION = 1 as const;
+const schemaVersion = z.literal(EVENT_SCHEMA_VERSION);
 
 /**
  * Build a `{ type, schemaVersion, payload }` event schema from a payload shape.
@@ -190,6 +190,51 @@ export const missedUnloadDetectedSchema = eventSchema(
   }),
 );
 
+// --- Phase-4 plan-lifecycle payloads (OPT-04) -------------------------------
+
+/**
+ * `occurredAt` is an ISO-8601 domain-clock string supplied by the caller (the
+ * sim/epoch clock) — NEVER `Date.now()` inside this deterministic leaf.
+ */
+const occurredAt = z.string().min(1);
+
+/**
+ * `PlanGenerated` — a candidate plan was produced over the twin. Purely
+ * observational (OPT-04: evaluating candidates has NO side effect). Carries the
+ * weighted-objective value (`objectiveCost`, opaque at the domain layer) and a
+ * HARD `feasible` flag kept DISTINCT from the objective (anti-P2: feasibility is
+ * never folded into the score). `scopeHash` is the optimizer idempotency key.
+ */
+export const planGeneratedSchema = eventSchema(
+  "PlanGenerated",
+  z.object({
+    epochId: id,
+    scopeHash: id,
+    planId: id,
+    trailerId: id,
+    objectiveCost: z.number(),
+    feasible: z.boolean(),
+    occurredAt,
+  }),
+);
+
+/**
+ * `PlanAccepted` — the ONE operational side effect when a candidate plan is
+ * committed (OPT-04). Carries only the identifiers + idempotency keys; the
+ * objective/feasibility belong to the evaluation (`PlanGenerated`), not the
+ * commit.
+ */
+export const planAcceptedSchema = eventSchema(
+  "PlanAccepted",
+  z.object({
+    epochId: id,
+    scopeHash: id,
+    planId: id,
+    trailerId: id,
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -207,4 +252,6 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   rfidObservedSchema,
   wrongTrailerDetectedSchema,
   missedUnloadDetectedSchema,
+  planGeneratedSchema,
+  planAcceptedSchema,
 ]);

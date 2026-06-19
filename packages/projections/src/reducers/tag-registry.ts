@@ -67,6 +67,8 @@ export function tagRegistryReducer(
     // Every non-registration event leaves the mapping untouched. RfidObserved
     // is a READER of this registry, not a writer — keeping the registry the sole
     // authority for tag identity (anti-P6: observation never mutates identity).
+    // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) carry
+    // no tag identity, so they no-op here too.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageScanned":
@@ -77,6 +79,8 @@ export function tagRegistryReducer(
     case "RfidObserved":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);

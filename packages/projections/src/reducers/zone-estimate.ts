@@ -172,7 +172,9 @@ function applyEvent(
     }
     // Every non-observation event is a no-op for the zone estimate. Identity
     // (tag registry) and trailer/hub lifecycle are projected separately —
-    // detection is downstream and one-way (anti-P6).
+    // detection is downstream and one-way (anti-P6). Phase-4 plan-lifecycle
+    // events (PlanGenerated/PlanAccepted, OPT-04) carry no observation, so they
+    // no-op here too.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -183,6 +185,8 @@ function applyEvent(
     case "TrailerDocked":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
       return state;
     default:
       return assertNeverEvent(event);
