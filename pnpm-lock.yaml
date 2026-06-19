@@ -62,6 +62,9 @@ importers:
       '@mm/load-planner':
         specifier: workspace:*
         version: link:../load-planner
+      '@mm/optimizer':
+        specifier: workspace:*
+        version: link:../optimizer
       '@mm/projections':
         specifier: workspace:*
         version: link:../projections
