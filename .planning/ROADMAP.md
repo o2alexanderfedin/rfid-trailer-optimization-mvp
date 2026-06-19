@@ -22,9 +22,9 @@ before/after KPI "money slide" — composes everything into the persuasive live 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
-- [ ] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
-- [ ] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
+- [x] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
+- [x] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
+- [x] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
 - [ ] **Phase 4: Rolling Optimizer** - Continuous, scoped re-optimization (min-cost flow + VRPTW) with freeze windows, anti-thrashing, and split/reassign/hold/over-carry repair
 - [ ] **Phase 5: Simulation + Visualization Wrapper** - Animated realtime USA map, scenario knobs, exception feed, audit timeline, and the before/after KPI dashboard
 
@@ -139,6 +139,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Operational Data Foundation + Live Map Spike | 7/7 | ✅ Complete | 2026-06-19 |
 | 2. Load Planning | 6/6 | ✅ Complete | 2026-06-19 |
-| 3. RFID-Assisted Validation | 0/7 | Planned | - |
+| 3. RFID-Assisted Validation | 7/7 | ✅ Complete | 2026-06-19 |
 | 4. Rolling Optimizer | 0/TBD | Not started | - |
 | 5. Simulation + Visualization Wrapper | 0/TBD | Not started | - |

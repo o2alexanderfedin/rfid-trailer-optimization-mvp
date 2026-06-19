@@ -144,12 +144,12 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals an
 | LOAD-08 | Phase 2 | Complete |
 | LOAD-09 | Phase 2 | Complete |
 | LOAD-10 | Phase 2 | Complete |
-| SNS-01 | Phase 3 | Pending |
-| SNS-02 | Phase 3 | Pending |
-| SNS-03 | Phase 3 | Pending |
-| SNS-04 | Phase 3 | Pending |
-| SNS-05 | Phase 3 | Pending |
-| SIM-03 | Phase 3 | Pending |
+| SNS-01 | Phase 3 | Complete |
+| SNS-02 | Phase 3 | Complete |
+| SNS-03 | Phase 3 | Complete |
+| SNS-04 | Phase 3 | Complete |
+| SNS-05 | Phase 3 | Complete* |
+| SIM-03 | Phase 3 | Complete |
 | OPT-01 | Phase 4 | Pending |
 | OPT-02 | Phase 4 | Pending |
 | OPT-03 | Phase 4 | Pending |
@@ -174,6 +174,8 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals an
 - Unmapped: 0 ✓
 
 **Per-phase counts:** Phase 1 = 11 (FND 8 + SIM-01/02 + VIZ-01) · Phase 2 = 14 (AGG 4 + LOAD 10) · Phase 3 = 6 (SNS 5 + SIM-03) · Phase 4 = 8 (OPT 8) · Phase 5 = 9 (SIM-04 + VIZ-02..05 + UI 4)
+
+> *SNS-05 detection logic is delivered + unit-tested (missed-unload predicate, post-departure gate). It does NOT fire on the seeded live demo because the sim's trip model never emits a return-leg `TrailerDeparted(fromHubId=spoke)` with a still-aboard package. Live demo firing is deferred to Phase 5 (SIM-04 scenario injection / over-carry). See 03-REVIEW.md finding [1].*
 
 ---
 *Requirements defined: 2026-06-18*
