@@ -12,14 +12,14 @@
 
 ### Operational Data Foundation (FND)
 
-- [ ] **FND-01**: The system records every domain change as an immutable, append-only event in a Postgres event store (Package/LoadBlock/Trailer/RFID/Plan lifecycle events)
-- [ ] **FND-02**: The event store enforces optimistic concurrency per stream (unique `aggregate_id + version`) and provides total ordering via a monotonic global sequence
-- [ ] **FND-03**: The system ingests package scans, trailer movements, and sensor observations through a typed ingestion API/bus
-- [ ] **FND-04**: State rebuilt purely by replaying the event log is identical to live state (deterministic replay — no wall-clock/random/unstable sort in reducers), verified by an automated live-vs-rebuilt test
-- [ ] **FND-05**: An operator can query "where was package X last seen?" and get last-known location with confidence and timestamp
-- [ ] **FND-06**: An operator can query "what is currently assigned to / observed on trailer T?"
-- [ ] **FND-07**: An operator can view a hub's current inventory (inbound, outbound, and staged blocks/packages)
-- [ ] **FND-08**: The system reconstructs a package's full movement history as an ordered audit timeline from events
+- [x] **FND-01**: The system records every domain change as an immutable, append-only event in a Postgres event store (Package/LoadBlock/Trailer/RFID/Plan lifecycle events)
+- [x] **FND-02**: The event store enforces optimistic concurrency per stream (unique `aggregate_id + version`) and provides total ordering via a monotonic global sequence
+- [x] **FND-03**: The system ingests package scans, trailer movements, and sensor observations through a typed ingestion API/bus
+- [x] **FND-04**: State rebuilt purely by replaying the event log is identical to live state (deterministic replay — no wall-clock/random/unstable sort in reducers), verified by an automated live-vs-rebuilt test
+- [x] **FND-05**: An operator can query "where was package X last seen?" and get last-known location with confidence and timestamp
+- [x] **FND-06**: An operator can query "what is currently assigned to / observed on trailer T?"
+- [x] **FND-07**: An operator can view a hub's current inventory (inbound, outbound, and staged blocks/packages)
+- [x] **FND-08**: The system reconstructs a package's full movement history as an ordered audit timeline from events
 
 ### Load-Block Aggregation (AGG)
 
@@ -62,14 +62,14 @@
 
 ### Simulation Engine (SIM)
 
-- [ ] **SIM-01**: The simulator models a USA hub-and-spoke network — hubs with lat/long, linehaul routes, trailers, and packages
-- [ ] **SIM-02**: The simulator generates a realistic, seeded, deterministic event stream (scans, trailer trips, arrivals) that drives the operational twin
+- [x] **SIM-01**: The simulator models a USA hub-and-spoke network — hubs with lat/long, linehaul routes, trailers, and packages
+- [x] **SIM-02**: The simulator generates a realistic, seeded, deterministic event stream (scans, trailer trips, arrivals) that drives the operational twin
 - [ ] **SIM-03**: The simulator emits RFID observations with configurable miss rate and noise (probabilistic reads), not perfect reads
 - [ ] **SIM-04**: An operator can adjust scenario knobs (inject hub congestion, trip delays, demand spikes, sensor-noise level) that trigger visible re-optimization
 
 ### Realtime Visualization (VIZ)
 
-- [ ] **VIZ-01**: A realtime web map (OpenLayers + OpenStreetMap tiles) shows all hubs and routes across the USA
+- [x] **VIZ-01**: A realtime web map (OpenLayers + OpenStreetMap tiles) shows all hubs and routes across the USA
 - [ ] **VIZ-02**: Trailers animate along their route geometry in realtime, interpolated from server-pushed position/ETA keyframes
 - [ ] **VIZ-03**: Hubs and routes are colored by state (freight volume, SLA risk, congestion)
 - [ ] **VIZ-04**: Realtime state streams to the client over WebSocket as the simulation/optimizer advance
@@ -119,17 +119,17 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals an
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FND-01 | Phase 1 | Pending |
-| FND-02 | Phase 1 | Pending |
-| FND-03 | Phase 1 | Pending |
-| FND-04 | Phase 1 | Pending |
-| FND-05 | Phase 1 | Pending |
-| FND-06 | Phase 1 | Pending |
-| FND-07 | Phase 1 | Pending |
-| FND-08 | Phase 1 | Pending |
-| SIM-01 | Phase 1 | Pending |
-| SIM-02 | Phase 1 | Pending |
-| VIZ-01 | Phase 1 | Pending |
+| FND-01 | Phase 1 | Complete |
+| FND-02 | Phase 1 | Complete |
+| FND-03 | Phase 1 | Complete |
+| FND-04 | Phase 1 | Complete |
+| FND-05 | Phase 1 | Complete |
+| FND-06 | Phase 1 | Complete |
+| FND-07 | Phase 1 | Complete |
+| FND-08 | Phase 1 | Complete |
+| SIM-01 | Phase 1 | Complete |
+| SIM-02 | Phase 1 | Complete |
+| VIZ-01 | Phase 1 | Complete |
 | AGG-01 | Phase 2 | Pending |
 | AGG-02 | Phase 2 | Pending |
 | AGG-03 | Phase 2 | Pending |
