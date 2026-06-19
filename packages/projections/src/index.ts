@@ -52,15 +52,53 @@ export {
   hubInventoryReducer,
 } from "./reducers/hub-inventory.js";
 
+// --- FND-08 (catch-up): package audit timeline -------------------------------
+export type {
+  AuditTimelineEntry,
+  StoredEventLike,
+} from "./reducers/audit-timeline.js";
+export { auditTimelineReducer } from "./reducers/audit-timeline.js";
+
+// --- Catch-up: geo-track (trailer position keyframes for the map) -------------
+export type {
+  GeoKeyframe,
+  GeoKeyframeKind,
+  GeoTrackState,
+  GeoTrackStep,
+} from "./reducers/geo-track.js";
+export { emptyGeoTrackState, geoTrackReducer, legKey } from "./reducers/geo-track.js";
+
 // --- Operational twin: schema + inline applier + rebuild driver --------------
 export type {
   ProjectionDatabase,
   PackageLocationTable,
   TrailerStateTable,
   HubInventoryTable,
+  AuditTimelineTable,
+  GeoRouteTable,
+  GeoKeyframeTable,
+  CatchupProjectionName,
 } from "./schema.js";
-export { PROJECTIONS_SCHEMA_SQL, OPERATIONAL_PROJECTIONS } from "./schema.js";
+export {
+  PROJECTIONS_SCHEMA_SQL,
+  OPERATIONAL_PROJECTIONS,
+  CATCHUP_PROJECTIONS,
+} from "./schema.js";
 export type { ReplayEvent, OperationalTwin, ProjectionDb } from "./runner/inline.js";
 export { applyInline, readOperationalTwin, projectionView } from "./runner/inline.js";
 export type { ReadAllEvents } from "./runner/rebuild.js";
 export { rebuildProjections, serializeTwin } from "./runner/rebuild.js";
+
+// --- Catch-up runner (async poller + rebuild + read side) --------------------
+export type {
+  CatchupDb,
+  CatchupResult,
+  ReadAllEvents as ReadAllCatchupEvents,
+} from "./runner/catchup.js";
+export {
+  runCatchup,
+  rebuildCatchup,
+  readAuditTimeline,
+  readGeoKeyframes,
+  serializeCatchup,
+} from "./runner/catchup.js";

@@ -35,3 +35,38 @@ CREATE TABLE IF NOT EXISTS hub_inventory (
   outbound JSONB NOT NULL DEFAULT '[]'::jsonb,
   staged   JSONB NOT NULL DEFAULT '[]'::jsonb
 );
+
+-- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored
+-- event that names a package; global_seq is the identity AND the strict order.
+CREATE TABLE IF NOT EXISTS audit_timeline (
+  global_seq  BIGINT PRIMARY KEY,
+  package_id  TEXT        NOT NULL,
+  event_type  TEXT        NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  hub_id      TEXT,
+  scan_type   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_timeline_package
+  ON audit_timeline (package_id, global_seq);
+
+-- CATCH-UP: the route geometry index, folded incrementally from RouteRegistered
+-- so keyframe resolution never re-scans the log. geometry is a JSONB [lon,lat][].
+CREATE TABLE IF NOT EXISTS geo_route (
+  from_hub_id TEXT  NOT NULL,
+  to_hub_id   TEXT  NOT NULL,
+  geometry    JSONB NOT NULL,
+  PRIMARY KEY (from_hub_id, to_hub_id)
+);
+
+-- CATCH-UP: per-trip trailer position keyframes for the live map. Identity is
+-- (trailer_id, trip_id, kind) — one depart + one arrive per trip.
+CREATE TABLE IF NOT EXISTS geo_keyframe (
+  trailer_id TEXT             NOT NULL,
+  trip_id    TEXT             NOT NULL,
+  kind       TEXT             NOT NULL,
+  t          TIMESTAMPTZ      NOT NULL,
+  lon        DOUBLE PRECISION NOT NULL,
+  lat        DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (trailer_id, trip_id, kind)
+);
