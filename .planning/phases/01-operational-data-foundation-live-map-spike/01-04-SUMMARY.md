@@ -61,3 +61,43 @@ keystone golden-replay test against real Postgres (OrbStack).
 (77/77 across 12 files incl. real Postgres integration). Purity grep guard
 `grep -v '^\s*//' packages/projections/src/reducers/*.ts | grep -cE 'Date\.now\(|Math\.random\('`
 returns 0. No regressions to the Phase-1 spine or prior plans.
+
+## Integration (merged into feature/phase-1-operational-data-foundation-live-map-spike)
+
+Winner: rival #1, branch `wt/p1-04-r1`, source sha
+`21a06f36544b679f371414c19ac554e2c42a8267`. Merged via `git merge --no-ff`
+(no conflicts — the winner was a linear addition of `packages/projections` plus
+this summary on top of plan-03 HEAD).
+
+Gates re-verified post-merge in the MAIN repo against real Postgres via
+Testcontainers on OrbStack (docker context `orbstack`, server 29.4.0):
+
+| Gate              | Result |
+|-------------------|--------|
+| `pnpm install`    | OK (lockfile up to date) |
+| `pnpm -r build`   | OK (6 buildable packages incl. `@mm/projections`) |
+| `pnpm lint`       | OK (eslint clean) |
+| `pnpm test:all`   | OK — 12 files / **77 tests** passed |
+
+## Carried risks (from cross-rival judging — revisit before later phases)
+
+1. **FND-07 semantics not pinned.** The plan/research do not mandate
+   removal-on-move for hub inventory. The winner (R1) treats a move as a
+   deterministic removal from the prior (hub, bucket); the rival R2 used an
+   additive model. Both passed their own self-written tests, so the chosen
+   semantics are a Phase-1 spike decision, not a settled contract — confirm the
+   intended FND-07 behavior with stakeholders before downstream consumers depend
+   on it.
+2. **O(N) whole-table reload + one production cast.** R1's inline runner reloads
+   the whole twin per event (O(N) re-read), and carries one production-code cast
+   (`projectionView` narrowing the invariant `Kysely<T>` event-store schema to
+   the projection sub-schema). These are cleanliness/scalability debts — fine for
+   the spike, worth revisiting (incremental reads, typed view) before later
+   phases build volume on this twin. R2 avoided both (O(1) loads, zero casts).
+3. **trip_id NOT NULL / orphan TrailerDocked.** R2's approach of forcing
+   `trip_id NOT NULL` and writing `""` for an orphan `TrailerDocked` could
+   surface as a subtle data-quality issue; not present in R1's chosen model and
+   not exercised by current tests — noted for awareness.
+4. **No regressions observed.** Both rivals were judged on `test:all` green
+   (77 R1 vs 75 R2), which includes the full prior Phase-1 spine. No regressions
+   in either; the merged R1 keeps the spine green at 77/77.
