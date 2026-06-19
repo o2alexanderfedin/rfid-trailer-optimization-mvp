@@ -73,3 +73,26 @@ choices keep every pre-existing simulation golden byte-identical:
 Testcontainers/orbstack). 18 of those are new SIM-03 tests; all prior Phase-1/2
 and Phase-3 tests remain green. `grep -E "Date.now|Math.random"
 packages/simulation/src` ⇒ doc-comments only, zero usages.
+
+## Integration into `feature/phase-3-rfid-assisted-validation`
+
+- **Winner:** rival #1 (`wt/p3-03-r1`, sha `2e1ae267aa52b34d11acbd387649c766ad87630e`),
+  merged `--no-ff` with no conflicts (engine/index/rfid + tests + this summary).
+- **Gates re-verified on the integrated branch** (not just in the worktrees):
+  `pnpm install` ✓ · turbo `pnpm build` ✓ **9/9** · `pnpm -r build` ✓ ·
+  `pnpm lint` ✓ (0 errors) · `pnpm test:all` ✓ **386/386** across **48 files**
+  with real Postgres via Testcontainers. This independently retires the judge's
+  flagged risk that the full DB-backed suite had not been re-executed in the
+  judging session.
+- **Why #1 over #2 (carried context):** #1 attaches `rfidTagId` only when RFID is
+  opt-in, so the non-RFID `PackageCreated` payload is byte-identical and cannot
+  regress a downstream consumer or golden fixture; #2's unconditional `rfidTagId`
+  was the latent regression vector. #1's wrong-tag corruption is namespaced
+  (`TAG-UNKNOWN-${rng.int(1000)}`), so a corrupted tag cannot collide back onto a
+  real package's tag (#2's `flipLastChar` could alias an adjacent real tag — a
+  minor data-realism nit, not a gate failure).
+- **Carried residual risk:** none gate-blocking. Wrong-tag/wrong-zone corruption
+  is treated downstream as fusion evidence, not ground truth, so a rare collision
+  degrades realism, not correctness. No integration regression observed.
+- **Final merge sha:** `0ca81cb` on `feature/phase-3-rfid-assisted-validation`
+  (pushed to origin). Rival worktrees/branches removed and pruned.
