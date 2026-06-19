@@ -10,30 +10,30 @@
 import { describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Mock OL style modules before importing the module under test
+// Mock OL style modules before importing the module under test.
+// Use inline class definitions inside the factory to avoid hoisting issues.
 // ---------------------------------------------------------------------------
 
-class MockFill {
-  constructor(readonly opts: { color: string }) {}
-}
-class MockStroke {
-  constructor(readonly opts: { color: string; width: number }) {}
-}
-class MockCircleStyle {
-  constructor(
-    readonly opts: { radius: number; fill: MockFill; stroke?: MockStroke },
-  ) {}
-}
-class MockStyle {
-  constructor(readonly opts: { image?: MockCircleStyle; stroke?: MockStroke }) {}
-}
-
-vi.mock("ol/style.js", () => ({
-  Style: MockStyle,
-  Fill: MockFill,
-  Stroke: MockStroke,
-  Circle: MockCircleStyle,
-}));
+vi.mock("ol/style.js", () => {
+  class MockFill {
+    constructor(readonly opts: { color: string }) {}
+  }
+  class MockStroke {
+    constructor(readonly opts: { color: string; width: number }) {}
+  }
+  class MockCircleStyle {
+    constructor(readonly opts: { radius: number; fill: MockFill; stroke?: MockStroke }) {}
+  }
+  class MockStyle {
+    constructor(readonly opts: { image?: MockCircleStyle; stroke?: MockStroke }) {}
+  }
+  return {
+    Style: MockStyle,
+    Fill: MockFill,
+    Stroke: MockStroke,
+    Circle: MockCircleStyle,
+  };
+});
 
 // Mock FeatureLike: simple object with a get() method.
 function makeFeature(props: Record<string, unknown>) {

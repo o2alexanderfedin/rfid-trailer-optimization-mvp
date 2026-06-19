@@ -1,22 +1,38 @@
 import { useCallback, useEffect, useRef } from "react";
-import Map from "ol/Map.js";
+import OlMap from "ol/Map.js";
 import View from "ol/View.js";
 import TileLayer from "ol/layer/Tile.js";
 import OSM from "ol/source/OSM.js";
 import type VectorSource from "ol/source/Vector.js";
+import type VectorLayer from "ol/layer/Vector.js";
+import LineString from "ol/geom/LineString.js";
+import Point from "ol/geom/Point.js";
 import { fromLonLat } from "ol/proj.js";
 import { getUid } from "ol/util.js";
 import { fetchHubs, fetchRoutes } from "../api/client.js";
+import type { RouteDto } from "../api/client.js";
 import {
   createHubLayer,
   createRouteLayer,
   createTrailerLayer,
-  updateTrailerFeatures,
+  upsertTrailerKeyframe,
+  removeTrailerFeature,
+  applyHubBuckets,
+  applyRouteBuckets,
 } from "./layers.js";
 import {
-  useTrailerSnapshots,
-  type SnapshotMessage,
-} from "./useTrailerSnapshots.js";
+  makeEntityMaps,
+  useWsEnvelope,
+  type EntityMaps,
+} from "./wsClient.js";
+import { makeSimClock } from "./simClock.js";
+import {
+  attachTrailerAnimation,
+  type TrailerAnim,
+  type TrailerAnimationHandle,
+} from "./animate.js";
+import { Legend } from "./Legend.js";
+import type { WsEnvelope } from "@mm/api";
 import "ol/ol.css";
 
 /** Centre of the contiguous USA, used as the initial view (lon, lat). */
@@ -24,20 +40,21 @@ const USA_CENTER: readonly [number, number] = [-98.5795, 39.8283];
 const USA_ZOOM = 4;
 
 /**
- * The live USA map (VIZ-01). OpenLayers 10 + OSM basemap rendering all hubs as
- * markers, all linehaul routes as LineStrings, and simulated trailers as LIVE
- * points fed by the `@mm/api` ws snapshot channel.
+ * The live USA map (VIZ-01 / VIZ-02 / VIZ-03). OpenLayers 10 + OSM basemap
+ * rendering all hubs as state-colored markers, all linehaul routes as
+ * metric-colored LineStrings, and simulated trailers as LIVE animated points
+ * fed by the `@mm/api` ws versioned envelope channel.
  *
- * OpenLayers leak discipline (PITFALLS P10 / validated realtime pattern):
+ * OpenLayers leak discipline (PITFALLS P10 / T-01-24):
  *  - The `ol/Map` and every `VectorSource` live in `useRef` — NEVER React state
  *    — and the map is created EXACTLY ONCE (the `[]`-dep effect).
  *  - Each logical layer (hubs, routes, trailers) is one reused `VectorSource`.
- *  - Live trailer updates mutate feature geometry IN PLACE
- *    (`updateTrailerFeatures` -> `getGeometry().setCoordinates(...)`); the
- *    source is never cleared/rebuilt, so the feature count stays bounded.
- *  - `crossOrigin: 'anonymous'` is set on OSM; tiles load over HTTPS.
- *  - On unmount the map is disposed (`setTarget(undefined)`), sources cleared,
- *    and the ws closed.
+ *  - Trailer animation is driven by ONE `postrender` listener (per
+ *    `attachTrailerAnimation`), mutating `Point.setCoordinates` IN PLACE.
+ *  - Hub/route coloring uses pre-allocated `STYLE_CACHE` via zero-alloc
+ *    StyleFunctions; bucket deltas applied via `feature.set(...)` (no rebuild).
+ *  - On unmount: `detach()` removes the postrender listener; sources cleared;
+ *    map disposed; ws closed.
  *
  * Diagnostic `data-*` attributes on the map container expose bounded feature
  * counts + instance counts so the Playwright leak guard can assert the
@@ -45,19 +62,34 @@ const USA_ZOOM = 4;
  */
 export function MapView(): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<Map | null>(null);
+  const mapRef = useRef<OlMap | null>(null);
   const trailerSourceRef = useRef<VectorSource | null>(null);
-  /** How many distinct ol/Map instances this component has created (leak guard). */
+  const hubSourceRef = useRef<VectorSource | null>(null);
+  const routeSourceRef = useRef<VectorSource | null>(null);
+
+  /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
+  const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
+
+  /** Per-trailer animation targets (mutated in place by envelope handler). */
+  const trailerAnimsRef = useRef<Map<string, TrailerAnim>>(new Map());
+
+  /** Sim clock — resynced on each envelope's simMs. */
+  const simClockRef = useRef(makeSimClock({ simSpeed: 1 }));
+
+  /** Animation handle — removed on teardown. */
+  const animationHandleRef = useRef<TrailerAnimationHandle | null>(null);
+
+  /** Leak guard counters. */
   const mapInstancesRef = useRef(0);
-  /** How many ol/Map instances this component has DISPOSED (M-6 net-live guard). */
   const mapDisposedRef = useRef(0);
-  /** How many distinct trailer VectorSources have been created (leak guard). */
   const trailerSourceInstancesRef = useRef(0);
-  /** How many ws snapshots have been applied (proves live updates flow). */
   const snapshotCountRef = useRef(0);
 
+  /** Entity maps — off the React render path. */
+  const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
+
   /** Write a diagnostic count onto the map container for the e2e to read. */
-  const setAttr = useCallback((name: string, value: number): void => {
+  const setAttr = useCallback((name: string, value: number | string): void => {
     containerRef.current?.setAttribute(name, String(value));
   }, []);
 
@@ -71,11 +103,11 @@ export function MapView(): React.JSX.Element {
     trailerSourceInstancesRef.current += 1;
     setAttr("data-trailer-source-instances", trailerSourceInstancesRef.current);
 
-    const map = new Map({
+    const map = new OlMap({
       target: container,
       layers: [
         new TileLayer({ source: new OSM({ crossOrigin: "anonymous" }) }),
-        trailer.layer, // trailer points draw on top of routes + hubs once added
+        trailer.layer,
       ],
       view: new View({
         center: fromLonLat([USA_CENTER[0], USA_CENTER[1]]),
@@ -85,10 +117,6 @@ export function MapView(): React.JSX.Element {
     mapRef.current = map;
     mapInstancesRef.current += 1;
     setAttr("data-map-instances", mapInstancesRef.current);
-    // Net-live = created - disposed. This is the invariant that matters (M-6):
-    // under React StrictMode (dev) the effect runs mount→cleanup→remount, so the
-    // CUMULATIVE created count reaches 2, but the first map is disposed in the
-    // cleanup, so net-live must stay 1 — proving no live map leaks.
     setAttr(
       "data-map-net-live",
       mapInstancesRef.current - mapDisposedRef.current,
@@ -97,6 +125,15 @@ export function MapView(): React.JSX.Element {
     setAttr("data-route-count", 0);
     setAttr("data-trailer-count", 0);
     setAttr("data-snapshot-count", 0);
+
+    // Attach the VIZ-02 animation loop — ONE postrender listener for all trailers.
+    const handle = attachTrailerAnimation(
+      trailer.layer as VectorLayer<VectorSource>,
+      map,
+      trailerAnimsRef.current,
+      (frameTime) => simClockRef.current.fromFrameTime(frameTime),
+    );
+    animationHandleRef.current = handle;
 
     // Load the static geo once and insert hub/route layers UNDER the trailers.
     const controller = new AbortController();
@@ -107,8 +144,17 @@ export function MapView(): React.JSX.Element {
           fetchRoutes(controller.signal),
         ]);
         if (controller.signal.aborted || mapRef.current !== map) return;
+
+        // Cache route DTOs for geometry lookup by routeId.
+        for (const r of routes) {
+          routeDtosRef.current.set(r.routeId, r);
+        }
+
         const hubLayer = createHubLayer(hubs);
         const routeLayer = createRouteLayer(routes);
+        hubSourceRef.current = hubLayer.source;
+        routeSourceRef.current = routeLayer.source;
+
         // Routes beneath hubs beneath trailers (trailers stay top-most).
         map.getLayers().insertAt(1, routeLayer.layer);
         map.getLayers().insertAt(2, hubLayer.layer);
@@ -121,6 +167,11 @@ export function MapView(): React.JSX.Element {
 
     return () => {
       controller.abort();
+
+      // VIZ-02 leak discipline: remove the postrender listener before disposal.
+      handle.detach();
+      animationHandleRef.current = null;
+
       map.getLayers().forEach((layer) => {
         const src: unknown =
           layer && "getSource" in layer
@@ -133,37 +184,161 @@ export function MapView(): React.JSX.Element {
       map.setTarget(undefined);
       map.dispose();
       mapDisposedRef.current += 1;
-      // Net-live drops back to (created - disposed); under StrictMode this is the
-      // window between mount1's cleanup and mount2's create where net-live == 0.
       setAttr(
         "data-map-net-live",
         mapInstancesRef.current - mapDisposedRef.current,
       );
       mapRef.current = null;
       trailerSourceRef.current = null;
+      hubSourceRef.current = null;
+      routeSourceRef.current = null;
+      trailerAnimsRef.current.clear();
+      routeDtosRef.current.clear();
     };
   }, [setAttr]);
 
-  // --- Apply each ws snapshot IN PLACE on the single trailer source ----------
-  const onSnapshot = useCallback(
-    (snapshot: SnapshotMessage): void => {
-      const source = trailerSourceRef.current;
-      if (source === null) return;
-      updateTrailerFeatures(source, snapshot.trailers);
+  // --- Apply each ws envelope (VIZ-02 keyframes + VIZ-03 bucket deltas) -----
+  const onEnvelope = useCallback(
+    (envelope: WsEnvelope, maps: EntityMaps): void => {
+      const trailerSource = trailerSourceRef.current;
+      const hubSource = hubSourceRef.current;
+      const routeSource = routeSourceRef.current;
+      if (trailerSource === null) return;
+
+      // Resync the sim clock to the envelope's authoritative simMs.
+      simClockRef.current.resync(performance.now(), envelope.simMs);
+
       snapshotCountRef.current += 1;
-      setAttr("data-trailer-count", source.getFeatures().length);
       setAttr("data-snapshot-count", snapshotCountRef.current);
-      // Leak guard: expose the OL uid of one stable trailer feature. If updates
-      // RECREATED features instead of mutating them in place, this uid would
-      // change every snapshot; with in-place updates it stays constant.
-      const probe = source.getFeatures()[0];
-      if (probe !== undefined) {
-        containerRef.current?.setAttribute("data-trailer-uid", getUid(probe));
+
+      if (envelope.type === "snapshot") {
+        // Full resync: rebuild trailer anims + apply all hubs/routes.
+        const payload = envelope.payload;
+
+        // Upsert all trailer keyframes.
+        for (const kf of payload.trailers) {
+          upsertTrailerKeyframe(trailerSource, kf);
+          _upsertTrailerAnim(kf.id, kf.routeId, kf.departMs, kf.etaMs);
+        }
+
+        // Apply hub + route buckets.
+        if (hubSource !== null) applyHubBuckets(hubSource, payload.hubs);
+        if (routeSource !== null) applyRouteBuckets(routeSource, payload.routes);
+      } else {
+        // Delta tick: upsert + delete.
+        const payload = envelope.payload;
+
+        if (payload.trailers !== undefined) {
+          for (const kf of payload.trailers) {
+            upsertTrailerKeyframe(trailerSource, kf);
+            _upsertTrailerAnim(kf.id, kf.routeId, kf.departMs, kf.etaMs);
+          }
+        }
+        if (payload.trailersGone !== undefined) {
+          for (const id of payload.trailersGone) {
+            removeTrailerFeature(trailerSource, id);
+            trailerAnimsRef.current.delete(id);
+          }
+        }
+        if (hubSource !== null && payload.hubs !== undefined) {
+          applyHubBuckets(hubSource, payload.hubs);
+        }
+        if (routeSource !== null && payload.routes !== undefined) {
+          applyRouteBuckets(routeSource, payload.routes);
+        }
       }
+
+      setAttr("data-trailer-count", trailerSource.getFeatures().length);
+
+      // Leak guard: expose the OL uid of a stable trailer feature.
+      const probe = trailerSource.getFeatures()[0];
+      if (probe !== undefined) {
+        setAttr("data-trailer-uid", getUid(probe));
+      }
+
+      // Expose entity map sizes for soak test assertions.
+      setAttr("data-entity-trailers", maps.trailers.size);
     },
     [setAttr],
   );
-  useTrailerSnapshots(onSnapshot);
 
-  return <div ref={containerRef} className="app__map" data-testid="map" />;
+  /**
+   * Upsert a TrailerAnim for the animation loop from a keyframe.
+   *
+   * Looks up route geometry from the cached route DTOs. If the route is not
+   * loaded yet (geo fetch still in flight), the anim is created with a stub
+   * geometry (zero-length LineString); it will be corrected on the next resync.
+   */
+  function _upsertTrailerAnim(
+    trailerId: string,
+    routeId: string,
+    departMs: number,
+    etaMs: number,
+  ): void {
+    const trailerSource = trailerSourceRef.current;
+    if (trailerSource === null) return;
+
+    const existing = trailerAnimsRef.current.get(trailerId);
+    const routeDto = routeDtosRef.current.get(routeId);
+
+    // Build or reuse the route LineString geometry.
+    let routeGeom: LineString;
+    let routeLengthM: number;
+
+    if (routeDto !== undefined) {
+      const coords = routeDto.geometry.map((pair) =>
+        fromLonLat([pair[0] ?? 0, pair[1] ?? 0]),
+      );
+      routeGeom = new LineString(coords);
+      routeLengthM = routeGeom.getLength();
+    } else if (existing !== undefined) {
+      // Keep the existing geometry if no route DTO available yet.
+      routeGeom = existing.routeGeom;
+      routeLengthM = existing.routeLengthM;
+    } else {
+      // Stub: single-point zero-length geometry (no route data yet).
+      routeGeom = new LineString([[0, 0], [0, 0]]);
+      routeLengthM = 0;
+    }
+
+    if (existing !== undefined) {
+      // In-place update — do NOT recreate the TrailerAnim (would break the
+      // animation loop's reference into the same Map entry).
+      existing.routeGeom = routeGeom;
+      existing.routeLengthM = routeLengthM;
+      existing.departSimMs = departMs;
+      existing.etaSimMs = etaMs;
+      return;
+    }
+
+    // New trailer: look up or create its Point geometry from the source feature.
+    const featureId = `trailer:${trailerId}`;
+    const feature = trailerSource.getFeatureById(featureId);
+    let pointGeom: Point;
+    if (feature !== null) {
+      const geom = feature.getGeometry();
+      pointGeom = geom instanceof Point ? geom : new Point([0, 0]);
+    } else {
+      pointGeom = new Point([0, 0]);
+    }
+
+    trailerAnimsRef.current.set(trailerId, {
+      trailerId,
+      routeGeom,
+      routeLengthM,
+      departSimMs: departMs,
+      etaSimMs: etaMs,
+      pointGeom,
+    });
+  }
+
+  // Pass the stable entity maps ref to the hook (off the React render path).
+  useWsEnvelope(onEnvelope, entityMapsRef.current);
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <div ref={containerRef} className="app__map" data-testid="map" />
+      <Legend />
+    </div>
+  );
 }
