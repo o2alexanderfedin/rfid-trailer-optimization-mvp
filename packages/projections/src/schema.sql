@@ -36,6 +36,56 @@ CREATE TABLE IF NOT EXISTS hub_inventory (
   staged   JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
+-- SNS-02: the tag -> package registry, folded from PackageCreated.rfidTagId.
+-- tag_id is the identity so re-applying a registration is an idempotent upsert;
+-- an unmapped tag simply has no row (resolves to undefined, never an exception).
+CREATE TABLE IF NOT EXISTS tag_registry (
+  tag_id     TEXT PRIMARY KEY,
+  package_id TEXT NOT NULL
+);
+
+-- SNS-02/03: the latest fused zone estimate per (package_id, trailer_id) — the
+-- OBSERVED layer made queryable. confidence is the bounded posterior mass of
+-- estimated_zone (STRICTLY < 1.0, anti-P5b). posterior is the full distribution
+-- (JSONB) for auditing; last_reliable_checkpoint is the carried-forward anchor.
+CREATE TABLE IF NOT EXISTS zone_estimate (
+  package_id               TEXT             NOT NULL,
+  trailer_id               TEXT             NOT NULL,
+  estimated_zone           TEXT             NOT NULL,
+  confidence               DOUBLE PRECISION NOT NULL,
+  posterior                JSONB            NOT NULL,
+  last_reliable_checkpoint TEXT,
+  last_observed_at         TIMESTAMPTZ      NOT NULL,
+  PRIMARY KEY (package_id, trailer_id)
+);
+
+-- SNS-04/05: the OPEN exceptions feed. One row per detected planned-vs-observed
+-- disagreement (wrong-trailer / missed-unload). exception_id is the stable
+-- identity so re-running detection is an idempotent upsert (no flood, T-03-16).
+-- severity + recommended_action make every exception auditable (T-03-18).
+CREATE TABLE IF NOT EXISTS exceptions (
+  exception_id      TEXT PRIMARY KEY,
+  kind              TEXT             NOT NULL,
+  package_id        TEXT             NOT NULL,
+  trailer_id        TEXT             NOT NULL,
+  hub_id            TEXT,
+  severity          TEXT             NOT NULL,
+  recommended_action TEXT            NOT NULL,
+  confidence        DOUBLE PRECISION NOT NULL,
+  occurred_at       TIMESTAMPTZ      NOT NULL
+);
+
+-- SNS-04/05: the singleton false-positive-rate KPI counters. total_exceptions is
+-- the distinct exceptions ever opened; low_confidence_exceptions is the subset
+-- below the secondary confidence band. FP-rate = low / total (a REAL queryable
+-- ratio, not a placeholder) — the demo metric proving the feed stays credible.
+CREATE TABLE IF NOT EXISTS exception_kpi (
+  id                        BOOLEAN PRIMARY KEY DEFAULT TRUE,
+  total_exceptions          BIGINT  NOT NULL DEFAULT 0,
+  low_confidence_exceptions BIGINT  NOT NULL DEFAULT 0,
+  CONSTRAINT exception_kpi_singleton CHECK (id)
+);
+
 -- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored
 -- event that names a package; global_seq is the identity AND the strict order.
 CREATE TABLE IF NOT EXISTS audit_timeline (

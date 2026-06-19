@@ -10,6 +10,14 @@ export type {
   AuditEntryDto,
   RouteDto,
 } from "./routes/queries.js";
+// --- Phase 3 (SNS-04/05): exception feed + FP KPI + zone-estimate query ------
+export { registerExceptionRoutes } from "./routes/exceptions.js";
+export type {
+  ExceptionDto,
+  ExceptionKpiDto,
+  ZoneEstimateDto,
+} from "./routes/exceptions.js";
+export { PRODUCTION_DETECTION_CONFIG, DEMO_RFID_CONFIG } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";

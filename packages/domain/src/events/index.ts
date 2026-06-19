@@ -10,6 +10,10 @@ export type {
   TrailerDeparted,
   TrailerArrivedAtHub,
   TrailerDocked,
+  Severity,
+  RfidObserved,
+  WrongTrailerDetected,
+  MissedUnloadDetected,
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
@@ -23,4 +27,8 @@ export {
   trailerDepartedSchema,
   trailerArrivedAtHubSchema,
   trailerDockedSchema,
+  severitySchema,
+  rfidObservedSchema,
+  wrongTrailerDetectedSchema,
+  missedUnloadDetectedSchema,
 } from "./schemas.js";

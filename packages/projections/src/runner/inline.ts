@@ -5,16 +5,25 @@ import type {
   ProjectionDatabase,
 } from "../schema.js";
 import { OPERATIONAL_PROJECTIONS } from "../schema.js";
+import { DEFAULT_FUSION_CONFIG } from "@mm/sensor-fusion";
 import {
-  type OccurredEvent,
+  type ExceptionKind,
+  type ExceptionsState,
+  exceptionsReducer,
   emptyPackageLocationState,
   emptyTrailerStateMap,
   hubInventoryReducer,
   type HubInventoryState,
+  makeZoneEstimateReducer,
+  type OccurredEvent,
+  type OpenException,
   type PackageLocationState,
   packageLocationReducer,
+  type TagRegistryState,
+  tagRegistryReducer,
   type TrailerStateMap,
   trailerStateReducer,
+  type ZoneEstimateState,
 } from "../reducers/index.js";
 
 /**
@@ -221,6 +230,165 @@ async function applyHubInventory(
   }
 }
 
+async function applyTagRegistry(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  const rows = await db.selectFrom("tag_registry").selectAll().execute();
+  const state: TagRegistryState = new Map(
+    rows.map((r) => [r.tag_id, r.package_id]),
+  );
+  const next = tagRegistryReducer(state, toOccurred(replay));
+  for (const [tagId, packageId] of next) {
+    await db
+      .insertInto("tag_registry")
+      .values({ tag_id: tagId, package_id: packageId })
+      .onConflict((oc) =>
+        oc.column("tag_id").doUpdateSet({ package_id: packageId }),
+      )
+      .execute();
+  }
+}
+
+async function applyZoneEstimate(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  // The zone-estimate fold needs the tag registry to attribute tagId ->
+  // packageId. Read the persisted registry slice within the SAME handle so the
+  // resolution is consistent with everything appended in this transaction
+  // (read-your-writes); an unmapped tag resolves to undefined (T-03-13).
+  const registryRows = await db.selectFrom("tag_registry").selectAll().execute();
+  const registry = new Map(registryRows.map((r) => [r.tag_id, r.package_id]));
+
+  const rows = await db.selectFrom("zone_estimate").selectAll().execute();
+  const state: ZoneEstimateState = new Map(
+    rows.map((r) => [
+      `${r.package_id}|${r.trailer_id}`,
+      {
+        packageId: r.package_id,
+        trailerId: r.trailer_id,
+        estimatedZone: asZone(r.estimated_zone),
+        confidence: r.confidence,
+        posterior: asDistribution(r.posterior),
+        lastReliableCheckpoint: r.last_reliable_checkpoint,
+        lastObservedAt: toIso(r.last_observed_at),
+      },
+    ]),
+  );
+
+  const reduce = makeZoneEstimateReducer({
+    resolveTag: (tagId) => registry.get(tagId),
+    config: DEFAULT_FUSION_CONFIG,
+  });
+  const next = reduce(state, toOccurred(replay));
+
+  for (const est of next.values()) {
+    await db
+      .insertInto("zone_estimate")
+      .values({
+        package_id: est.packageId,
+        trailer_id: est.trailerId,
+        estimated_zone: est.estimatedZone,
+        confidence: est.confidence,
+        posterior: JSON.stringify(est.posterior),
+        last_reliable_checkpoint: est.lastReliableCheckpoint,
+        last_observed_at: est.lastObservedAt,
+      })
+      .onConflict((oc) =>
+        oc.columns(["package_id", "trailer_id"]).doUpdateSet({
+          estimated_zone: est.estimatedZone,
+          confidence: est.confidence,
+          posterior: JSON.stringify(est.posterior),
+          last_reliable_checkpoint: est.lastReliableCheckpoint,
+          last_observed_at: est.lastObservedAt,
+        }),
+      )
+      .execute();
+  }
+}
+
+async function applyExceptions(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  // Load the persisted exceptions slice + KPI counters into the reducer's state
+  // so the fold (and its idempotency) is identical live and on rebuild.
+  const [rows, kpi] = await Promise.all([
+    db.selectFrom("exceptions").selectAll().execute(),
+    db.selectFrom("exception_kpi").selectAll().executeTakeFirst(),
+  ]);
+  const open = new Map<string, OpenException>(
+    rows.map((r) => [
+      r.exception_id,
+      {
+        exceptionId: r.exception_id,
+        kind: asExceptionKind(r.kind),
+        packageId: r.package_id,
+        trailerId: r.trailer_id,
+        hubId: r.hub_id,
+        severity: asSeverity(r.severity),
+        recommendedAction: r.recommended_action,
+        confidence: r.confidence,
+        occurredAt: toIso(r.occurred_at),
+      },
+    ]),
+  );
+  const state: ExceptionsState = {
+    open,
+    totalExceptions: kpi === undefined ? 0 : Number(kpi.total_exceptions),
+    lowConfidenceExceptions:
+      kpi === undefined ? 0 : Number(kpi.low_confidence_exceptions),
+  };
+
+  const next = exceptionsReducer(state, toOccurred(replay));
+  if (next === state) return; // non-exception event ⇒ nothing to persist
+
+  for (const ex of next.open.values()) {
+    await db
+      .insertInto("exceptions")
+      .values({
+        exception_id: ex.exceptionId,
+        kind: ex.kind,
+        package_id: ex.packageId,
+        trailer_id: ex.trailerId,
+        hub_id: ex.hubId,
+        severity: ex.severity,
+        recommended_action: ex.recommendedAction,
+        confidence: ex.confidence,
+        occurred_at: ex.occurredAt,
+      })
+      .onConflict((oc) =>
+        oc.column("exception_id").doUpdateSet({
+          kind: ex.kind,
+          package_id: ex.packageId,
+          trailer_id: ex.trailerId,
+          hub_id: ex.hubId,
+          severity: ex.severity,
+          recommended_action: ex.recommendedAction,
+          confidence: ex.confidence,
+          occurred_at: ex.occurredAt,
+        }),
+      )
+      .execute();
+  }
+
+  await db
+    .insertInto("exception_kpi")
+    .values({
+      id: true,
+      total_exceptions: next.totalExceptions,
+      low_confidence_exceptions: next.lowConfidenceExceptions,
+    })
+    .onConflict((oc) =>
+      oc.column("id").doUpdateSet({
+        total_exceptions: next.totalExceptions,
+        low_confidence_exceptions: next.lowConfidenceExceptions,
+      }),
+    )
+    .execute();
+}
+
 type Applier = (db: Kysely<ProjectionDb>, replay: ReplayEvent) => Promise<void>;
 
 /** Each operational projection: its checkpoint name + its load/fold/persist step. */
@@ -228,6 +396,15 @@ const APPLIERS: ReadonlyArray<{ name: OperationalProjectionName; apply: Applier 
   { name: "package-location", apply: applyPackageLocation },
   { name: "trailer-state", apply: applyTrailerState },
   { name: "hub-inventory", apply: applyHubInventory },
+  // tag-registry MUST precede zone-estimate: a PackageCreated in this event
+  // registers the tag BEFORE the zone-estimate applier resolves a same-call
+  // RfidObserved against the persisted registry (read-your-writes within one
+  // applyInline pass).
+  { name: "tag-registry", apply: applyTagRegistry },
+  { name: "zone-estimate", apply: applyZoneEstimate },
+  // The exceptions feed folds ONLY the detector's WrongTrailerDetected /
+  // MissedUnloadDetected; order vs the others is immaterial (disjoint events).
+  { name: "exceptions", apply: applyExceptions },
 ];
 
 /**
@@ -345,4 +522,77 @@ const STATUSES = new Set(["in_transit", "arrived", "docked"]);
 function asStatus(value: string): "in_transit" | "arrived" | "docked" {
   if (STATUSES.has(value)) return value as "in_transit" | "arrived" | "docked";
   throw new Error(`Unknown trailer status in projection row: ${value}`);
+}
+
+const ZONE_VALUES = new Set(["rear", "middle", "nose"]);
+function asZone(value: string): "rear" | "middle" | "nose" {
+  if (ZONE_VALUES.has(value)) return value as "rear" | "middle" | "nose";
+  throw new Error(`Unknown zone in projection row: ${value}`);
+}
+
+/** Re-hydrate the persisted JSONB posterior as a 3-zone distribution. */
+function asDistribution(
+  value: Readonly<Record<string, number>>,
+): Readonly<Record<"rear" | "middle" | "nose", number>> {
+  return { rear: value.rear ?? 0, middle: value.middle ?? 0, nose: value.nose ?? 0 };
+}
+
+const EXCEPTION_KINDS = new Set(["wrong-trailer", "missed-unload"]);
+function asExceptionKind(value: string): ExceptionKind {
+  if (EXCEPTION_KINDS.has(value)) return value as ExceptionKind;
+  throw new Error(`Unknown exception kind in projection row: ${value}`);
+}
+
+const SEVERITIES = new Set(["info", "warning", "critical"]);
+function asSeverity(value: string): "info" | "warning" | "critical" {
+  if (SEVERITIES.has(value)) return value as "info" | "warning" | "critical";
+  throw new Error(`Unknown severity in projection row: ${value}`);
+}
+
+/**
+ * Read the current OPEN exceptions (SNS-04/05), deterministically ordered by
+ * `occurred_at` then `exception_id` — the stable feed order the API surfaces.
+ */
+export async function readOpenExceptions(
+  db: Kysely<ProjectionDb>,
+): Promise<readonly OpenException[]> {
+  const rows = await db
+    .selectFrom("exceptions")
+    .selectAll()
+    .orderBy("occurred_at", "asc")
+    .orderBy("exception_id", "asc")
+    .execute();
+  return rows.map((r) => ({
+    exceptionId: r.exception_id,
+    kind: asExceptionKind(r.kind),
+    packageId: r.package_id,
+    trailerId: r.trailer_id,
+    hubId: r.hub_id,
+    severity: asSeverity(r.severity),
+    recommendedAction: r.recommended_action,
+    confidence: r.confidence,
+    occurredAt: toIso(r.occurred_at),
+  }));
+}
+
+/** The persisted false-positive-rate KPI snapshot (SNS-04/05). */
+export interface ExceptionKpiSnapshot {
+  readonly totalExceptions: number;
+  readonly lowConfidenceExceptions: number;
+  /** `lowConfidenceExceptions / totalExceptions`, or 0 when none opened. */
+  readonly falsePositiveRate: number;
+}
+
+/** Read the false-positive-rate KPI counters as a queryable snapshot. */
+export async function readExceptionKpi(
+  db: Kysely<ProjectionDb>,
+): Promise<ExceptionKpiSnapshot> {
+  const kpi = await db.selectFrom("exception_kpi").selectAll().executeTakeFirst();
+  const total = kpi === undefined ? 0 : Number(kpi.total_exceptions);
+  const low = kpi === undefined ? 0 : Number(kpi.low_confidence_exceptions);
+  return {
+    totalExceptions: total,
+    lowConfidenceExceptions: low,
+    falsePositiveRate: total === 0 ? 0 : low / total,
+  };
 }

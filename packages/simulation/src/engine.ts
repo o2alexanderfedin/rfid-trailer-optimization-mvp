@@ -13,6 +13,7 @@ import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
 import { buildRoutes } from "./network/routes.js";
 import { makeRng } from "./rng.js";
 import { VirtualClock } from "./clock.js";
+import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
 
 /**
  * SIM-02: the seeded, deterministic tick/event-queue engine.
@@ -48,6 +49,14 @@ export interface SimulateOptions {
   readonly seed: number;
   /** Number of ticks to simulate (1 tick = {@link MS_PER_TICK} domain ms). */
   readonly durationTicks: number;
+  /**
+   * SIM-03: OPT-IN probabilistic RFID emission. When present, the engine emits
+   * `RfidObserved` at dock-door portals (on load) and trailer antennas (during
+   * dwell), with seeded drops + jitter. When ABSENT, the stream is the exact
+   * pre-Phase-3 (non-RFID) golden stream — so existing determinism tests stay
+   * byte-identical. Partial: unspecified knobs fall back to {@link DEFAULT_RFID_CONFIG}.
+   */
+  readonly rfid?: Partial<RfidSimConfig>;
 }
 
 /** Options for the store-driven run. */
@@ -125,12 +134,22 @@ class EventQueue {
  * the SINGLE source of truth shared by `simulate` and `runSimulation`.
  */
 function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks } = opts;
+  const { seed, durationTicks, rfid } = opts;
   if (!Number.isInteger(durationTicks) || durationTicks < 0) {
     throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
   }
 
+  // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
+  // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
+  const rfidEnabled = rfid !== undefined;
+  const rfidConfig: RfidSimConfig = resolveRfidConfig(rfid);
+
   const rng = makeRng(seed);
+  // SIM-03: RFID draws from a SEPARATE seeded substream (seed ^ a fixed salt) so
+  // enabling RFID never perturbs the operational rng — the non-RFID event order
+  // is byte-identical with or without the rfid option, while the RFID stream is
+  // still fully reproducible per seed.
+  const rfidRng = makeRng((seed ^ 0x5f_1d_a7_c3) >>> 0);
   const clock = new VirtualClock(EPOCH_ISO, MS_PER_TICK);
   const queue = new EventQueue();
   const out: SimulatedEvent[] = [];
@@ -147,6 +166,32 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   /** Emit one event onto its stream at the current domain time. */
   const emit = (streamId: string, event: DomainEvent): void => {
     out.push({ streamId, event, occurredAt: clock.nowIso() });
+  };
+
+  /**
+   * SIM-03: emit the seeded RFID reads for one portal load / antenna dwell.
+   * packageIds map to tags via the `TAG-${packageId}` scheme; each resulting
+   * `RfidObserved` is placed on the (planned) trailer's stream. ALL miss/jitter
+   * decisions are drawn from the shared seeded `rng` (determinism), and time is
+   * the current virtual-clock instant.
+   */
+  const emitRfid = (
+    readerType: "portal" | "antenna",
+    trailerId: string,
+    hubId: string,
+    packageIds: readonly string[],
+  ): void => {
+    const tags = packageIds.map((packageId) => `TAG-${packageId}`);
+    const reads = emitRfidReads({
+      tags,
+      readerType,
+      trailerId,
+      hubId,
+      occurredAt: clock.nowIso(),
+      rng: rfidRng,
+      config: rfidConfig,
+    });
+    for (const read of reads) emit(`trailer-${trailerId}`, read);
   };
 
   // --- Bootstrap: register every hub then every route, all at tick 0. -------
@@ -192,6 +237,9 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
           destHubId: dest.hubId,
           sizeClass,
           weight,
+          // SIM-03/SNS-02: deterministic tag→package key. Only attached when RFID
+          // is enabled so the non-RFID golden payloads are byte-unchanged.
+          ...(rfidEnabled ? { rfidTagId: `TAG-${packageId}` } : {}),
         },
       };
       emit(`package-${packageId}`, created);
@@ -239,6 +287,12 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     };
     emit(`trailer-${trailerId}`, departed);
 
+    // SIM-03: DOCK-PORTAL reads as the loaded packages cross the door. Strong
+    // RSSI, one candidate read per tag, subject to missRate (drops are omitted).
+    if (rfidEnabled && loaded.length > 0) {
+      emitRfid("portal", trailerId, center.hubId, loaded);
+    }
+
     const arriveTick = departTick + TRANSIT_TICKS;
     schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
   };
@@ -263,6 +317,13 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       payload: { trailerId, hubId: spoke.hubId, dockDoorId: `${spoke.hubId}-DOCK1` },
     };
     emit(`trailer-${trailerId}`, docked);
+
+    // SIM-03: TRAILER-ANTENNA burst during the dwell window — multiple noisier,
+    // zone-ish reads per carried tag so the fusion engine's dwell windowing is
+    // exercised. Subject to missRate; dropped reads are simply omitted.
+    if (rfidEnabled && carried.length > 0) {
+      emitRfid("antenna", trailerId, spoke.hubId, carried);
+    }
 
     // Unload each carried package at the destination spoke: unload scan then
     // arrival (the package has reached its destination hub).

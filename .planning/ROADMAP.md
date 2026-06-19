@@ -22,9 +22,9 @@ before/after KPI "money slide" — composes everything into the persuasive live 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
-- [ ] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
-- [ ] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
+- [x] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
+- [x] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
+- [x] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
 - [ ] **Phase 4: Rolling Optimizer** - Continuous, scoped re-optimization (min-cost flow + VRPTW) with freeze windows, anti-thrashing, and split/reassign/hold/over-carry repair
 - [ ] **Phase 5: Simulation + Visualization Wrapper** - Animated realtime USA map, scenario knobs, exception feed, audit timeline, and the before/after KPI dashboard
 
@@ -87,7 +87,15 @@ Notes: This is the load-bearing correctness phase. Defend against P1 (inverted L
   3. The system detects wrong-trailer events (a package observed in a trailer the plan did not assign) and emits an exception with severity and a recommended action — only on positive observation in the wrong place above a confidence threshold.
   4. The system detects missed-unload events (a package for the current hub still observed in the trailer after departure) and emits an exception with severity and a recommended action.
   5. A missing RFID read never marks a package as "missing" or vanished (absence of evidence ≠ evidence of absence), and the exception feed is not flooded with false positives.
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+- [ ] 03-01-PLAN.md — Domain: add the 3 new events (RfidObserved/WrongTrailerDetected/MissedUnloadDetected) + rfidTagId to the closed union + zod + contract.assert (SNS-01, SNS-02)
+- [ ] 03-02-PLAN.md — @mm/sensor-fusion (pure, TDD): RSSI→likelihood (capped 0.85), dwell windowing, Bayesian zone fusion (Markov prior + entropy floor) + anti-P5b confidence-cap keystone (SNS-01, SNS-03)
+- [ ] 03-03-PLAN.md — @mm/simulation (TDD): emit seeded probabilistic RfidObserved at portals/antennas with missRate + rssiNoise; same seed ⇒ identical RFID stream (SIM-03)
+- [ ] 03-04-PLAN.md — Detection predicates (pure, TDD): detectWrongTrailer / detectMissedUnload over planned-vs-observed + the anti-P6 absence≠missing keystone (SNS-04, SNS-05)
+- [ ] 03-05-PLAN.md — Projections (inline): tag-registry (SNS-02) + zone-estimate read models with idempotent checkpoints (SNS-02)
+- [ ] 03-06-PLAN.md — Detector + inline exceptions projection + false-positive KPI: planned-vs-observed ⇒ append exception events, post-departure gated (SNS-04, SNS-05)
+- [ ] 03-07-PLAN.md — @mm/api: GET /exceptions + KPI + zone-estimate queries + runDetection wired into the per-tick sim driver; end-to-end demoable feed (SNS-04, SNS-05)
 
 Notes: Detection must follow load planning because it compares *planned* (from scans + plan, Phase 2) against *observed* (RFID evidence) — both inputs must already exist. Defend against P6 (RFID-as-truth) with two explicit layers (planned/known vs confidence-scored observed); raise exceptions only on disagreement above threshold; a missed read must never imply "package gone." Defend against P5b (double-counted observations) with per-tag/per-reader/per-dwell observation windows feeding one fused observation, and an explicit independence model that caps confidence. Track the false-positive rate as a demo KPI. `sensor-fusion` is a pure scoring module; the exceptions projection is decision-critical (inline).
 
@@ -131,6 +139,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Operational Data Foundation + Live Map Spike | 7/7 | ✅ Complete | 2026-06-19 |
 | 2. Load Planning | 6/6 | ✅ Complete | 2026-06-19 |
-| 3. RFID-Assisted Validation | 0/TBD | Not started | - |
+| 3. RFID-Assisted Validation | 7/7 | ✅ Complete | 2026-06-19 |
 | 4. Rolling Optimizer | 0/TBD | Not started | - |
 | 5. Simulation + Visualization Wrapper | 0/TBD | Not started | - |

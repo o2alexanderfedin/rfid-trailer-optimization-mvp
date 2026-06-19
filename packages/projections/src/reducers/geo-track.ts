@@ -153,11 +153,16 @@ export function geoTrackReducer(
         ],
       };
     }
+    // Phase-3 RFID/detection events do not move the map track — handled by the
+    // dedicated zone-estimate/exception projections (later Phase-3 plans).
     case "HubRegistered":
     case "PackageCreated":
     case "PackageScanned":
     case "PackageArrivedAtHub":
     case "TrailerDocked":
+    case "RfidObserved":
+    case "WrongTrailerDetected":
+    case "MissedUnloadDetected":
       return { state, keyframes: [] };
     default:
       return assertNeverGeo(event);

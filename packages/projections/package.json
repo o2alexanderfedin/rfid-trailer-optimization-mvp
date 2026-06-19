@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@mm/domain": "workspace:*",
+    "@mm/sensor-fusion": "workspace:*",
     "kysely": "0.29.2"
   }
 }
