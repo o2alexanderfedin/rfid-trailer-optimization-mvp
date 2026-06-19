@@ -9,6 +9,10 @@ dist/
 build/
 out/
 *.tsbuildinfo
+.turbo/
+
+# Tooling caches
+.playwright-mcp/
 
 # Logs
 logs/
