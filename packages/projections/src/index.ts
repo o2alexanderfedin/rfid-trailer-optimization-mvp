@@ -177,6 +177,7 @@ export {
   runCatchup,
   rebuildCatchup,
   readAuditTimeline,
+  readTrailerAuditTimeline,
   readGeoKeyframes,
   serializeCatchup,
 } from "./runner/catchup.js";
