@@ -131,6 +131,35 @@ describe("routeTrailers — ETAs + utilization + reused HARD gate", () => {
     expect(isFeasible(result)).toBe(false);
   });
 
+  it("FIX 4: a hub-revisiting route is not over-counted with phantom LIFO blockers", () => {
+    // Route revisits hub "0" at the END after visiting 10,20,30: 0→10→20→30→0.
+    // Each visit unloads a DIFFERENT block; the load is LIFO-correct by
+    // construction (stop k at depth k, unloaded k-th), so it must be feasible.
+    //
+    // The phantom-blocker bug: buildUnloadOrderMap collapses both "0" visits to a
+    // single unload order (0), so the FINAL "0" block (loaded at the nose, depth 4)
+    // is wrongly seen as unloading FIRST. The three intervening blocks (10,20,30) —
+    // all in front of it and all "unloading later" under the collapsed order — are
+    // counted as 3 PHANTOM blockers, exceeding maxAllowedBlockers (2) ⇒ a HARD
+    // false-negative. Physically the nose block is unloaded LAST, with NOTHING
+    // still in front of it (10,20,30 already came off), so the true count is 0.
+    const travel = lineTravel();
+    const stops: readonly Stop[] = [
+      stop({ hubId: "0", windowStartMin: 0, windowEndMin: 5, demand: 1 }),
+      stop({ hubId: "10", windowStartMin: 10, windowEndMin: 12, demand: 1 }),
+      stop({ hubId: "20", windowStartMin: 30, windowEndMin: 35, demand: 1 }),
+      stop({ hubId: "30", windowStartMin: 50, windowEndMin: 55, demand: 1 }),
+      // Window forces the SECOND "0" visit to be serviced LAST ⇒ a true revisit.
+      stop({ hubId: "0", windowStartMin: 80, windowEndMin: 90, demand: 1 }),
+    ];
+    const route = routeTrailers({ trailerId: "T1", capacity: 10, stops, startHubId: "0", travel });
+
+    // The route genuinely revisits "0" (a true hub-revisit, not a dedupe).
+    expect(route.sequence.map((s) => s.hubId)).toEqual(["0", "10", "20", "30", "0"]);
+    // A LIFO-correct revisiting load must NOT be flagged infeasible (no phantoms).
+    expect(route.feasible).toBe(true);
+  });
+
   it("is deterministic: identical input ⇒ identical route + ETAs + utilization", () => {
     const travel = lineTravel();
     const stops: readonly Stop[] = [

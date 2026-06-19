@@ -67,10 +67,16 @@ export interface RouteTrailersInput {
  *  - a {@link LoadBlock} destined to that hub,
  *  - a slice at `depth: k` holding that block (rear→nose = first→last unload).
  *
- * Stops sharing a hub are not specially merged — the validator collapses
- * duplicate hubs to their earliest occurrence, which matches loading them at the
- * lowest depth. This is the ONLY place the optimizer talks to the load planner;
- * it never computes feasibility itself.
+ * Each stop is a DISTINCT unload event in time, so its synthetic gate hub id is
+ * made unique per stop position (`"<hubId>#<k>"`). A route that REVISITS a hub
+ * (e.g. 0→10→0) thus yields strictly-increasing unload orders (0,1,2,…) instead
+ * of collapsing both visits of the revisited hub to one order — which previously
+ * counted PHANTOM blockers against the later visit (the block loaded at the nose
+ * and unloaded LAST was mis-ranked as unloading first), falsely failing LIFO.
+ * Distinguishing the visits makes unloadOrder == depth == k, the physically
+ * correct (zero-blocker) LIFO load. Non-revisiting routes are unaffected (every
+ * hub already unique). This is the ONLY place the optimizer talks to the load
+ * planner; it never computes feasibility itself.
  */
 function buildLoadForGate(sequence: readonly Stop[]): {
   readonly plan: { readonly slices: readonly { readonly depth: number; readonly loadBlockIds: readonly string[] }[] };
@@ -83,13 +89,18 @@ function buildLoadForGate(sequence: readonly Stop[]): {
 
   sequence.forEach((stop, k) => {
     const loadBlockId = "vrptw-blk-" + String(k) + "-" + stop.hubId;
-    route.push({ hubId: stop.hubId, stopIndex: k });
+    // A unique gate hub per stop OCCURRENCE: a hub revisited at two stops is two
+    // distinct unload events, so the validator must rank them as distinct orders
+    // (no earliest-occurrence collapse). For a route that visits each hub once
+    // this is `"<hubId>#0"` everywhere it appears, equivalent to the bare hub id.
+    const gateHubId = stop.hubId + "#" + String(k);
+    route.push({ hubId: gateHubId, stopIndex: k });
     blocks.push({
       loadBlockId,
       key: {
         currentHubId: "origin",
-        nextUnloadHubId: stop.hubId,
-        finalDestHubId: stop.hubId,
+        nextUnloadHubId: gateHubId,
+        finalDestHubId: gateHubId,
         slaClass: "standard",
         deadlineBucket: 0,
         handlingClass: "standard",
