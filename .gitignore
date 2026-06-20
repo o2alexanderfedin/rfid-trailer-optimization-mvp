@@ -9,6 +9,10 @@ dist/
 build/
 out/
 *.tsbuildinfo
+.turbo/
+
+# Tooling caches
+.playwright-mcp/
 
 # Logs
 logs/
@@ -34,9 +38,11 @@ coverage/
 !.vscode/extensions.json
 *.swp
 
-# Local agent memory (not part of the project)
-.remember/
-
 # Database / runtime data
 *.local
 pgdata/
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/

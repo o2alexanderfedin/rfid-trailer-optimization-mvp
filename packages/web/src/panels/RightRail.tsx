@@ -1,0 +1,151 @@
+/**
+ * RightRail — operator panel sidebar composing AlertFeed + TrailerDetail
+ * + KpiDashboard + MoneySlide (UI-03 / UI-04).
+ *
+ * Layout (frontend-design skill):
+ *  - Fixed-width right rail alongside the full-height map.
+ *  - Top: AlertFeed (scrollable, most-recent-first exception feed)
+ *  - Bottom: tabbed detail section with three tabs:
+ *      - "Plan" → TrailerDetail / AuditTimeline (VIZ-05 / UI-02)
+ *      - "KPIs" → KpiDashboard (UI-03) — live operational metrics
+ *      - "vs Baseline" → MoneySlide (UI-04) — before/after money slide
+ *  - Clean, legible operator aesthetic: neutral dark background, clear section
+ *    headings, consistent padding, high-contrast text.
+ *
+ * The RightRail is a pure layout component — no data-fetching.
+ */
+import { useState } from "react";
+import { AlertFeed } from "./AlertFeed.js";
+import { TrailerDetail } from "./TrailerDetail.js";
+import { AuditTimeline } from "./AuditTimeline.js";
+import { KpiDashboard } from "./KpiDashboard.js";
+import { MoneySlide } from "./MoneySlide.js";
+import type { FeedEntry } from "./AlertFeed.js";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type DetailTab = "plan" | "history" | "kpis" | "money";
+
+interface RightRailProps {
+  /** The sorted realtime exception feed (from useAlertFeed). */
+  readonly feed: readonly FeedEntry[];
+  /** The currently selected trailer id (from map click), or null. */
+  readonly selectedTrailerId: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+/**
+ * Right-rail operator panel: alert feed + tabbed detail panels.
+ *
+ * The panel is split vertically:
+ *  - Top:    AlertFeed (scrollable exception list, most recent first)
+ *  - Bottom: Tabbed view:
+ *              "Plan"       → TrailerDetail / AuditTimeline
+ *              "KPIs"       → KpiDashboard (UI-03)
+ *              "vs Baseline"→ MoneySlide (UI-04)
+ */
+export function RightRail({
+  feed,
+  selectedTrailerId,
+}: RightRailProps): React.JSX.Element {
+  const [activeTab, setActiveTab] = useState<DetailTab>("kpis");
+
+  return (
+    <aside className="right-rail" data-testid="right-rail" aria-label="Operator panels">
+      {/* --- Alert Feed (UI-01) ------------------------------------------- */}
+      <section className="right-rail__section right-rail__section--feed">
+        <header className="right-rail__section-header">
+          <h2 className="right-rail__section-title">
+            Live Exceptions
+            {feed.length > 0 && (
+              <span className="right-rail__badge" data-testid="exception-count">
+                {feed.length}
+              </span>
+            )}
+          </h2>
+        </header>
+        <div className="right-rail__feed-scroll">
+          <AlertFeed feed={feed} />
+        </div>
+      </section>
+
+      {/* --- Divider ------------------------------------------------------- */}
+      <div className="right-rail__divider" role="separator" />
+
+      {/* --- Detail / KPI / MoneySlide (tabbed) --------------------------- */}
+      <section className="right-rail__section right-rail__section--detail">
+        <header className="right-rail__section-header">
+          <h2 className="right-rail__section-title">
+            {activeTab === "kpis"
+              ? "Live KPIs"
+              : activeTab === "money"
+                ? "vs Baseline"
+                : selectedTrailerId !== null
+                  ? `Trailer: ${selectedTrailerId}`
+                  : "Trailer Detail"}
+          </h2>
+          <div className="right-rail__tabs" role="tablist">
+            {/* KPI Dashboard tab (always visible) */}
+            <button
+              className={`right-rail__tab${activeTab === "kpis" ? " right-rail__tab--active" : ""}`}
+              role="tab"
+              aria-selected={activeTab === "kpis"}
+              data-testid="tab-kpis"
+              onClick={() => setActiveTab("kpis")}
+            >
+              KPIs
+            </button>
+            {/* Money Slide tab (always visible) */}
+            <button
+              className={`right-rail__tab${activeTab === "money" ? " right-rail__tab--active" : ""}`}
+              role="tab"
+              aria-selected={activeTab === "money"}
+              data-testid="tab-money"
+              onClick={() => setActiveTab("money")}
+            >
+              vs Baseline
+            </button>
+            {/* Plan detail tabs (only when trailer is selected) */}
+            {selectedTrailerId !== null && (
+              <>
+                <button
+                  className={`right-rail__tab${activeTab === "plan" ? " right-rail__tab--active" : ""}`}
+                  role="tab"
+                  aria-selected={activeTab === "plan"}
+                  onClick={() => setActiveTab("plan")}
+                >
+                  Plan
+                </button>
+                <button
+                  className={`right-rail__tab${activeTab === "history" ? " right-rail__tab--active" : ""}`}
+                  role="tab"
+                  aria-selected={activeTab === "history"}
+                  onClick={() => setActiveTab("history")}
+                >
+                  History
+                </button>
+              </>
+            )}
+          </div>
+        </header>
+
+        <div className="right-rail__detail-scroll">
+          {activeTab === "kpis" ? (
+            <KpiDashboard />
+          ) : activeTab === "money" ? (
+            <MoneySlide />
+          ) : activeTab === "plan" || selectedTrailerId === null ? (
+            <TrailerDetail trailerId={selectedTrailerId} />
+          ) : (
+            <AuditTimeline kind="trailer" entityId={selectedTrailerId} />
+          )}
+        </div>
+      </section>
+    </aside>
+  );
+}

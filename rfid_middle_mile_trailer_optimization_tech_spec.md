@@ -140,6 +140,7 @@ A block is typically grouped by:
 - Size/weight class
 - Trailer assignment
 
+
 Load blocks are the primary optimization unit.
 
 Example:

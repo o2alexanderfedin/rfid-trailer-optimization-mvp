@@ -22,11 +22,11 @@ before/after KPI "money slide" — composes everything into the persuasive live 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
-- [ ] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
-- [ ] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
-- [ ] **Phase 4: Rolling Optimizer** - Continuous, scoped re-optimization (min-cost flow + VRPTW) with freeze windows, anti-thrashing, and split/reassign/hold/over-carry repair
-- [ ] **Phase 5: Simulation + Visualization Wrapper** - Animated realtime USA map, scenario knobs, exception feed, audit timeline, and the before/after KPI dashboard
+- [x] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
+- [x] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
+- [x] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
+- [x] **Phase 4: Rolling Optimizer** - Continuous, scoped re-optimization (min-cost flow + VRPTW) with freeze windows, anti-thrashing, and split/reassign/hold/over-carry repair
+- [x] **Phase 5: Simulation + Visualization Wrapper** - Animated realtime USA map, scenario knobs, exception feed, audit timeline, and the before/after KPI dashboard
 
 ## Phase Details
 
@@ -41,7 +41,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A live-vs-rebuilt CI test passes: dropping every projection and rebuilding it purely by replaying the event log (strictly by global sequence) yields byte-identical state to the live run.
   4. Concurrent appends to the same stream are rejected by a `UNIQUE(stream_id, version)` optimistic-concurrency guard (the conflicting writer reloads and retries), and re-applying an already-processed event is a no-op (idempotent projections).
   5. A thin OpenLayers + OSM web slice renders all hubs and routes across the USA and shows simulated trailers as points driven by the geo-track projection — the empty-but-live map centerpiece.
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+- [x] 01-01-PLAN.md — Walking skeleton: monorepo + OrbStack Postgres + one event → inline projection → API read → live OSM map with one real hub (FND-01) + SKELETON.md
+- [x] 01-02-PLAN.md — Domain: closed versioned DomainEvent union + zod-validated typed ingestion boundary (FND-01, FND-03)
+- [x] 01-03-PLAN.md — Event store: append-only JSONB + optimistic concurrency (UNIQUE(stream_id,version) + ConcurrencyError + retry) + global ordering (FND-01, FND-02)
+- [x] 01-04-PLAN.md — Operational projections: pure reducers, idempotent inline fold, truncate+replay golden-replay test (FND-04, FND-05, FND-06, FND-07)
+- [x] 01-05-PLAN.md — Simulation: ~10 US metro hubs + great-circle routes + seeded deterministic event stream driving projections (SIM-01, SIM-02)
+- [x] 01-06-PLAN.md — Query API + audit-timeline + geo-track projections + ws snapshots (FND-05, FND-06, FND-07, FND-08)
+- [x] 01-07-PLAN.md — Live OpenLayers + OSM web slice: hubs + routes + live trailer points with leak guard (VIZ-01)
 **UI hint**: yes
 
 Notes: This phase bakes in the foundation's HIGH-cost-to-retrofit invariants. Enforce determinism (P3: pure (state,event) reducers, no `Date.now()`/`Math.random()`/unstable sort in handlers, timestamps from event payloads, replay by `global_seq` only), optimistic concurrency (P4: `UNIQUE(stream_id, version)` + retry-on-conflict — the sim and, later, the optimizer are concurrent writers), idempotent projections (P5a: per-projection last-seq fold), and event `schemaVersion` discriminators on the closed `DomainEvent` union (P11). The simulator is pulled in here deliberately — it is the only data source for every later phase — and the thin geo-only map slice is stood up now to de-risk OpenLayers before the optimizer lands. A `Clock` abstraction separates domain time (`occurred_at`) from wall time (`recorded_at`). Map full animation/interaction is deferred to Phase 5; this slice only proves hubs + routes + points render live without leaks.
@@ -57,7 +65,14 @@ Notes: This phase bakes in the foundation's HIGH-cost-to-retrofit invariants. En
   3. An independent validator (separate code path that recomputes blockers from placed slices) flags accessibility violations — exceeding max blockers is a HARD violation, fewer is SOFT — and feasibility is a hard gate that is never folded into the optimization score; partial-LIFO accepts bounded blockers with a rehandle cost instead of rejecting outright.
   4. Each block and plan gets a rehandle risk score (blocker count/volume, fragile/dock-delay/SLA penalties) and a utilization score against the soft 75–90% band (penalty on both under- and over-utilization).
   5. A naive baseline planner (e.g., arrival/FIFO order) runs on the *same* inputs through shared KPI plumbing, enabling a before/after comparison later.
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [x] 02-01-PLAN.md — Domain: flesh out LoadBlock/TrailerSlice + Phase-2 planning value types (PlanningPackage, SLA/handling/size enums, PlannerConfig defaults) — the shared contract (AGG-01, AGG-02, LOAD-01)
+- [x] 02-02-PLAN.md — @mm/aggregation (pure, TDD): aggregate→split→priority→deadline-bucket; packages → feasible, scored, prioritized load blocks (AGG-01, AGG-02, AGG-03, AGG-04)
+- [x] 02-03-PLAN.md — @mm/load-planner foundation (pure, TDD): ONE canonical LIFO invariant + blocker predicate, rear→nose trailer model, route unload-order map, P2-separated type contracts (LOAD-01, LOAD-02)
+- [x] 02-04-PLAN.md — Greedy planner + INDEPENDENT virtual-unload validator + partial-LIFO + the keystone golden reversed-plan fixture + planner-vs-validator property test (LOAD-03, LOAD-04, LOAD-05)
+- [x] 02-05-PLAN.md — Scoring (rehandle + utilization, P2-separate), loading instructions, per-placement rationale, FIFO baseline sharing the scoring plumbing + beat-it test (LOAD-06, LOAD-07, LOAD-08, LOAD-09, LOAD-10)
+- [x] 02-06-PLAN.md — Thin @mm/api POST /plan: runs aggregate→plan+baseline→validate→score→instructions, gates on feasibility (P2 at the boundary); demoable end to end (LOAD-08)
 
 Notes: This is the load-bearing correctness phase. Defend against P1 (inverted LIFO depth↔unload-order mapping) with one canonical invariant asserted everywhere, an *independent* validator that recomputes blockers from placed slices rather than trusting placement order, and golden fixtures that flag a deliberately-reversed plan (the single most important test in the codebase) plus a property test fuzzing the planner against the validator. Defend against P2 (feasibility folded into score) by keeping feasibility (hard gate) and rehandle cost (soft score) as two separate validation outputs, never collapsed until the gate passes; unit-test the exact blocker predicate with same-hub and multi-block-slice fixtures. The baseline planner is designed in *here* (P8) because the planner already needs something to beat; it shares KPI plumbing so the Phase 5 "money slide" is wiring, not a rebuild. `aggregation` and `load-planner` are pure, IO-free, TDD-friendly modules.
 
@@ -72,7 +87,15 @@ Notes: This is the load-bearing correctness phase. Defend against P1 (inverted L
   3. The system detects wrong-trailer events (a package observed in a trailer the plan did not assign) and emits an exception with severity and a recommended action — only on positive observation in the wrong place above a confidence threshold.
   4. The system detects missed-unload events (a package for the current hub still observed in the trailer after departure) and emits an exception with severity and a recommended action.
   5. A missing RFID read never marks a package as "missing" or vanished (absence of evidence ≠ evidence of absence), and the exception feed is not flooded with false positives.
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+- [ ] 03-01-PLAN.md — Domain: add the 3 new events (RfidObserved/WrongTrailerDetected/MissedUnloadDetected) + rfidTagId to the closed union + zod + contract.assert (SNS-01, SNS-02)
+- [ ] 03-02-PLAN.md — @mm/sensor-fusion (pure, TDD): RSSI→likelihood (capped 0.85), dwell windowing, Bayesian zone fusion (Markov prior + entropy floor) + anti-P5b confidence-cap keystone (SNS-01, SNS-03)
+- [ ] 03-03-PLAN.md — @mm/simulation (TDD): emit seeded probabilistic RfidObserved at portals/antennas with missRate + rssiNoise; same seed ⇒ identical RFID stream (SIM-03)
+- [ ] 03-04-PLAN.md — Detection predicates (pure, TDD): detectWrongTrailer / detectMissedUnload over planned-vs-observed + the anti-P6 absence≠missing keystone (SNS-04, SNS-05)
+- [ ] 03-05-PLAN.md — Projections (inline): tag-registry (SNS-02) + zone-estimate read models with idempotent checkpoints (SNS-02)
+- [ ] 03-06-PLAN.md — Detector + inline exceptions projection + false-positive KPI: planned-vs-observed ⇒ append exception events, post-departure gated (SNS-04, SNS-05)
+- [ ] 03-07-PLAN.md — @mm/api: GET /exceptions + KPI + zone-estimate queries + runDetection wired into the per-tick sim driver; end-to-end demoable feed (SNS-04, SNS-05)
 
 Notes: Detection must follow load planning because it compares *planned* (from scans + plan, Phase 2) against *observed* (RFID evidence) — both inputs must already exist. Defend against P6 (RFID-as-truth) with two explicit layers (planned/known vs confidence-scored observed); raise exceptions only on disagreement above threshold; a missed read must never imply "package gone." Defend against P5b (double-counted observations) with per-tag/per-reader/per-dwell observation windows feeding one fused observation, and an explicit independence model that caps confidence. Track the false-positive rate as a demo KPI. `sensor-fusion` is a pure scoring module; the exceptions projection is decision-critical (inline).
 
@@ -87,7 +110,14 @@ Notes: Detection must follow load planning because it compares *planned* (from s
   3. The optimizer re-optimizes on a rolling horizon (periodic + event-triggered, scoped to only affected hubs/trailers/blocks), evaluating candidates on a sandboxed planning twin with no operational side effects until a plan is accepted (then a single PlanGenerated/PlanAccepted event).
   4. Freeze windows are honored (no changes to trailers departing within the window unless critical) and replanning is idempotent per epoch/scope — identical input yields an identical plan, with a churn penalty and deterministic tie-breaks so plans don't thrash.
   5. Local repair produces recovery recommendations — split, reassign, hold, or over-carry — each with a rationale, and plan selection minimizes the weighted objective (miles, driver time, dock wait, handling, rehandle, SLA lateness, utilization, over-carry penalties).
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [x] 04-01-PLAN.md — Domain: add PlanGenerated/PlanAccepted to the closed event union + zod + contract.assert (OPT-04)
+- [x] 04-02-PLAN.md — Scaffold @mm/optimizer (pure core; reuses @mm/load-planner; glpk.js devDep) + time-expanded hub graph (OPT-01)
+- [x] 04-03-PLAN.md — Min-cost flow: pure-TS Successive Shortest Path + glpk.js exact-LP oracle keystone + freight assignment (OPT-02)
+- [x] 04-04-PLAN.md — VRPTW: cheapest-insertion construction + 2-opt/or-opt local search; loads gated by reused validatePlan (OPT-03)
+- [x] 04-05-PLAN.md — Weighted objective + feasibility-hard-gate keystone selection + local repair split/reassign/hold/over-carry (OPT-07, OPT-08)
+- [x] 04-06-PLAN.md — Rolling shell: scoped epoch + structuredClone twin sandbox + freeze/idempotency keystone + @mm/api service/endpoint (OPT-04, OPT-05, OPT-06)
 
 Notes: This is where engineering risk concentrates — there is no maintained JS min-cost-flow or VRP/OR-Tools binding, so the min-cost flow (Successive Shortest Paths), VRPTW heuristic, and the layered pipeline are custom TypeScript over `graphology`/`ngraph.path`, with **glpk.js (WASM) held in reserve as a correctness oracle** for small instances. Defend against P7 (plan thrashing) with a hard freeze window enforced in the input builder, a `planChurnPenalty` anchoring to the previous plan, and stable id-based tie-breaks / fixed seed. Defend against P9 (graph explosion) with coarse 15-min time nodes, tight affected-scope pruning, and a small demo network — track solver runtime as a KPI. Defend against P12 (numerical issues) by scaling all costs to integers and validating against hand-computed small cases and the glpk.js oracle. Flagged for `/gsd-research-phase`: which JS/TS approach for min-cost flow + VRPTW (pure-TS SSP vs glpk.js LP vs OR-Tools-WASM/child-process bridge). The optimizer owns the planning twin and is a concurrent event-store writer — re-verify Phase 1's optimistic concurrency holds.
 
@@ -102,7 +132,16 @@ Notes: This is where engineering risk concentrates — there is no maintained JS
   3. An operator can adjust scenario knobs (inject hub congestion, trip delays, demand spikes, sensor-noise level) and watch plans visibly re-optimize live; the exception feed surfaces every exception (wrong-trailer, missed-unload, blocked-freight, low-utilization) with severity, reason, and recommended action.
   4. A read-only audit timeline shows a package's or trailer's full event history including the system recommendation captured at each decision, and a KPI dashboard displays operational KPIs (utilization, rehandle count/minutes, wrong-trailer count, missed-unload count, SLA violation rate, on-time departure/arrival).
   5. The dashboard shows before/after KPI deltas comparing the baseline planner vs the optimizer on the *same* seeded simulated stream — the "money slide."
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+- [ ] 05-01-PLAN.md — [W1] VIZ-04 versioned ws envelope (snapshot + per-tick delta, seq+simMs) — underpins all frontend
+- [ ] 05-02-PLAN.md — [W1] OPT live-wiring: live rolling loop + min-cost-flow on the live path + repair recommendations endpoint (OPT-02/05/06/07)
+- [ ] 05-03-PLAN.md — [W1] UI-03/UI-04 KPI endpoints: GET /api/kpis + seed-deterministic GET /api/kpis/comparison (money-slide data)
+- [ ] 05-04-PLAN.md — [W2] VIZ-05/UI-02 backend: GET /api/trailers/:id/plan + audit timeline extended to trailers + captured recommendation
+- [ ] 05-05-PLAN.md — [W3] SIM-04 scenario knobs: POST /api/scenario → deterministic sim injection → scoped re-opt → visible tick diff [KEYSTONE c]
+- [ ] 05-06-PLAN.md — [W3] VIZ-02/VIZ-03 frontend: postrender route tween + STYLE_CACHE coloring + flat-memory soak [KEYSTONE a]
+- [ ] 05-07-PLAN.md — [W4] UI-01/UI-02/VIZ-05 panels: realtime alert feed + audit timeline + click-trailer plan detail
+- [ ] 05-08-PLAN.md — [W5] UI-03/UI-04 frontend: KPI dashboard (animated deltas) + before/after money slide [KEYSTONE b]
 **UI hint**: yes
 
 Notes: This wrapper composes everything and lands last because it visualizes the outputs of every prior phase. The before/after comparison (P8 delivery) is the highest-leverage differentiator and is mostly wiring given the Phase 2 baseline + shared KPI plumbing; seed-frozen scenarios make it reproducible. Defend against P10 (OpenLayers perf/leaks) with in-place geometry mutation (never rebuild the source each frame), rAF-batched diffs, WebGL points for many trailers, strict OL disposal on teardown, and sim-clock-driven interpolation clamped to [0,1] — verify flat memory over a multi-minute run. The server pushes keyframe/ETA diffs, not per-second positions; the client tweens. Flagged for `/gsd-research-phase`: OpenLayers high-trailer-count rendering strategy + smooth interpolation cadence (worth a focused spike). Calibrate the simulator so scenarios are hard enough that LIFO sometimes can't win without over-carry/hold/reassign — otherwise the optimizer's win is theater.
@@ -114,8 +153,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Operational Data Foundation + Live Map Spike | 0/TBD | Not started | - |
-| 2. Load Planning | 0/TBD | Not started | - |
-| 3. RFID-Assisted Validation | 0/TBD | Not started | - |
-| 4. Rolling Optimizer | 0/TBD | Not started | - |
-| 5. Simulation + Visualization Wrapper | 0/TBD | Not started | - |
+| 1. Operational Data Foundation + Live Map Spike | 7/7 | ✅ Complete | 2026-06-19 |
+| 2. Load Planning | 6/6 | ✅ Complete | 2026-06-19 |
+| 3. RFID-Assisted Validation | 7/7 | ✅ Complete | 2026-06-19 |
+| 4. Rolling Optimizer | 6/6 | ✅ Complete | 2026-06-19 |
+| 5. Simulation + Visualization Wrapper | 8/8 | ✅ Complete | 2026-06-19 |
