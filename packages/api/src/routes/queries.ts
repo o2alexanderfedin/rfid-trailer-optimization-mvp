@@ -56,6 +56,8 @@ export interface AuditEntryDto {
   readonly occurredAt: string;
   readonly hubId: string | null;
   readonly scanType: string | null;
+  /** Captured system recommendation at plan-lifecycle events; null otherwise (UI-02). */
+  readonly recommendation: string | null;
 }
 
 /** A route geometry for the map (`[lon, lat]` GeoJSON-axis vertices). */
@@ -163,6 +165,7 @@ export function registerQueryRoutes(app: FastifyInstance, db: ApiDb): void {
         occurredAt: e.occurredAt,
         hubId: e.hubId,
         scanType: e.scanType,
+        recommendation: e.recommendation,
       }));
       return dto;
     },

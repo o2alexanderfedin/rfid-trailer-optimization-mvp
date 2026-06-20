@@ -10,7 +10,7 @@ import {
   type LoadPlan,
 } from "@mm/load-planner";
 import type { CatchupDb } from "@mm/projections";
-import { readAuditTimeline, readTrailerAuditTimeline } from "@mm/projections";
+import { readTrailerAuditTimeline } from "@mm/projections";
 import type { ApiDb } from "./queries.js";
 
 /**
@@ -61,8 +61,7 @@ export interface TrailerPlanDto {
 }
 
 /**
- * One entry in the `GET /trailers/:id/history` (UI-02) and
- * `GET /packages/:id/history` (UI-02 / FND-08) responses — both share this shape.
+ * One entry in the `GET /trailers/:id/history` (UI-02) response.
  */
 export interface TrailerHistoryEntryDto {
   readonly globalSeq: string;
@@ -184,9 +183,8 @@ function toRearToNose(plan: LoadPlan): RearToNoseSlice[] {
 }
 
 /**
- * Map an `AuditTimelineEntry[]` (from `@mm/projections`) to the stable wire DTO.
- * Shared by both the trailer-keyed and package-keyed history routes (DRY — the
- * timeline shape is identical regardless of the key used to read it).
+ * Map an `AuditTimelineEntry[]` (from `@mm/projections`) to the stable wire DTO
+ * for the trailer-keyed history route.
  */
 function toHistoryDto(
   timeline: Awaited<ReturnType<typeof readTrailerAuditTimeline>>,
@@ -301,21 +299,6 @@ export function registerPlanDetailRoutes(app: FastifyInstance, db: ApiDb): void 
     async (req: FastifyRequest<{ Params: IdParams }>): Promise<TrailerHistoryEntryDto[]> => {
       const trailerId = req.params.id;
       const timeline = await readTrailerAuditTimeline(catchupView(db), trailerId);
-      return toHistoryDto(timeline);
-    },
-  );
-
-  // --- UI-02 / FND-08: GET /packages/:id/history ---------------------------
-  // A package's full ordered movement history as an audit timeline. Mirrors the
-  // trailer-history handler exactly (same DTO shape, empty array for an unknown
-  // package — no history = empty, never 404) but reads the package-keyed
-  // timeline via `readAuditTimeline` (the package_id-keyed read in @mm/projections).
-  app.get<{ Params: IdParams }>(
-    "/packages/:id/history",
-    { schema: { params: idParamsSchema } },
-    async (req: FastifyRequest<{ Params: IdParams }>): Promise<TrailerHistoryEntryDto[]> => {
-      const packageId = req.params.id;
-      const timeline = await readAuditTimeline(catchupView(db), packageId);
       return toHistoryDto(timeline);
     },
   );
