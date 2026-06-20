@@ -386,3 +386,66 @@ describe("runEpoch FIX 2 — real rehandleScore (not hardcoded 0) in epoch metri
     expect(rec!.breakdown.rehandle).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F-06 / OPT-02 — wire min-cost-flow (assignFreight) into the live epoch.
+//
+// The pure `runEpoch` now runs an MCF freight-assignment stage AFTER buildTwin
+// (assign-then-sequence: MCF answers "which block flows over which leg at min
+// cost", orthogonal to VRPTW sequencing). It is observable on EpochResult via
+// the OPTIONAL `freightAssignment` field WITHOUT changing the selectPlan winner,
+// so every prior determinism/feasibility/selectPlan test stays green.
+// ---------------------------------------------------------------------------
+describe("runEpoch F-06/OPT-02 — min-cost-flow freight assignment wired into the live epoch", () => {
+  it("RED: freightAssignment is defined with a feasible, non-empty assignment for the routable T1 fixture", () => {
+    const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+
+    expect(result.freightAssignment).toBeDefined();
+    const freight = result.freightAssignment!;
+    expect(freight.feasible).toBe(true);
+    // The two routable blocks (B1→H2, B2→H3) each have a leg path + integer cost.
+    expect(freight.assignments.length).toBeGreaterThanOrEqual(1);
+    for (const a of freight.assignments) {
+      expect(typeof a.blockId).toBe("string");
+      expect(a.legEdgeIds.length).toBeGreaterThan(0);
+      expect(Number.isInteger(a.cost)).toBe(true);
+    }
+  });
+
+  it("RED: flowCost equals the sum of the per-assignment costs", () => {
+    const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    const freight = result.freightAssignment!;
+    const sum = freight.assignments.reduce((acc, a) => acc + a.cost, 0);
+    expect(freight.flowCost).toBe(sum);
+  });
+
+  it("RED: freightAssignment is part of the byte-identical idempotency keystone", () => {
+    const a = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    const b = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    // Deep-equal AND byte-identical INCLUDING the new freightAssignment field.
+    expect(a.freightAssignment).toEqual(b.freightAssignment);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("RED: wiring MCF does NOT change the deterministic selectPlan winner", () => {
+    // The accepted plan + generated payload are untouched by the freight stage:
+    // MCF runs + is observable WITHOUT perturbing the winner (preserves the
+    // selectPlan / feasibility / accept contract).
+    const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    expect(result.generated).not.toBeNull();
+    expect(result.generated!.feasible).toBe(true);
+    expect(result.accepted).not.toBeNull();
+    expect(result.accepted!.planId).toBe(result.generated!.planId);
+  });
+
+  it("RED: empty scope is still fail-soft — feasible, empty freightAssignment", () => {
+    const empty: EpochInput = { events: [], twinSnapshot: snapshot() };
+    const result = runEpoch(EPOCH, empty, DEFAULT_OBJECTIVE_WEIGHTS);
+    // Empty scope returns no plan, but the freight stage is still reported
+    // fail-soft (feasible, no assignments) so consumers never see undefined-vs-null drift.
+    expect(result.freightAssignment).toBeDefined();
+    expect(result.freightAssignment!.feasible).toBe(true);
+    expect(result.freightAssignment!.assignments).toEqual([]);
+    expect(result.freightAssignment!.flowCost).toBe(0);
+  });
+});
