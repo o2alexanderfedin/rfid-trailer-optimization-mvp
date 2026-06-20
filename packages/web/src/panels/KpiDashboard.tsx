@@ -299,7 +299,7 @@ export function KpiDashboard(): React.JSX.Element {
     <div className="kpi-dashboard" data-testid="kpi-dashboard">
       <div className="kpi-dashboard__grid">
         {cards.map((card) => {
-          const value = snapshot[card.field] as number | null;
+          const value = snapshot[card.field];
           const isAnimating = animating.has(card.field);
           return (
             <div
