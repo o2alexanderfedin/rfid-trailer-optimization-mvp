@@ -10,8 +10,8 @@
   "scripts": {
     "build": "turbo run build",
     "lint": "eslint .",
-    "test": "vitest run --project unit",
-    "test:all": "vitest run"
+    "test": "turbo run build && vitest run --project unit",
+    "test:all": "turbo run build && vitest run"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
