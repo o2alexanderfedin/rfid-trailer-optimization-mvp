@@ -23,9 +23,9 @@ import {
 } from "./layers.js";
 import {
   makeEntityMaps,
-  useWsEnvelope,
   type EntityMaps,
 } from "./wsClient.js";
+import { useWsEnvelope } from "./WsProvider.js";
 import { makeSimClock } from "./simClock.js";
 import {
   attachTrailerAnimation,
@@ -249,7 +249,12 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
       if (trailerSource === null) return;
 
       // Resync the sim clock to the envelope's authoritative simMs.
-      simClockRef.current.resync(performance.now(), envelope.simMs);
+      // FIX D: use Date.now() — OL's frameState.time is also Date.now()-based
+      // (animationDelay_ calls renderFrame_(Date.now())).  Using performance.now()
+      // here while fromFrameTime() receives frameState.time (Date.now()-based) would
+      // yield a wall-clock basis mismatch: the elapsed = frameTime - anchorWall
+      // computation would be astronomically wrong, breaking the tween fraction.
+      simClockRef.current.resync(Date.now(), envelope.simMs);
 
       snapshotCountRef.current += 1;
       setAttr("data-snapshot-count", snapshotCountRef.current);
@@ -308,6 +313,11 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
   /**
    * Upsert a TrailerAnim for the animation loop from a keyframe.
    *
+   * FIX 15: The route LineString + `getLength()` are only rebuilt when the
+   * trailer's `routeId` actually changes (i.e., the trailer switches legs).
+   * Reusing the cached `routeGeom` and `routeLengthM` on same-leg envelope
+   * updates eliminates per-frame / per-envelope LineString allocations.
+   *
    * Looks up route geometry from the cached route DTOs. If the route is not
    * loaded yet (geo fetch still in flight), the anim is created with a stub
    * geometry (zero-length LineString); it will be corrected on the next resync.
@@ -322,9 +332,30 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
     if (trailerSource === null) return;
 
     const existing = trailerAnimsRef.current.get(trailerId);
-    const routeDto = routeDtosRef.current.get(routeId);
 
-    // Build or reuse the route LineString geometry.
+    if (existing !== undefined) {
+      // In-place update — do NOT recreate the TrailerAnim (would break the
+      // animation loop's reference into the same Map entry).
+      // FIX 15: only rebuild routeGeom + routeLengthM when routeId changed.
+      if (existing.currentRouteId !== routeId) {
+        const routeDto = routeDtosRef.current.get(routeId);
+        if (routeDto !== undefined) {
+          const coords = routeDto.geometry.map((pair) =>
+            fromLonLat([pair[0] ?? 0, pair[1] ?? 0]),
+          );
+          existing.routeGeom = new LineString(coords);
+          existing.routeLengthM = existing.routeGeom.getLength();
+        }
+        // If no routeDto yet, keep the existing geom until geo fetch completes.
+        existing.currentRouteId = routeId;
+      }
+      existing.departSimMs = departMs;
+      existing.etaSimMs = etaMs;
+      return;
+    }
+
+    // New trailer: build its initial geometry.
+    const routeDto = routeDtosRef.current.get(routeId);
     let routeGeom: LineString;
     let routeLengthM: number;
 
@@ -334,27 +365,13 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
       );
       routeGeom = new LineString(coords);
       routeLengthM = routeGeom.getLength();
-    } else if (existing !== undefined) {
-      // Keep the existing geometry if no route DTO available yet.
-      routeGeom = existing.routeGeom;
-      routeLengthM = existing.routeLengthM;
     } else {
       // Stub: single-point zero-length geometry (no route data yet).
       routeGeom = new LineString([[0, 0], [0, 0]]);
       routeLengthM = 0;
     }
 
-    if (existing !== undefined) {
-      // In-place update — do NOT recreate the TrailerAnim (would break the
-      // animation loop's reference into the same Map entry).
-      existing.routeGeom = routeGeom;
-      existing.routeLengthM = routeLengthM;
-      existing.departSimMs = departMs;
-      existing.etaSimMs = etaMs;
-      return;
-    }
-
-    // New trailer: look up or create its Point geometry from the source feature.
+    // Look up or create the Point geometry from the source feature.
     const featureId = `trailer:${trailerId}`;
     const feature = trailerSource.getFeatureById(featureId);
     let pointGeom: Point;
@@ -367,6 +384,7 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
 
     trailerAnimsRef.current.set(trailerId, {
       trailerId,
+      currentRouteId: routeId,
       routeGeom,
       routeLengthM,
       departSimMs: departMs,

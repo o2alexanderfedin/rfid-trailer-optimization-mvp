@@ -1,11 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { MapView } from "./map/MapView.js";
 import { RightRail } from "./panels/RightRail.js";
 import { useAlertFeed } from "./panels/AlertFeed.js";
-import { useWsEnvelope, makeEntityMaps } from "./map/wsClient.js";
+import { WsProvider, useWsEnvelope } from "./map/WsProvider.js";
+import { makeEntityMaps } from "./map/wsClient.js";
 import type { WsEnvelope } from "@mm/api";
 import type { EntityMaps } from "./map/wsClient.js";
-import { useRef } from "react";
 
 /**
  * The web shell (VIZ-01 / UI-01 / VIZ-05 / UI-02).
@@ -13,25 +13,23 @@ import { useRef } from "react";
  * Layout: a thin header over a split view — the animated OL map (centerpiece,
  * flex: 1) plus the right-rail operator panels (fixed-width sidebar).
  *
- * Data flow:
- *  - The ws envelope channel drives both the map (via MapView's internal hook)
- *    AND the alert feed (via useAlertFeed). To avoid opening two WebSockets,
- *    the ws subscription lives in App and the envelope handler fans out:
- *      → exception deltas → alert feed React state (UI-01)
- *      → everything else  → MapView receives via onEnvelope prop
- *
- *    NOTE: MapView already subscribes to its own WebSocket internally via
- *    useWsEnvelope. Rather than refactor MapView's internals, App uses a
- *    *second* useWsEnvelope hook whose sole purpose is to feed the alert panel.
- *    This is acceptable for the MVP (two WS connections to the same endpoint)
- *    but could be consolidated into a shared context in a future refactor.
+ * Data flow (FIX 16 — consolidated single WebSocket):
+ *  - `WsProvider` (wrapping App) opens ONE `/api/ws` WebSocket and fans out
+ *    parsed envelopes to all subscribers via a shared `SubscriberRegistry`.
+ *  - MapView subscribes via `useWsEnvelope` (from WsProvider) for animation.
+ *  - App subscribes via `useWsEnvelope` for the alert feed.
+ *  - KpiDashboard subscribes via `useWsEnvelope` for live KPI updates.
+ *  - All three consumers share the SAME socket, seq counter, and entity maps —
+ *    eliminating the three-socket seq-gap/resync churn of the prior design.
  *
  * Map click wiring (VIZ-05):
  *  - MapView accepts an `onTrailerSelect` callback.
  *  - App manages `selectedTrailerId` as React state.
  *  - RightRail receives `selectedTrailerId` to drive TrailerDetail + AuditTimeline.
  */
-export function App(): React.JSX.Element {
+
+/** Inner shell — lives inside WsProvider so useWsEnvelope has context. */
+function AppInner(): React.JSX.Element {
   const [selectedTrailerId, setSelectedTrailerId] = useState<string | null>(null);
 
   const handleTrailerSelect = useCallback((id: string | null) => {
@@ -39,8 +37,7 @@ export function App(): React.JSX.Element {
   }, []);
 
   // --- Alert feed (UI-01) --------------------------------------------------
-  // A second ws connection dedicated to the alert panel. This keeps MapView's
-  // internal animation loop decoupled from the panel state updates.
+  // Subscribes to the shared ws bus via WsProvider (FIX 16: no extra socket).
   const { feed, onExceptionsNew, onExceptionsResolved } = useAlertFeed();
   const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
 
@@ -72,5 +69,14 @@ export function App(): React.JSX.Element {
         <RightRail feed={feed} selectedTrailerId={selectedTrailerId} />
       </div>
     </div>
+  );
+}
+
+/** App root — wraps the shell in WsProvider to provide the shared ws bus. */
+export function App(): React.JSX.Element {
+  return (
+    <WsProvider>
+      <AppInner />
+    </WsProvider>
   );
 }

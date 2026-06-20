@@ -17,7 +17,8 @@
  * Strict TS: no `any`, no `as`, React 19. Off the map render path.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useWsEnvelope, makeEntityMaps } from "../map/wsClient.js";
+import { useWsEnvelope } from "../map/WsProvider.js";
+import { makeEntityMaps } from "../map/wsClient.js";
 import { fetchKpis } from "../api/client.js";
 import type { KpiSnapshot, WsEnvelope } from "@mm/api";
 import type { EntityMaps } from "../map/wsClient.js";

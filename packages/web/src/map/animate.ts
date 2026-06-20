@@ -45,6 +45,12 @@ import type RenderEvent from "ol/render/Event.js";
  */
 export interface TrailerAnim {
   readonly trailerId: string;
+  /**
+   * The routeId currently reflected by `routeGeom`.
+   * Used to detect route changes so the LineString + length are only rebuilt
+   * when the trailer switches legs (FIX 15 — per-frame LineString allocation).
+   */
+  currentRouteId: string;
   /** Shared LineString reference from the routes source (NOT cloned per frame). */
   routeGeom: LineString;
   /** `routeGeom.getLength()` cached; recompute only when routeGeom changes. */
