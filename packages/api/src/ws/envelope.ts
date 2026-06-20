@@ -78,8 +78,16 @@ export interface KpiSnapshot {
   readonly wrongTrailerCount: number;
   readonly missedUnloadCount: number;
   readonly slaViolationRate: number;
-  readonly onTimeDeparture: number;
-  readonly onTimeArrival: number;
+  /**
+   * On-time departure rate in [0,1], or `null` when there is no schedule data to
+   * measure against (F-03 / UI-03). The MVP persists no scheduled/planned
+   * departure times (no event carries one — see `trailerDepartedSchema`), so a
+   * 0/0 or no-data case is reported as `null` ("—" in the UI), NEVER a fabricated
+   * 100%. A real ratio is returned only when actual on-time/total counts exist.
+   */
+  readonly onTimeDeparture: number | null;
+  /** On-time arrival rate in [0,1], or `null` when there is no schedule data (F-03). */
+  readonly onTimeArrival: number | null;
   /**
    * Baseline planner metrics over the SAME seeded stream.
    * Omit<KpiSnapshot,"baseline"> prevents recursive nesting.

@@ -71,8 +71,13 @@ export function applyKpiPartial(
     wrongTrailerCount: partial.wrongTrailerCount ?? prev.wrongTrailerCount,
     missedUnloadCount: partial.missedUnloadCount ?? prev.missedUnloadCount,
     slaViolationRate: partial.slaViolationRate ?? prev.slaViolationRate,
-    onTimeDeparture: partial.onTimeDeparture ?? prev.onTimeDeparture,
-    onTimeArrival: partial.onTimeArrival ?? prev.onTimeArrival,
+    // on-time fields are `number | null` (F-03): use key-presence (not `??`) so a
+    // genuine `null` ("no schedule data") in a partial is preserved rather than
+    // masked by the previous value.
+    onTimeDeparture:
+      partial.onTimeDeparture !== undefined ? partial.onTimeDeparture : prev.onTimeDeparture,
+    onTimeArrival:
+      partial.onTimeArrival !== undefined ? partial.onTimeArrival : prev.onTimeArrival,
     baseline: prev.baseline, // never from tick partials
   };
 }
@@ -111,11 +116,14 @@ function formatKindFor(field: string): FormatKind {
 
 /**
  * Format a KPI value for display.
+ *  - `null` (no data, e.g. on-time with no schedule data — F-03) → "—"
  *  - counts     → integer string ("7")
  *  - minutes    → 1dp with "min" suffix ("18.5 min")
  *  - rates/fractions → percentage 1dp ("75.0%")
  */
-export function formatKpiValue(field: string, value: number): string {
+export function formatKpiValue(field: string, value: number | null): string {
+  // F-03: an unavailable metric renders as an em-dash, never a fabricated 100%.
+  if (value === null) return "—";
   const kind = formatKindFor(field);
   if (kind === "count") return String(Math.round(value));
   if (kind === "minutes") return `${value.toFixed(1)} min`;
@@ -148,8 +156,9 @@ const ZERO_SNAPSHOT: KpiSnapshot = {
   wrongTrailerCount: 0,
   missedUnloadCount: 0,
   slaViolationRate: 0,
-  onTimeDeparture: 1,
-  onTimeArrival: 1,
+  // F-03: honest "no data yet" default — renders "—", not a fabricated 100%.
+  onTimeDeparture: null,
+  onTimeArrival: null,
   baseline: {
     utilization: 0,
     rehandleCount: 0,
@@ -157,8 +166,8 @@ const ZERO_SNAPSHOT: KpiSnapshot = {
     wrongTrailerCount: 0,
     missedUnloadCount: 0,
     slaViolationRate: 0,
-    onTimeDeparture: 1,
-    onTimeArrival: 1,
+    onTimeDeparture: null,
+    onTimeArrival: null,
   },
 };
 
@@ -290,7 +299,7 @@ export function KpiDashboard(): React.JSX.Element {
     <div className="kpi-dashboard" data-testid="kpi-dashboard">
       <div className="kpi-dashboard__grid">
         {cards.map((card) => {
-          const value = snapshot[card.field] as number;
+          const value = snapshot[card.field] as number | null;
           const isAnimating = animating.has(card.field);
           return (
             <div

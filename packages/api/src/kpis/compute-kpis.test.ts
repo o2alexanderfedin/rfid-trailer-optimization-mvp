@@ -148,14 +148,58 @@ describe("computeKpis", () => {
     expect(result.onTimeArrival).toBeCloseTo(0.4, 5);
   });
 
-  it("clamps onTimeDeparture to 1 when no departures have occurred", () => {
+  // F-03 (HIGH / UI-03): a 0/0 on-time is NO DATA, not a fabricated 100%.
+  // The previous behavior returned 1.0 (a dishonest "always on-time" metric).
+  // The honest behavior surfaces `null` so the UI can render "—".
+  it("returns null (no data) for onTimeDeparture when no departures have occurred", () => {
     const input: KpiInput = {
       ...BASE_INPUT,
       onTimeDepartureCount: 0,
       totalDepartureCount: 0,
     };
     const result = computeKpis(input);
-    expect(result.onTimeDeparture).toBe(1);
+    expect(result.onTimeDeparture).toBeNull();
+    expect(result.onTimeDeparture).not.toBe(1);
+  });
+
+  it("returns null (no data) for onTimeArrival when no arrivals have occurred", () => {
+    const input: KpiInput = {
+      ...BASE_INPUT,
+      onTimeArrivalCount: 0,
+      totalArrivalCount: 0,
+    };
+    const result = computeKpis(input);
+    expect(result.onTimeArrival).toBeNull();
+    expect(result.onTimeArrival).not.toBe(1);
+  });
+
+  // F-03: when the route has no schedule data at all, the counts are passed as
+  // `null` (not a fabricated 0). The KPI must surface as unavailable (null),
+  // NEVER as a fabricated 100%.
+  it("returns null when on-time counts are unavailable (null inputs — no schedule data)", () => {
+    const input: KpiInput = {
+      ...BASE_INPUT,
+      onTimeDepartureCount: null,
+      onTimeArrivalCount: null,
+      totalDepartureCount: null,
+      totalArrivalCount: null,
+    };
+    const result = computeKpis(input);
+    expect(result.onTimeDeparture).toBeNull();
+    expect(result.onTimeArrival).toBeNull();
+  });
+
+  it("computes a real on-time ratio < 1 when a late departure occurred (not a fake 100%)", () => {
+    // Real counts: 1 of 2 departures on time → 0.5. This proves the metric is
+    // honest: a late departure must drag the rate below 100%.
+    const input: KpiInput = {
+      ...BASE_INPUT,
+      onTimeDepartureCount: 1,
+      totalDepartureCount: 2,
+    };
+    const result = computeKpis(input);
+    expect(result.onTimeDeparture).toBeCloseTo(0.5, 5);
+    expect(result.onTimeDeparture).toBeLessThan(1);
   });
 
   it("derives slaViolationRate from falsePositiveRate (exception KPI)", () => {

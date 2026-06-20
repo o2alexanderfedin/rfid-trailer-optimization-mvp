@@ -34,9 +34,13 @@ export const TRANSIT_MIN = 30;
 
 /**
  * Default trailer freight capacity (integer load-block units). The sim assigns
- * packages as unit blocks; this is the per-trip LIFO capacity gate denominator.
+ * packages as unit blocks (one package = one unit-volume `TwinBlock`), so this
+ * is the per-trip LIFO capacity gate denominator AND the real utilization-fill
+ * denominator the optimizer uses (`Σ block.volume / capacity`). Exported so the
+ * KPI route derives the SAME real fill ratio (finding #10 DRY) instead of an
+ * arbitrary package-count proxy.
  */
-const DEFAULT_TRAILER_CAPACITY = 50;
+export const DEFAULT_TRAILER_CAPACITY = 50;
 
 /**
  * Default route leg capacity (integer freight units per trip). Matches the demo

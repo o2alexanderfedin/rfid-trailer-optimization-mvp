@@ -90,7 +90,7 @@ describe("GET /kpis", () => {
     expect(resp.statusCode).toBe(200);
 
     const body = resp.json() as Record<string, unknown>;
-    // All scalar KPI fields must be numbers.
+    // Always-numeric KPI fields.
     const numericFields: Array<keyof Omit<KpiSnapshot, "baseline">> = [
       "utilization",
       "rehandleCount",
@@ -98,11 +98,15 @@ describe("GET /kpis", () => {
       "wrongTrailerCount",
       "missedUnloadCount",
       "slaViolationRate",
-      "onTimeDeparture",
-      "onTimeArrival",
     ];
     for (const field of numericFields) {
       expect(typeof body[field], `field ${field}`).toBe("number");
+    }
+    // F-03: on-time fields are number-OR-null (null = "no schedule data").
+    // They must never be a fabricated 100%. With the empty stub DB they are null.
+    for (const field of ["onTimeDeparture", "onTimeArrival"] as const) {
+      const v = body[field];
+      expect(v === null || typeof v === "number", `field ${field}`).toBe(true);
     }
 
     // FIX 4: baseline must NOT be present. The previous implementation set
@@ -136,6 +140,38 @@ describe("GET /kpis", () => {
     app = await buildApp();
     const resp = await app.inject({ method: "GET", url: "/kpis" });
     expect(resp.statusCode).toBe(200);
+  });
+
+  // Finding #10 (LOW/MED): utilization must be a REAL volume fill ratio against
+  // the optimizer's true trailer capacity (DEFAULT_TRAILER_CAPACITY = 50 unit
+  // blocks, twin-snapshot.ts), NOT the package-count/30 proxy. A trailer carrying
+  // 25 unit-volume packages is HALF full → 0.5, not 25/30 ≈ 0.833.
+  it("computes utilization as a real volume fill ratio (half-full ≈ 0.5, not count/30)", async () => {
+    const halfFullPackages = Array.from({ length: 25 }, (_, i) => `PKG-${i}`);
+    const db = buildFakeDb({
+      trailerRows: [{ trailer_id: "T-01", assigned_package_ids: halfFullPackages }],
+    });
+    app = await buildApp(db);
+    const resp = await app.inject({ method: "GET", url: "/kpis" });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json() as Record<string, number>;
+    // 25 unit-volume blocks / 50 capacity = 0.5 (the optimizer's real fill basis).
+    expect(body["utilization"]).toBeCloseTo(0.5, 5);
+    // And it must NOT be the old proxy 25/30 ≈ 0.8333.
+    expect(body["utilization"]).not.toBeCloseTo(25 / 30, 3);
+  });
+
+  // F-03 (HIGH / UI-03): with no schedule data, the on-time KPIs must be HONEST
+  // (null = "no data" → UI shows "—"), NEVER a fabricated 100%.
+  it("returns null on-time KPIs when there is no schedule data (not a fake 100%)", async () => {
+    app = await buildApp(); // empty DB → no departures/arrivals on record
+    const resp = await app.inject({ method: "GET", url: "/kpis" });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json() as Record<string, unknown>;
+    expect(body["onTimeDeparture"]).toBeNull();
+    expect(body["onTimeArrival"]).toBeNull();
+    expect(body["onTimeDeparture"]).not.toBe(1);
+    expect(body["onTimeArrival"]).not.toBe(1);
   });
 });
 
