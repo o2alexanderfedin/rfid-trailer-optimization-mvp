@@ -19,8 +19,17 @@ import { defineConfig, devices } from "@playwright/test";
  *    measurement. Runs ONLY `soak.e2e.ts` (KEYSTONE (a)). Long timeout.
  *    Run on-demand / nightly, not per-PR (too slow for CI).
  *
+ *  - `chromium-real` (F-08) : THE one real web↔server e2e. NO stubbed
+ *    boundaries — the browser drives the prod bundle on :4273 (its own
+ *    `vite.preview-real.config.ts` preview, whose `preview.proxy` forwards
+ *    `/api/*` to the REAL Fastify booted in `globalSetup`). Runs ONLY
+ *    `real-e2e.e2e.ts`. Requires Docker (testcontainers PG), so the heavy
+ *    backend boot in `globalSetup` is GATED on `MM_E2E_REAL=1` /
+ *    `--project=chromium-real` — the fast hermetic projects above need no Docker.
+ *
  * Both prod and dev webServers boot; Playwright routes each project to its own
- * `baseURL`.
+ * `baseURL`. `globalSetup`/`globalTeardown` boot+stop the real backend, but only
+ * when the real project is selected (see real-e2e.globalSetup.ts gating).
  *
  * Note on `--expose-gc`: this flag is required to call `globalThis.gc()` from
  * inside `page.evaluate()`. Without it, GC is lazy and the heap measurement
@@ -33,6 +42,11 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,
   reporter: [["list"]],
+  // Boot the REAL backend before the run and tear it down after. The boot is
+  // GATED inside these hooks (MM_E2E_REAL=1 / --project=chromium-real) so the
+  // fast hermetic projects pay no Docker cost.
+  globalSetup: "./test/real-e2e.globalSetup.ts",
+  globalTeardown: "./test/real-e2e.globalTeardown.ts",
   use: {
     trace: "off",
   },
@@ -40,7 +54,12 @@ export default defineConfig({
     {
       name: "chromium",
       testMatch: /.*\.e2e\.ts$/,
-      testIgnore: [/strictmode\.e2e\.ts$/, /soak\.e2e\.ts$/],
+      // Exclude the dev-only, soak-only, and real-path specs from the fast suite.
+      testIgnore: [
+        /strictmode\.e2e\.ts$/,
+        /soak\.e2e\.ts$/,
+        /real-e2e\.e2e\.ts$/,
+      ],
       use: { ...devices["Desktop Chrome"], baseURL: "http://localhost:4173" },
     },
     {
@@ -64,6 +83,14 @@ export default defineConfig({
         },
       },
     },
+    {
+      // F-08: the one real web↔server e2e. Served by the prod bundle on :4273,
+      // whose `vite.preview-real.config.ts` proxies `/api/*` to the REAL Fastify
+      // booted in globalSetup. NO stubbed boundaries.
+      name: "chromium-real",
+      testMatch: /real-e2e\.e2e\.ts$/,
+      use: { ...devices["Desktop Chrome"], baseURL: "http://localhost:4273" },
+    },
   ],
   webServer: [
     {
@@ -78,6 +105,15 @@ export default defineConfig({
       url: "http://localhost:5173",
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+    },
+    {
+      // F-08: prod bundle + the `/api`→real-Fastify proxy preview on :4273.
+      // Build first so the preview serves the freshly-built artifacts; the
+      // proxy target is the real API booted by globalSetup.
+      command: "pnpm build && pnpm preview:real",
+      url: "http://localhost:4273",
+      reuseExistingServer: !process.env.CI,
+      timeout: 180_000,
     },
   ],
 });

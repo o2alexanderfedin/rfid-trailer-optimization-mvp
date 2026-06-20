@@ -199,9 +199,21 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@mm/event-store':
+        specifier: workspace:*
+        version: link:../event-store
+      '@mm/projections':
+        specifier: workspace:*
+        version: link:../projections
       '@playwright/test':
         specifier: 1.61.0
         version: 1.61.0
+      '@testcontainers/postgresql':
+        specifier: 12.0.3
+        version: 12.0.3
+      '@types/pg':
+        specifier: 8.20.0
+        version: 8.20.0
       '@types/react':
         specifier: 19.2.17
         version: 19.2.17
@@ -211,6 +223,12 @@ importers:
       '@vitejs/plugin-react':
         specifier: 5.2.0
         version: 5.2.0(vite@7.3.5(@types/node@22.12.0)(tsx@4.22.4)(yaml@2.9.0))
+      kysely:
+        specifier: 0.29.2
+        version: 0.29.2
+      pg:
+        specifier: 8.22.0
+        version: 8.22.0
       vite:
         specifier: 7.3.5
         version: 7.3.5(@types/node@22.12.0)(tsx@4.22.4)(yaml@2.9.0)
