@@ -259,7 +259,7 @@ test.describe("MapView leak guard (VIZ-01 / VIZ-02 / VIZ-03)", () => {
     await page.waitForTimeout(5_000);
 
     // Force GC + baseline.
-    await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
+    await page.evaluate(() => { (globalThis as { gc?: () => void }).gc?.(); });
     await page.waitForTimeout(500);
     const heapBefore = await page.evaluate(readUsedJSHeapSize);
 
@@ -267,7 +267,7 @@ test.describe("MapView leak guard (VIZ-01 / VIZ-02 / VIZ-03)", () => {
     await page.waitForTimeout(SMOKE_DURATION_MS);
 
     // Force GC + final.
-    await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
+    await page.evaluate(() => { (globalThis as { gc?: () => void }).gc?.(); });
     await page.waitForTimeout(500);
     const heapAfter = await page.evaluate(readUsedJSHeapSize);
 

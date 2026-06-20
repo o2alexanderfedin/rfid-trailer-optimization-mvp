@@ -261,8 +261,14 @@ describe("KpiState", () => {
     // fields that changed should be in animatingFields
     const prev = makeSnapshot({ rehandleCount: 2 });
     const next = applyKpiPartial(prev, { rehandleCount: 7 });
+    // `Object.keys(next)` includes EVERY KpiSnapshot key — including the
+    // non-numeric `baseline` sub-object — so the key array must be typed as the
+    // FULL `keyof KpiSnapshot`. The previous `Omit<…,"baseline">` cast claimed
+    // `baseline` was absent, which made the `k !== "baseline"` runtime guard a
+    // type-impossible (no-overlap) comparison and let `baseline` slip past the
+    // filter at runtime. Typing it correctly keeps the guard meaningful.
     const animatingFields = new Set(
-      (Object.keys(next) as (keyof Omit<KpiSnapshot, "baseline">)[]).filter(
+      (Object.keys(next) as (keyof KpiSnapshot)[]).filter(
         (k) => k !== "baseline" && shouldAnimate(k, prev, next),
       ),
     );

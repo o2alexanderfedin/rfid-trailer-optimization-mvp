@@ -30,7 +30,6 @@ const cfg: FusionConfig = {
 function obs(over: Partial<WindowedObservation> & Pick<WindowedObservation, "readerId">): WindowedObservation {
   return {
     tagId: "tag-A",
-    readerId: over.readerId,
     dwellWindowId: "dw-1",
     antennaId: "ant-1",
     trailerId: "trl-1",
@@ -39,6 +38,8 @@ function obs(over: Partial<WindowedObservation> & Pick<WindowedObservation, "rea
     aggregatedRssi: -50,
     readCount: 20,
     lastObservedAt: "2026-06-19T10:00:00.000Z",
+    // `readerId` (required by `Pick<WindowedObservation, "readerId">`) is provided
+    // by the spread below — declaring it above too would be a duplicate key.
     ...over,
   };
 }

@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Kysely } from "kysely";
 import { appendToStream, readAll } from "@mm/event-store";
 import {
   applyInline,
   projectionView,
   readOperationalTwin,
+  type ProjectionDb,
 } from "@mm/projections";
 import { runSimulation, simulate, type SimulatedEvent } from "../src/engine.js";
 import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js";
@@ -84,7 +86,11 @@ describe("simulator drives operational projections (SIM-02)", () => {
     // Project the whole persisted log once, strictly by global_seq, in one txn.
     const log = await readAll(es, 0n);
     await fx.db.transaction().execute(async (trx) => {
-      const proj = projectionView(trx);
+      // `Transaction<DB>` genuinely contains the projection tables but, because
+      // `Kysely<T>` is invariant in `T`, the inferred `Database & ProjectionDb`
+      // doesn't structurally match `Kysely<ProjectionDb>`. Narrow via the
+      // sanctioned `projectionView` convention (same pattern as the API sim driver).
+      const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
       for (const stored of log) await applyInline(proj, stored);
     });
 

@@ -178,7 +178,14 @@ describe("auditTimelineReducer — trailer streams (Task 1 extension)", () => {
     const event: DomainEvent = {
       type: "PackageCreated",
       schemaVersion: 1,
-      payload: { packageId: "P1", originHubId: "MEM", rfidTagId: "TAG1" },
+      payload: {
+        packageId: "P1",
+        originHubId: "MEM",
+        destHubId: "DFW",
+        sizeClass: "medium",
+        weight: 4.2,
+        rfidTagId: "TAG1",
+      },
     };
     const entry = auditTimelineReducer(stored(event, 20n, at(0)));
     expect(entry).not.toBeNull();
@@ -233,11 +240,12 @@ describe("auditTimelineReducer — trailer streams (Task 1 extension)", () => {
       schemaVersion: 1,
       payload: {
         tagId: "TAG1",
-        trailerId: "T1",
-        antennaSector: "rear",
-        rssi: -65,
         readerId: "R1",
-        occurredAt: at(0),
+        antennaId: "ANT1",
+        rssi: -65,
+        trailerId: "T1",
+        hubId: "MEM",
+        confidence: 0.8,
       },
     };
     expect(auditTimelineReducer(stored(event, 32n, at(0)))).toBeNull();

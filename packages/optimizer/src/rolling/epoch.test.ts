@@ -139,13 +139,26 @@ describe("runEpoch (OPT-04/05/06 pure rolling core)", () => {
     // from the capacity demand, so a trailer could be loaded beyond capacity yet
     // still pass the gate. With the fix, EVERY assigned block contributes its
     // volume, so 6+8+10 = 24 > 20 ⇒ the candidate is flagged INFEASIBLE.
-    const snap = snapshot();
-    (snap.trailers[0] as { blocks: { blockId: string; nextUnloadHubId: string; volume: number }[] }).blocks = [
-      { blockId: "B1", nextUnloadHubId: "H2", volume: 6 },
-      { blockId: "B2", nextUnloadHubId: "H3", volume: 8 },
-      // Off-route block: H9 is not in the trailer's route — its volume must NOT vanish.
-      { blockId: "B3", nextUnloadHubId: "H9", volume: 10 },
-    ];
+    const base = snapshot();
+    const baseTrailer = base.trailers[0]!;
+    // Build a NEW, fully-typed snapshot (no unsound `as` cast over the readonly
+    // `blocks` array): the first trailer gets an extra OFF-ROUTE block (H9) whose
+    // volume must still count toward the capacity demand.
+    const snap: TwinSnapshot = {
+      ...base,
+      trailers: [
+        {
+          ...baseTrailer,
+          blocks: [
+            { blockId: "B1", nextUnloadHubId: "H2", volume: 6 },
+            { blockId: "B2", nextUnloadHubId: "H3", volume: 8 },
+            // Off-route block: H9 is not in the trailer's route — its volume must NOT vanish.
+            { blockId: "B3", nextUnloadHubId: "H9", volume: 10 },
+          ],
+        },
+        ...base.trailers.slice(1),
+      ],
+    };
     const overInput: EpochInput = { events: [departed("T1", "H1", "H2")], twinSnapshot: snap };
 
     const result = runEpoch(EPOCH, overInput, DEFAULT_OBJECTIVE_WEIGHTS);

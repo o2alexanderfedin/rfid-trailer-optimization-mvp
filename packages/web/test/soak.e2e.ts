@@ -214,7 +214,7 @@ test.describe("KEYSTONE (a): flat-memory soak over multi-minute animated run", (
     await page.waitForTimeout(WARMUP_MS);
 
     // Force GC and take baseline heap measurement.
-    await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
+    await page.evaluate(() => { (globalThis as { gc?: () => void }).gc?.(); });
     await page.waitForTimeout(500); // let GC settle
     const heapBefore = await page.evaluate(readUsedJSHeapSize);
 
@@ -222,7 +222,7 @@ test.describe("KEYSTONE (a): flat-memory soak over multi-minute animated run", (
     await page.waitForTimeout(SOAK_DURATION_MS);
 
     // Force GC and take final heap measurement.
-    await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
+    await page.evaluate(() => { (globalThis as { gc?: () => void }).gc?.(); });
     await page.waitForTimeout(500); // let GC settle
     const heapAfter = await page.evaluate(readUsedJSHeapSize);
 

@@ -165,6 +165,7 @@ function makeTrailerAnim(
 ): TrailerAnim {
   return {
     trailerId: "T-1",
+    currentRouteId: "R-1",
     routeGeom: makeGeom(coords) as unknown as LineString,
     routeLengthM: 100,
     departSimMs,

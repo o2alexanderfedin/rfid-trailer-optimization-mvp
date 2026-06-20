@@ -37,7 +37,9 @@ function constSnapshot(snap: TwinSnapshot) {
 function makeService(opts?: Partial<RollingOptimizerDeps>): RollingOptimizerService {
   return new RollingOptimizerService({
     db: opts?.db ?? ({} as RollingOptimizerDeps["db"]),
-    weights: opts?.weights,
+    // Omit `weights` when undefined: under exactOptionalPropertyTypes the optional
+    // `weights?: ObjectiveWeights` field cannot be assigned an explicit `undefined`.
+    ...(opts?.weights !== undefined ? { weights: opts.weights } : {}),
   });
 }
 
@@ -52,7 +54,7 @@ function makeTrailerEvent(trailerId: string): DomainEvent {
       tripId: "trip-01",
       fromHubId: "ATL",
       toHubId: "CHI",
-      departedAt: "2024-01-01T00:00:00.000Z",
+      packageIds: [],
     },
   };
 }
@@ -65,7 +67,6 @@ function makeHubEvent(hubId: string): DomainEvent {
       trailerId: "T001",
       tripId: "trip-01",
       hubId,
-      arrivedAt: "2024-01-01T01:00:00.000Z",
     },
   };
 }
@@ -208,20 +209,19 @@ describe("RollingLoop", () => {
             feasible: true,
             objectiveCost: 42,
             breakdown: {
+              miles: 0,
+              driverTime: 0,
+              fuel: 0,
+              dockWait: 0,
+              handling: 0,
+              rehandle: 0,
+              slaLateness: 0,
+              lowUtil: 0,
+              highUtil: 0,
+              overCarry: 0,
+              imbalance: 0,
+              churn: 0,
               total: 42,
-              terms: {
-                miles: 0,
-                driverTimeMin: 0,
-                fuelUnits: 0,
-                dockWaitMin: 0,
-                handlingOps: 0,
-                rehandleScore: 0,
-                slaLatenessMin: 0,
-                utilization: 0,
-                overCarryUnits: 0,
-                imbalance: 0,
-                churnVsPrevious: 0,
-              },
             },
             frozen: false,
           },
@@ -316,20 +316,19 @@ describe("RollingLoop", () => {
               feasible: true,
               objectiveCost: 30,
               breakdown: {
+                miles: 30,
+                driverTime: 30,
+                fuel: 30,
+                dockWait: 0,
+                handling: 1,
+                rehandle: 0,
+                slaLateness: 0,
+                lowUtil: 0,
+                highUtil: 0,
+                overCarry: 0,
+                imbalance: 0,
+                churn: 0,
                 total: 30,
-                terms: {
-                  miles: 30,
-                  driverTimeMin: 30,
-                  fuelUnits: 30,
-                  dockWaitMin: 0,
-                  handlingOps: 1,
-                  rehandleScore: 0,
-                  slaLatenessMin: 0,
-                  utilization: 0.02,
-                  overCarryUnits: 0,
-                  imbalance: 0,
-                  churnVsPrevious: 0,
-                },
               },
               frozen: false,
             },

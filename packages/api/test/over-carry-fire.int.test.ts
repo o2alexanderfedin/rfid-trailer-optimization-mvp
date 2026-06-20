@@ -90,7 +90,7 @@ describe("F-07 / SNS-05 — over-carry makes the missed-unload detector fire LIV
   /** Reset, drive the live path at one over-carry rate, return missed-unload feed. */
   async function driveAndCount(
     overCarry: number,
-  ): Promise<{ missedUnloadCount: number; packageIds: string[]; confidences: number[]; hubIds: string[] }> {
+  ): Promise<{ missedUnloadCount: number; packageIds: string[]; confidences: number[]; hubIds: (string | null)[] }> {
     await resetDb(fx.db);
     await driveSimulation({
       db: fx.db,
