@@ -211,7 +211,7 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
       utilization: number;
       rehandleCount: number;
       rehandleMinutes: number;
-      onTimeDeparture: number;
+      onTimeDeparture: number | null;
       wrongTrailerCount: number;
       missedUnloadCount: number;
       baseline?: { utilization: number };
@@ -220,21 +220,14 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
     expect(typeof body.utilization).toBe("number");
     expect(typeof body.rehandleCount).toBe("number");
     expect(typeof body.rehandleMinutes).toBe("number");
-    expect(typeof body.onTimeDeparture).toBe("number");
     // FIX 4: baseline is NOT present on GET /kpis (it was a misleading copy).
     // The honest baseline lives in GET /kpis/comparison (the money slide).
     expect(body.baseline).toBeUndefined();
 
-    // Critical live-wiring gate: after driving BASELINE_TICKS=35 ticks the
-    // sim has populated trailer_state with 9 trailers (one per spoke hub).
-    // The utilization fraction may be 0 (no packages yet assigned) but the
-    // KPI snapshot must reflect live data — onTimeDeparture=1.0 (default when
-    // no departures counted) is correct, not a stub zero.
-    // The key non-zero signal: at least one of (rehandleCount, onTimeDeparture)
-    // is the live value from the optimizer/projections, not 0 from a static stub.
-    //
-    // onTimeDeparture defaults to 1.0 when totalDepartureCount=0 (computeKpis
-    // contract), so after the sim it must be exactly 1.0 (not 0 = stub artifact).
-    expect(body.onTimeDeparture).toBe(1);
+    // Honest on-time contract (F-03): no scheduled departure times are persisted,
+    // so onTimeDeparture is null ("unavailable") — NOT a fabricated 1.0 and never a
+    // stub 0. Live-wiring after BASELINE_TICKS is proven by the epoch-change
+    // assertions above and the complete real KPI shape here, not by a fake 1.0.
+    expect(body.onTimeDeparture).toBeNull();
   });
 });

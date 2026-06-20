@@ -254,38 +254,31 @@ describe("FIX SMOKE — end-to-end live-demo integration test", () => {
       wrongTrailerCount: number;
       missedUnloadCount: number;
       slaViolationRate: number;
-      onTimeDeparture: number;
-      onTimeArrival: number;
+      onTimeDeparture: number | null;
+      onTimeArrival: number | null;
     }>();
 
     // Shape completeness.
     expect(typeof body.utilization).toBe("number");
     expect(typeof body.rehandleCount).toBe("number");
-    expect(typeof body.onTimeDeparture).toBe("number");
 
-    // Non-zero gate: after 120 ticks with RFID + DEMO_RFID_CONFIG (wrongZoneRate=0.1),
-    // at least one of: (a) wrongTrailerCount > 0 (RFID detection fired), OR
-    // (b) onTimeDeparture === 1.0 (live value when no departure counted), OR
-    // (c) utilization > 0 (some packages assigned to trailers).
-    //
-    // The key assertion: onTimeDeparture must NOT be 0 (that's a stub artifact —
-    // a zero means totalDepartureCount=0 defaults to 0 instead of 1.0; the live
-    // implementation correctly returns 1.0 when no departures are counted).
-    expect(
-      body.onTimeDeparture,
-      "onTimeDeparture must be 1.0 when no departures are counted (correct computeKpis default). 0 indicates a stub/regression.",
-    ).toBeGreaterThan(0);
+    // Honest on-time contract (F-03): no scheduled departure/arrival times are
+    // persisted anywhere, so on-time is null ("unavailable", rendered "—" in the
+    // UI) — NOT a fabricated 1.0 (the old fake 100%) and never a stub 0.
+    expect(body.onTimeDeparture).toBeNull();
+    expect(body.onTimeArrival).toBeNull();
 
-    // At least one KPI must be non-zero (the live path populated something).
-    // wrongTrailerCount comes from Phase-3 detection (DEMO_RFID_CONFIG fires it).
+    // At least one GENUINELY-LIVE KPI must be non-zero (the live path populated
+    // something — all-zero is the stub state). wrongTrailerCount comes from
+    // Phase-3 detection (DEMO_RFID_CONFIG fires it); utilization/rehandle from
+    // the optimizer + projections.
     const anyNonZero =
       body.wrongTrailerCount > 0 ||
       body.rehandleCount > 0 ||
-      body.utilization > 0 ||
-      body.onTimeDeparture > 0; // always true per above assertion
+      body.utilization > 0;
     expect(
       anyNonZero,
-      "Expected at least one non-zero KPI after 120 ticks — all-zero is the stub state.",
+      "Expected at least one non-zero live KPI after 120 ticks — all-zero is the stub state.",
     ).toBe(true);
 
     // wrongTrailerCount > 0: with DEMO_RFID_CONFIG (wrongZoneRate=0.1),
