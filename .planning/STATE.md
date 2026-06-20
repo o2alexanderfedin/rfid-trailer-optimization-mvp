@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: milestone-complete-pending
+status: milestone-complete
 stopped_at: ""
-last_updated: "2026-06-19 (Phase 5 built + review-fixed; ready to merge + run milestone lifecycle)"
-last_activity: "2026-06-19 — Phase 5 (8 plans) built; adversarial review found 12 live-integration blockers (synthetic tests missed the live path) → 3-subagent fix burst (localRepair-in-epoch, real rehandle, real VIZ-03 buckets, live paced ticks, scenario-delta injection, single-clock animation, single ws) + new live-demo.int.test.ts end-to-end keystone. Gate green (827 tests + e2e). Next: merge feature/phase-5 → develop → milestone v1.0 lifecycle (audit→complete→cleanup)."
+last_updated: "2026-06-20 (v1.0 shipped: main @ v1.0.0 tagged; audit gaps resolved + merged to develop and pushed; running milestone lifecycle close)"
+last_activity: "2026-06-20 — v1.0 milestone close-out. Audit-fix campaign (F-01..F-08, OPT-02, SNS-05, VIZ-03 + lint/typecheck hardening) merged to develop + pushed; re-verified merged tree GREEN (872 unit+int tests / 98 files; real chromium-real e2e 3/3). Stale per-phase + chore branches pruned (origin now develop+main only); planning bookkeeping reconciled (ROADMAP plan checkboxes, 4 VALIDATION nyquist flags, audit status). Running gsd-complete-milestone v1.0 → gsd-cleanup."
 progress:
   total_phases: 5
   completed_phases: 5

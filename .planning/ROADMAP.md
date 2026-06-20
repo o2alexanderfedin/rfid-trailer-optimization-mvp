@@ -89,13 +89,13 @@ Notes: This is the load-bearing correctness phase. Defend against P1 (inverted L
   5. A missing RFID read never marks a package as "missing" or vanished (absence of evidence ≠ evidence of absence), and the exception feed is not flooded with false positives.
 **Plans**: 7 plans
 Plans:
-- [ ] 03-01-PLAN.md — Domain: add the 3 new events (RfidObserved/WrongTrailerDetected/MissedUnloadDetected) + rfidTagId to the closed union + zod + contract.assert (SNS-01, SNS-02)
-- [ ] 03-02-PLAN.md — @mm/sensor-fusion (pure, TDD): RSSI→likelihood (capped 0.85), dwell windowing, Bayesian zone fusion (Markov prior + entropy floor) + anti-P5b confidence-cap keystone (SNS-01, SNS-03)
-- [ ] 03-03-PLAN.md — @mm/simulation (TDD): emit seeded probabilistic RfidObserved at portals/antennas with missRate + rssiNoise; same seed ⇒ identical RFID stream (SIM-03)
-- [ ] 03-04-PLAN.md — Detection predicates (pure, TDD): detectWrongTrailer / detectMissedUnload over planned-vs-observed + the anti-P6 absence≠missing keystone (SNS-04, SNS-05)
-- [ ] 03-05-PLAN.md — Projections (inline): tag-registry (SNS-02) + zone-estimate read models with idempotent checkpoints (SNS-02)
-- [ ] 03-06-PLAN.md — Detector + inline exceptions projection + false-positive KPI: planned-vs-observed ⇒ append exception events, post-departure gated (SNS-04, SNS-05)
-- [ ] 03-07-PLAN.md — @mm/api: GET /exceptions + KPI + zone-estimate queries + runDetection wired into the per-tick sim driver; end-to-end demoable feed (SNS-04, SNS-05)
+- [x] 03-01-PLAN.md — Domain: add the 3 new events (RfidObserved/WrongTrailerDetected/MissedUnloadDetected) + rfidTagId to the closed union + zod + contract.assert (SNS-01, SNS-02)
+- [x] 03-02-PLAN.md — @mm/sensor-fusion (pure, TDD): RSSI→likelihood (capped 0.85), dwell windowing, Bayesian zone fusion (Markov prior + entropy floor) + anti-P5b confidence-cap keystone (SNS-01, SNS-03)
+- [x] 03-03-PLAN.md — @mm/simulation (TDD): emit seeded probabilistic RfidObserved at portals/antennas with missRate + rssiNoise; same seed ⇒ identical RFID stream (SIM-03)
+- [x] 03-04-PLAN.md — Detection predicates (pure, TDD): detectWrongTrailer / detectMissedUnload over planned-vs-observed + the anti-P6 absence≠missing keystone (SNS-04, SNS-05)
+- [x] 03-05-PLAN.md — Projections (inline): tag-registry (SNS-02) + zone-estimate read models with idempotent checkpoints (SNS-02)
+- [x] 03-06-PLAN.md — Detector + inline exceptions projection + false-positive KPI: planned-vs-observed ⇒ append exception events, post-departure gated (SNS-04, SNS-05)
+- [x] 03-07-PLAN.md — @mm/api: GET /exceptions + KPI + zone-estimate queries + runDetection wired into the per-tick sim driver; end-to-end demoable feed (SNS-04, SNS-05)
 
 Notes: Detection must follow load planning because it compares *planned* (from scans + plan, Phase 2) against *observed* (RFID evidence) — both inputs must already exist. Defend against P6 (RFID-as-truth) with two explicit layers (planned/known vs confidence-scored observed); raise exceptions only on disagreement above threshold; a missed read must never imply "package gone." Defend against P5b (double-counted observations) with per-tag/per-reader/per-dwell observation windows feeding one fused observation, and an explicit independence model that caps confidence. Track the false-positive rate as a demo KPI. `sensor-fusion` is a pure scoring module; the exceptions projection is decision-critical (inline).
 
@@ -134,14 +134,14 @@ Notes: This is where engineering risk concentrates — there is no maintained JS
   5. The dashboard shows before/after KPI deltas comparing the baseline planner vs the optimizer on the *same* seeded simulated stream — the "money slide."
 **Plans**: 8 plans
 Plans:
-- [ ] 05-01-PLAN.md — [W1] VIZ-04 versioned ws envelope (snapshot + per-tick delta, seq+simMs) — underpins all frontend
-- [ ] 05-02-PLAN.md — [W1] OPT live-wiring: live rolling loop + min-cost-flow on the live path + repair recommendations endpoint (OPT-02/05/06/07)
-- [ ] 05-03-PLAN.md — [W1] UI-03/UI-04 KPI endpoints: GET /api/kpis + seed-deterministic GET /api/kpis/comparison (money-slide data)
-- [ ] 05-04-PLAN.md — [W2] VIZ-05/UI-02 backend: GET /api/trailers/:id/plan + audit timeline extended to trailers + captured recommendation
-- [ ] 05-05-PLAN.md — [W3] SIM-04 scenario knobs: POST /api/scenario → deterministic sim injection → scoped re-opt → visible tick diff [KEYSTONE c]
-- [ ] 05-06-PLAN.md — [W3] VIZ-02/VIZ-03 frontend: postrender route tween + STYLE_CACHE coloring + flat-memory soak [KEYSTONE a]
-- [ ] 05-07-PLAN.md — [W4] UI-01/UI-02/VIZ-05 panels: realtime alert feed + audit timeline + click-trailer plan detail
-- [ ] 05-08-PLAN.md — [W5] UI-03/UI-04 frontend: KPI dashboard (animated deltas) + before/after money slide [KEYSTONE b]
+- [x] 05-01-PLAN.md — [W1] VIZ-04 versioned ws envelope (snapshot + per-tick delta, seq+simMs) — underpins all frontend
+- [x] 05-02-PLAN.md — [W1] OPT live-wiring: live rolling loop + min-cost-flow on the live path + repair recommendations endpoint (OPT-02/05/06/07)
+- [x] 05-03-PLAN.md — [W1] UI-03/UI-04 KPI endpoints: GET /api/kpis + seed-deterministic GET /api/kpis/comparison (money-slide data)
+- [x] 05-04-PLAN.md — [W2] VIZ-05/UI-02 backend: GET /api/trailers/:id/plan + audit timeline extended to trailers + captured recommendation
+- [x] 05-05-PLAN.md — [W3] SIM-04 scenario knobs: POST /api/scenario → deterministic sim injection → scoped re-opt → visible tick diff [KEYSTONE c]
+- [x] 05-06-PLAN.md — [W3] VIZ-02/VIZ-03 frontend: postrender route tween + STYLE_CACHE coloring + flat-memory soak [KEYSTONE a]
+- [x] 05-07-PLAN.md — [W4] UI-01/UI-02/VIZ-05 panels: realtime alert feed + audit timeline + click-trailer plan detail
+- [x] 05-08-PLAN.md — [W5] UI-03/UI-04 frontend: KPI dashboard (animated deltas) + before/after money slide [KEYSTONE b]
 **UI hint**: yes
 
 Notes: This wrapper composes everything and lands last because it visualizes the outputs of every prior phase. The before/after comparison (P8 delivery) is the highest-leverage differentiator and is mostly wiring given the Phase 2 baseline + shared KPI plumbing; seed-frozen scenarios make it reproducible. Defend against P10 (OpenLayers perf/leaks) with in-place geometry mutation (never rebuild the source each frame), rAF-batched diffs, WebGL points for many trailers, strict OL disposal on teardown, and sim-clock-driven interpolation clamped to [0,1] — verify flat memory over a multi-minute run. The server pushes keyframe/ETA diffs, not per-second positions; the client tweens. Flagged for `/gsd-research-phase`: OpenLayers high-trailer-count rendering strategy + smooth interpolation cadence (worth a focused spike). Calibrate the simulator so scenarios are hard enough that LIFO sometimes can't win without over-carry/hold/reassign — otherwise the optimizer's win is theater.
