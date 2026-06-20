@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: milestone-complete
+status: Awaiting next milestone
 stopped_at: ""
-last_updated: "2026-06-20 (v1.0 shipped: main @ v1.0.0 tagged; audit gaps resolved + merged to develop and pushed; running milestone lifecycle close)"
-last_activity: "2026-06-20 — v1.0 milestone close-out. Audit-fix campaign (F-01..F-08, OPT-02, SNS-05, VIZ-03 + lint/typecheck hardening) merged to develop + pushed; re-verified merged tree GREEN (872 unit+int tests / 98 files; real chromium-real e2e 3/3). Stale per-phase + chore branches pruned (origin now develop+main only); planning bookkeeping reconciled (ROADMAP plan checkboxes, 4 VALIDATION nyquist flags, audit status). Running gsd-complete-milestone v1.0 → gsd-cleanup."
+last_updated: "2026-06-20T23:34:29.942Z"
+last_activity: 2026-06-20 — Milestone v1.0 completed and archived
 progress:
   total_phases: 5
   completed_phases: 5
@@ -18,19 +18,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-18)
+See: .planning/PROJECT.md (updated 2026-06-20)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** Milestone v1.0 lifecycle (all 5 phases built) — merge Phase 5 → develop, then audit → complete → cleanup
+**Current focus:** v1.0 MVP shipped + archived (2026-06-20; main @ v1.0.0). Planning next milestone — run /gsd-new-milestone.
 
 ## Current Position
 
-Phase: 5 of 5 ✅ built + review-fixed on feature/phase-5-simulation-visualization-wrapper — pending merge to develop.
-Plan: Phases 1–4 merged to develop; Phase 5 (8 plans + 3 fix rounds) done, gate green (827 tests + e2e).
-Status: Phase 5 ✅ COMPLETE — all 9 reqs (SIM-04, VIZ-02..05, UI-01..04) + OPT-02/05/06/07 live-wiring. Adversarial review caught 12 live-integration blockers (the synthetic suite missed the live path); 3-subagent fix burst closed them; new live-demo.int.test.ts pins the live path end-to-end. UI-04 = calibrated money-slide (MVP). See 05-REVIEW.md.
-Last activity: 2026-06-19 — Phase 5 built + live-integration fixed. Next: merge feature/phase-5 → develop (clean — develop unchanged since branch) → re-gate → push → milestone lifecycle (gsd-audit-milestone → gsd-complete-milestone v1.0 → gsd-cleanup).
-
-Progress: [██████████] 100% (5 of 5 phases built; pending merge + milestone close)
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-20 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -74,8 +72,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 4]: Open question — which JS/TS approach for min-cost flow + VRPTW (pure-TS SSP vs glpk.js LP vs OR-Tools-WASM/child-process bridge). MEDIUM confidence; gate with glpk.js correctness tests. Run /gsd-research-phase before planning.
-- [Phase 5]: OpenLayers high-trailer-count rendering + smooth interpolation cadence needs a focused spike (documented leak/perf risk). Run /gsd-research-phase before planning.
+None — all v1.0 phase blockers resolved at ship. (Phase 4 settled on custom SSP min-cost-flow + VRPTW with a glpk.js correctness oracle; Phase 5 OpenLayers perf resolved via flat-heap postrender animation, soak-proven.) Carried technical debt is tracked in PROJECT.md and `milestones/v1.0-MILESTONE-AUDIT.md`.
 
 ## Deferred Items
 
@@ -87,6 +84,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-19T19:46:34.938Z
-Stopped at: context exhaustion at 75% (2026-06-19)
+Last session: 2026-06-20 — v1.0 milestone close-out
+Stopped at: Milestone v1.0 completed + archived; merge to develop + push pending
 Resume file: None
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
