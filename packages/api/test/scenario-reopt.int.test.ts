@@ -188,14 +188,16 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
       onTimeDeparture: number;
       wrongTrailerCount: number;
       missedUnloadCount: number;
-      baseline: { utilization: number };
+      baseline?: { utilization: number };
     }>();
-    // Shape must be complete.
+    // Shape must be complete (FIX 4: baseline is removed from GET /kpis).
     expect(typeof body.utilization).toBe("number");
     expect(typeof body.rehandleCount).toBe("number");
     expect(typeof body.rehandleMinutes).toBe("number");
     expect(typeof body.onTimeDeparture).toBe("number");
-    expect(body.baseline).toBeDefined();
+    // FIX 4: baseline is NOT present on GET /kpis (it was a misleading copy).
+    // The honest baseline lives in GET /kpis/comparison (the money slide).
+    expect(body.baseline).toBeUndefined();
 
     // Critical live-wiring gate: after driving BASELINE_TICKS=35 ticks the
     // sim has populated trailer_state with 9 trailers (one per spoke hub).

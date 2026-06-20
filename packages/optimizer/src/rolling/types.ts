@@ -2,7 +2,7 @@ import type { DomainEvent, PlanAccepted, PlanGenerated } from "@mm/domain";
 
 import type { ObjectiveBreakdown, ObjectiveWeights } from "../objective/types.js";
 import type { OptimizerScope } from "../graph/types.js";
-import type { Recommendation } from "../repair/local-repair.js";
+import type { Recommendation, RepairKind } from "../repair/local-repair.js";
 
 /**
  * `@mm/optimizer` — the rolling-epoch CONTRACTS (OPT-04/05/06).
@@ -121,6 +121,21 @@ export interface EpochInput {
 }
 
 /**
+ * One ranked repair recommendation, surfaced by `localRepair` (OPT-07) and
+ * carried on an infeasible trailer's `EpochRecommendation`. Feasibility stays a
+ * SEPARATE field on each entry (anti-P2): a low-cost repair is never assumed
+ * feasible. The rationale (§17.4) is human-readable for the operator UI.
+ */
+export interface EpochRepairRec {
+  /** The §17.4 recovery action. */
+  readonly kind: RepairKind;
+  /** Human-readable §17.4 rationale (anti-repudiation). */
+  readonly rationale: string;
+  /** Phase-2 HARD gate verdict — kept distinct from `kind` and cost (anti-P2). */
+  readonly feasible: boolean;
+}
+
+/**
  * One candidate recommendation surfaced by the epoch for a trailer: its plan id,
  * trailer, the SEPARATE feasibility flag (anti-P2), the weighted objective cost,
  * and the per-term breakdown for explainability.
@@ -136,6 +151,12 @@ export interface EpochRecommendation {
   readonly breakdown: ObjectiveBreakdown;
   /** Whether this trailer was frozen (skipped) this epoch (anti-P7). */
   readonly frozen: boolean;
+  /**
+   * Ranked repair recommendations from `localRepair` (OPT-07). Present only
+   * when this trailer is infeasible and at least one repair was found; `undefined`
+   * for feasible or frozen trailers (anti-clutter).
+   */
+  readonly repairRecommendations?: readonly EpochRepairRec[];
 }
 
 /**

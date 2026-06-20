@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { EpochRecommendation, EpochResult } from "@mm/optimizer";
-import type { RepairKind } from "@mm/optimizer";
+import type { RepairKind } from "@mm/optimizer"; // used by RepairRecDto
 
 import type { RollingOptimizerService } from "../optimizer/rolling-service.js";
 
@@ -74,20 +74,7 @@ export interface OptimizerRecommendationsDto {
   readonly recommendations: readonly RecommendationDto[];
 }
 
-/**
- * The extended `EpochRecommendation` shape: the optimizer may attach repair
- * recommendations produced by `localRepair` (OPT-07) for infeasible trailers.
- * This is additive — existing callers that don't populate it see `undefined`.
- */
-type EpochRecommendationWithRepairs = EpochRecommendation & {
-  readonly repairRecommendations?: ReadonlyArray<{
-    readonly kind: RepairKind;
-    readonly rationale: string;
-    readonly feasible: boolean;
-  }>;
-};
-
-function toRepairDto(rec: EpochRecommendationWithRepairs): RecommendationDto {
+function toRepairDto(rec: EpochRecommendation): RecommendationDto {
   const base: RecommendationDto = {
     trailerId: rec.trailerId,
     planId: rec.planId,
@@ -97,7 +84,8 @@ function toRepairDto(rec: EpochRecommendationWithRepairs): RecommendationDto {
     frozen: rec.frozen,
   };
 
-  // Surface repair recs if the epoch populated them (OPT-07)
+  // Surface repair recs if the epoch populated them (OPT-07).
+  // EpochRecommendation now carries repairRecommendations natively (FIX 1).
   if (rec.repairRecommendations !== undefined && rec.repairRecommendations.length > 0) {
     return {
       ...base,
@@ -117,9 +105,7 @@ function toDto(result: EpochResult): OptimizerRecommendationsDto {
     scopeHash: result.scopeHash,
     accepted: result.accepted,
     generated: result.generated,
-    recommendations: result.recommendations.map((r) =>
-      toRepairDto(r as EpochRecommendationWithRepairs),
-    ),
+    recommendations: result.recommendations.map(toRepairDto),
   };
 }
 

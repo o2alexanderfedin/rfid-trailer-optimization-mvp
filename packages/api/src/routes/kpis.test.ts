@@ -84,7 +84,7 @@ describe("GET /kpis", () => {
     if (app) await app.close();
   });
 
-  it("returns 200 with a KpiSnapshot shape", async () => {
+  it("returns 200 with a live KPI snapshot shape (FIX 4: no baseline field)", async () => {
     app = await buildApp();
     const resp = await app.inject({ method: "GET", url: "/kpis" });
     expect(resp.statusCode).toBe(200);
@@ -105,12 +105,10 @@ describe("GET /kpis", () => {
       expect(typeof body[field], `field ${field}`).toBe("number");
     }
 
-    // The baseline sub-object must also be present.
-    expect(body["baseline"]).toBeDefined();
-    const baseline = body["baseline"] as Record<string, unknown>;
-    for (const field of numericFields) {
-      expect(typeof baseline[field], `baseline.${field}`).toBe("number");
-    }
+    // FIX 4: baseline must NOT be present. The previous implementation set
+    // baseline = { ...liveValues } which was a misleading copy of the live data.
+    // The honest before/after baseline belongs in GET /kpis/comparison only.
+    expect(body["baseline"]).toBeUndefined();
   });
 
   it("returns trailerCount > 0 when trailer_state has rows", async () => {

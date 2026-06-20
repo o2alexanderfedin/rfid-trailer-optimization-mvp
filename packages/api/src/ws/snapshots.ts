@@ -13,6 +13,7 @@ import {
   type ExceptionItem,
   type HubState,
   type KpiSnapshot,
+  type RouteState,
   type SnapshotPayload,
   type TickPayload,
   type TrailerKeyframe,
@@ -109,20 +110,69 @@ function isoToMs(iso: string): number {
   return new Date(iso).getTime();
 }
 
+// ---------------------------------------------------------------------------
+// VIZ-03 bucket helpers (FIX 3 — real hub/route buckets from live projections)
+// ---------------------------------------------------------------------------
+
+/**
+ * Quantize an integer count into 0-based buckets (0=empty, 1=low, 2=med, 3=high,
+ * 4=very-high). The thresholds are demo-calibrated for a ~10-hub sim network.
+ * Pure + deterministic: same count ⇒ same bucket (no Date.now/Math.random).
+ */
+function volumeBucketFor(count: number): number {
+  if (count === 0) return 0;
+  if (count <= 5) return 1;
+  if (count <= 15) return 2;
+  if (count <= 30) return 3;
+  return 4;
+}
+
+/**
+ * Quantize exception count per hub into 0-3 sla-risk buckets.
+ * 0 = no open exceptions, 1 = low (1 exc), 2 = medium (2), 3 = high (≥3).
+ */
+function slaRiskBucketFor(exceptionCount: number): number {
+  if (exceptionCount === 0) return 0;
+  if (exceptionCount === 1) return 1;
+  if (exceptionCount === 2) return 2;
+  return 3;
+}
+
+/**
+ * Quantize the number of in-transit trailers per route leg into 0-3 load buckets.
+ * 0 = no trailers, 1 = light (1), 2 = medium (2), 3 = heavy (≥3).
+ */
+function loadBucketFor(trailerCount: number): number {
+  if (trailerCount === 0) return 0;
+  if (trailerCount === 1) return 1;
+  if (trailerCount === 2) return 2;
+  return 3;
+}
+
 /**
  * Build the current `SnapshotPayload` from:
  *   - geo-track keyframes → `TrailerKeyframe[]` (depart/arrive per trip)
- *   - hub list → `HubState[]` (placeholder integer buckets; VIZ-03 fills them)
+ *   - hub list → `HubState[]` (FIX 3: real integer buckets from hub_inventory + exceptions)
  *   - open exceptions → `ExceptionItem[]`
- *   - KPI baseline → zeroed (Plan 05-03 fills it)
- *   - routes → empty (Plan 05-02/05-03 fills route metrics)
+ *   - routes → `RouteState[]` (FIX 3: real route list with load buckets from geo_route + geo_inflight_trip)
+ *   - KPI baseline → zeroed (ws snapshot zeroed; live KPIs are from GET /kpis)
  */
 export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> {
-  const [keyframes, hubList, openExceptions] = await Promise.all([
-    readGeoKeyframes(catchupView(db)),
-    readHubsFromLog(db),
-    readOpenExceptions(projView(db)),
-  ]);
+  const catchup = catchupView(db);
+  const proj = projView(db);
+
+  const [keyframes, hubList, openExceptions, hubInventoryRows, geoRouteRows, inflightTripRows] =
+    await Promise.all([
+      readGeoKeyframes(catchup),
+      readHubsFromLog(db),
+      readOpenExceptions(proj),
+      // FIX 3: real hub inventory for volumeBucket + congestionBucket
+      proj.selectFrom("hub_inventory").selectAll().execute(),
+      // FIX 3: route leg list for RouteState[]
+      proj.selectFrom("geo_route").selectAll().execute(),
+      // FIX 3: in-transit trips for route loadBucket
+      proj.selectFrom("geo_inflight_trip").selectAll().execute(),
+    ]);
 
   // Build TrailerKeyframes: one per trailer, from the LATEST depart + earliest
   // arrive keyframe so we have a departMs/etaMs leg range for tweening.
@@ -172,17 +222,71 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-  // Hub states: placeholder integer buckets (all 0; VIZ-03 refines in Plan 05-02)
+  // FIX 3 — Hub states: compute real integer buckets from hub_inventory + exceptions.
+  // volumeBucket = quantized total package count (inbound+outbound+staged).
+  // congestionBucket = quantized outbound+staged (work in progress at the dock).
+  // slaRiskBucket = quantized open exception count per hub.
+
+  // Index hub inventory by hubId for O(1) lookup.
+  const invByHub = new Map<string, { inbound: string[]; outbound: string[]; staged: string[] }>();
+  for (const row of hubInventoryRows) {
+    const inbound = Array.isArray(row.inbound) ? row.inbound : (JSON.parse(row.inbound as string) as string[]);
+    const outbound = Array.isArray(row.outbound) ? row.outbound : (JSON.parse(row.outbound as string) as string[]);
+    const staged = Array.isArray(row.staged) ? row.staged : (JSON.parse(row.staged as string) as string[]);
+    invByHub.set(row.hub_id, { inbound, outbound, staged });
+  }
+
+  // Count open exceptions per hub (keyed by hubId from the exception row).
+  const exceptionsPerHub = new Map<string, number>();
+  for (const ex of openExceptions) {
+    // exceptions carry hubId — use it to attribute risk to that hub.
+    const hubId = ex.hubId;
+    if (hubId !== null && hubId !== undefined) {
+      exceptionsPerHub.set(hubId, (exceptionsPerHub.get(hubId) ?? 0) + 1);
+    }
+  }
+
   const hubs: HubState[] = hubList
-    .map(
-      (h): HubState => ({
+    .map((h): HubState => {
+      const inv = invByHub.get(h.hubId);
+      const inboundCount = inv?.inbound.length ?? 0;
+      const outboundCount = inv?.outbound.length ?? 0;
+      const stagedCount = inv?.staged.length ?? 0;
+      const totalCount = inboundCount + outboundCount + stagedCount;
+      const excCount = exceptionsPerHub.get(h.hubId) ?? 0;
+      return {
         id: h.hubId,
-        volumeBucket: 0,
-        slaRiskBucket: 0,
-        congestionBucket: 0,
-      }),
-    )
+        volumeBucket: volumeBucketFor(totalCount),
+        slaRiskBucket: slaRiskBucketFor(excCount),
+        congestionBucket: volumeBucketFor(outboundCount + stagedCount),
+      };
+    })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  // FIX 3 — Routes: build real RouteState[] from geo_route + in-transit trips.
+  // Each directed hub pair in geo_route becomes a RouteState with a load bucket
+  // derived from how many trips are currently in-flight on that leg.
+  const inflightByLeg = new Map<string, number>();
+  for (const trip of inflightTripRows) {
+    const key = `${trip.from_hub_id}|${trip.to_hub_id}`;
+    inflightByLeg.set(key, (inflightByLeg.get(key) ?? 0) + 1);
+  }
+
+  // Deduplicate (from_hub, to_hub) pairs; use them as the routeId.
+  const seenLeg = new Set<string>();
+  const routes: RouteState[] = [];
+  for (const row of geoRouteRows) {
+    const legKey = `${row.from_hub_id}|${row.to_hub_id}`;
+    if (seenLeg.has(legKey)) continue;
+    seenLeg.add(legKey);
+    const inTransit = inflightByLeg.get(legKey) ?? 0;
+    routes.push({
+      id: legKey, // stable unique key for this directed leg
+      loadBucket: loadBucketFor(inTransit),
+      slaRiskBucket: 0, // route-level SLA risk needs trip-plan data (future plan)
+    });
+  }
+  routes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   // Exceptions → ExceptionItem (map from OpenException)
   const exceptionsOpen: ExceptionItem[] = openExceptions.map(
@@ -200,7 +304,7 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   return {
     trailers,
     hubs,
-    routes: [], // Plan 05-03 adds route metrics
+    routes, // FIX 3: real route metrics (was [])
     kpis: ZEROED_KPIS,
     exceptionsOpen,
   };

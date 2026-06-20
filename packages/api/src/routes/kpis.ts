@@ -21,6 +21,9 @@
 import type { FastifyInstance } from "fastify";
 import type { KpiSnapshot } from "../ws/envelope.js";
 import { computeKpis } from "../kpis/compute-kpis.js";
+
+/** Live KPI snapshot without the misleading baseline copy (FIX 4). */
+type LiveKpiSnapshot = Omit<KpiSnapshot, "baseline">;
 import {
   computeComparison,
   DEMO_SEED,
@@ -48,10 +51,19 @@ import type { RollingOptimizerService } from "../optimizer/rolling-service.js";
  *   This is a proxy — on-time departure/arrival tallies require a dedicated
  *   event-log scan that is out of scope for the MVP (tracked as a stub).
  */
+/**
+ * FIX 4: returns `LiveKpiSnapshot` (no `baseline`) instead of `KpiSnapshot`.
+ * The previous implementation set `baseline = { ...base }` — a bitwise copy of
+ * the live snapshot — which was misleading: it implied a "before optimizer" view
+ * but was identical to the live data. The money slide in `GET /kpis/comparison`
+ * owns the honest before/after baseline comparison (using the DEMO_SEED scenario
+ * via `computeComparison`). `GET /kpis` is the LIVE operational snapshot and
+ * does not carry a baseline sub-object.
+ */
 async function readLiveKpiSnapshot(
   db: ApiDb,
   optimizer: RollingOptimizerService,
-): Promise<KpiSnapshot> {
+): Promise<LiveKpiSnapshot> {
   // 1. Trailer count + estimated utilization from projection.
   const trailerRows = await db
     .selectFrom("trailer_state")
@@ -108,8 +120,11 @@ async function readLiveKpiSnapshot(
     exceptionKpi,
   });
 
-  const baselineKpis = { ...base };
-  return { ...base, baseline: baselineKpis };
+  // FIX 4: return the live snapshot WITHOUT a baseline sub-object.
+  // The previous code returned `{ ...base, baseline: { ...base } }` which was a
+  // misleading copy of the live values. The baseline belongs in GET /kpis/comparison
+  // (the money slide), not in the operational snapshot.
+  return base;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,10 +143,12 @@ export function registerKpiRoutes(
   optimizer: RollingOptimizerService,
 ): void {
   // --- GET /kpis — operational KPI snapshot --------------------------------
-  // Returns the live KpiSnapshot (incl. baseline sub-object). Shape matches the
-  // ws envelope KpiSnapshot (Plan 05-01), so the dashboard reads one shape from
-  // both REST and ws (single source of truth for the KPI DTO contract).
-  app.get("/kpis", async (): Promise<KpiSnapshot> => {
+  // Returns the live operational KPI snapshot WITHOUT a baseline sub-object
+  // (FIX 4). The previous baseline was a misleading bitwise copy of the live
+  // values. The honest before/after baseline comparison lives in GET /kpis/comparison
+  // (the money slide — `computeComparison` with DEMO_SEED). Returning the live
+  // values only keeps this endpoint honest and avoids confusing the dashboard.
+  app.get("/kpis", async (): Promise<LiveKpiSnapshot> => {
     return readLiveKpiSnapshot(db, optimizer);
   });
 
