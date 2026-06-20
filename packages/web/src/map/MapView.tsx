@@ -335,9 +335,16 @@ export function MapView(): React.JSX.Element {
   // Pass the stable entity maps ref to the hook (off the React render path).
   useWsEnvelope(onEnvelope, entityMapsRef.current);
 
+  // The outer div carries app__map (flex: 1 1 auto from index.css) and
+  // data-testid for e2e assertions. Position: relative so the Legend overlay
+  // can be positioned absolute inside it.
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <div ref={containerRef} className="app__map" data-testid="map" />
+    <div
+      ref={containerRef}
+      className="app__map"
+      data-testid="map"
+      style={{ position: "relative" }}
+    >
       <Legend />
     </div>
   );
