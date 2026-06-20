@@ -2,19 +2,29 @@ import { createDb, migrate } from "@mm/event-store";
 import { PROJECTIONS_SCHEMA_SQL } from "@mm/projections";
 import { sql } from "kysely";
 import { buildServer } from "./server.js";
-import { driveSimulation } from "./sim/driver.js";
+import { driveSimulationPaced } from "./sim/driver.js";
 import { DEMO_RFID_CONFIG } from "./detection-config.js";
 import type { ApiDb } from "./routes/queries.js";
 
 /**
  * Runnable entrypoint. Connects to DATABASE_URL, migrates BOTH schemas (event
- * store + projections), drives a short deterministic demo simulation to populate
- * the read models, and serves the query API + ws snapshots. A background ticker
- * keeps pushing snapshots so a freshly-connected map client always animates.
+ * store + projections), starts listening, THEN drives the deterministic demo
+ * simulation as a paced live stream — one sim-tick per wall-clock interval.
  *
- * SIM-04 addition: the rolling optimizer loop is wired into the sim driver so
- * each tick triggers a scoped re-optimization. `POST /scenario` injects knobs
- * into a fresh re-opt window, making the optimizer's response visible live.
+ * FIX E: The previous implementation called `driveSimulation(...)` BEFORE
+ * `app.listen()`, so any client connecting after startup received the initial
+ * snapshot and NEVER any further ticks (the sim had already run to completion).
+ * Now we:
+ *   1. Listen first so clients can connect immediately.
+ *   2. Drive the sim via `driveSimulationPaced()`, which advances one sim-tick
+ *      per wall-clock interval and broadcasts each tick to connected clients.
+ *   3. Event generation remains fully deterministic (same seed → same stream);
+ *      only the *broadcast pacing* uses wall-clock (`setTimeout`) — presentation
+ *      layer only, not the sim engine.
+ *   4. The rolling optimizer runs per paced tick (live re-opt visible on the map).
+ *
+ * SIM-04: `loop` is the live rolling-optimizer (RollingLoop) — it fires per tick
+ * so the optimizer runs on the live path and recommendations are visible.
  */
 async function main(): Promise<void> {
   const seed = Number(process.env.SIM_SEED ?? 4242);
@@ -22,23 +32,41 @@ async function main(): Promise<void> {
   await migrate(db as unknown as Parameters<typeof migrate>[0]);
   await sql.raw(PROJECTIONS_SCHEMA_SQL).execute(db);
 
-  const { app, broadcast, loop } = await buildServer({ db, simSeed: seed });
+  const durationTicks = Number(process.env.SIM_TICKS ?? 120);
+  const { app, broadcast, loop } = await buildServer({
+    db,
+    simSeed: seed,
+    // FIX F: pass the full baseline tick count so scenario injection computes
+    // scenarioEpochMs beyond any already-memoized baseline epoch.
+    baselineTicks: durationTicks,
+  });
   app.addHook("onClose", async () => {
     await db.destroy();
   });
 
-  const durationTicks = Number(process.env.SIM_TICKS ?? 120);
-  // Enable seeded RFID emission so the WHOLE Phase-3 pipeline runs on the live
-  // demo (reads -> fused zone estimates -> per-tick detector -> exception feed).
-  // Without `rfid` the driver gates detection off and the feature is invisible.
-  //
-  // SIM-04: `loop` is the live rolling-optimizer (RollingLoop) — it fires per
-  // tick so the optimizer runs on the live path and recommendations are visible.
-  await driveSimulation({ db, seed, durationTicks, rfid: DEMO_RFID_CONFIG, broadcast, loop });
-
+  // FIX E: listen FIRST so connected clients can receive live ticks.
   const port = Number(process.env.PORT ?? 3001);
   await app.listen({ port, host: "0.0.0.0" });
   app.log.info(`API listening on :${port}`);
+
+  // Wall-clock ms between each sim-tick broadcast (presentation pacing only —
+  // the sim engine is deterministic; only the delivery interval is wall-clock).
+  const tickIntervalMs = Number(process.env.SIM_TICK_INTERVAL_MS ?? 500);
+
+  // Drive the sim AFTER listen so every connected client receives live ticks.
+  // Enable seeded RFID emission so the WHOLE Phase-3 pipeline fires end-to-end
+  // (reads → fused zone estimates → per-tick detector → exception feed).
+  driveSimulationPaced({
+    db,
+    seed,
+    durationTicks,
+    rfid: DEMO_RFID_CONFIG,
+    broadcast,
+    loop,
+    tickIntervalMs,
+  }).catch((err: unknown) => {
+    app.log.error(err, "paced sim driver error");
+  });
 }
 
 main().catch((err: unknown) => {

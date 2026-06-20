@@ -54,8 +54,11 @@ export type {
   KpiSnapshot,
 } from "./ws/envelope.js";
 export { diffTick } from "./ws/envelope.js";
-export { driveSimulation } from "./sim/driver.js";
-export type { DriveSimulationOptions } from "./sim/driver.js";
+export { driveSimulation, driveSimulationPaced } from "./sim/driver.js";
+export type {
+  DriveSimulationOptions,
+  DriveSimulationPacedOptions,
+} from "./sim/driver.js";
 
 // --- Walking-skeleton spine (Plan 01) — kept green; GET /hubs preserved ------
 export { buildApp } from "./app.js";
