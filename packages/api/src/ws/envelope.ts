@@ -96,7 +96,14 @@ export interface SnapshotPayload {
   readonly trailers: readonly TrailerKeyframe[];
   readonly hubs: readonly HubState[];
   readonly routes: readonly RouteState[];
-  readonly kpis: KpiSnapshot;
+  /**
+   * F-02: live KPIs are served by `GET /api/kpis` (the single source of truth),
+   * NOT over the ws channel. This field is optional and the production builder
+   * omits it — a zeroed placeholder here would clobber the REST-fetched values
+   * on the client. Kept optional (not removed) so `diffTick` can still compute a
+   * KPI delta if a future plan ever decides to stream them.
+   */
+  readonly kpis?: KpiSnapshot;
   readonly exceptionsOpen: readonly ExceptionItem[];
 }
 
@@ -263,16 +270,22 @@ export function diffTick(prev: SnapshotPayload, next: SnapshotPayload): TickPayl
   if (resolved.length > 0) result.exceptionsResolved = resolved;
 
   // --- KPIs: partial diff (only changed numeric fields) --------------------
-  const kpiDiff: Partial<KpiSnapshot> = {};
-  let kpiChanged = false;
-  for (const key of KPI_KEYS) {
-    if (prev.kpis[key] !== next.kpis[key]) {
-      // Cast needed: TS can't narrow `Partial<KpiSnapshot>[key]` from the loop.
-      (kpiDiff as Record<string, unknown>)[key] = next.kpis[key];
-      kpiChanged = true;
+  // F-02: the ws channel normally omits `kpis` (live KPIs come from GET /api/kpis).
+  // Only compute a delta when BOTH sides carry KPIs; otherwise emit nothing.
+  const prevKpis = prev.kpis;
+  const nextKpis = next.kpis;
+  if (prevKpis !== undefined && nextKpis !== undefined) {
+    const kpiDiff: Partial<KpiSnapshot> = {};
+    let kpiChanged = false;
+    for (const key of KPI_KEYS) {
+      if (prevKpis[key] !== nextKpis[key]) {
+        // Cast needed: TS can't narrow `Partial<KpiSnapshot>[key]` from the loop.
+        (kpiDiff as Record<string, unknown>)[key] = nextKpis[key];
+        kpiChanged = true;
+      }
     }
+    if (kpiChanged) result.kpis = kpiDiff;
   }
-  if (kpiChanged) result.kpis = kpiDiff;
 
   return result;
 }

@@ -16,10 +16,11 @@ import {
   formatKpiValue,
   shouldAnimate,
   kpiCards,
+  shouldRefetchKpis,
   type KpiState,
   type KpiCardDef,
 } from "./KpiDashboard.js";
-import type { KpiSnapshot } from "@mm/api";
+import type { KpiSnapshot, WsEnvelope } from "@mm/api";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -100,6 +101,53 @@ describe("applyKpiPartial", () => {
     expect(next.utilization).toBeCloseTo(0.9);
     expect(next.rehandleCount).toBe(0);
     expect(next.slaViolationRate).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-02 — ws ticks must NOT clobber the REST-fetched KPIs; they trigger a refetch
+// ---------------------------------------------------------------------------
+
+describe("F-02: ws envelope drives a REST refetch, never overwrites live KPIs", () => {
+  const liveKpis: KpiSnapshot = makeSnapshot({
+    utilization: 0.82,
+    rehandleCount: 4,
+    slaViolationRate: 0.03,
+  });
+
+  it("applyKpiPartial with a zeroed partial would clobber — so the merge path must not be used for ws", () => {
+    // Documents the root cause: 0 ?? prev = 0, so a zeroed ws payload overwrites
+    // the live REST values. This is WHY ws no longer feeds applyKpiPartial.
+    const zeroPartial: Partial<KpiSnapshot> = {
+      utilization: 0,
+      rehandleCount: 0,
+      slaViolationRate: 0,
+    };
+    const clobbered = applyKpiPartial(liveKpis, zeroPartial);
+    expect(clobbered.utilization).toBe(0); // demonstrates the clobber
+    expect(clobbered.rehandleCount).toBe(0);
+  });
+
+  it("a ws tick envelope is a refetch signal (sim advanced)", () => {
+    const tick: WsEnvelope = {
+      v: 1,
+      type: "tick",
+      seq: 7,
+      simMs: 1000,
+      payload: {},
+    };
+    expect(shouldRefetchKpis(tick)).toBe(true);
+  });
+
+  it("a ws snapshot envelope is also a refetch signal (initial/resync)", () => {
+    const snap: WsEnvelope = {
+      v: 1,
+      type: "snapshot",
+      seq: 1,
+      simMs: 0,
+      payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: [] },
+    };
+    expect(shouldRefetchKpis(snap)).toBe(true);
   });
 });
 

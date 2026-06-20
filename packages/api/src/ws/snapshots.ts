@@ -14,7 +14,6 @@ import {
   diffTick,
   type ExceptionItem,
   type HubState,
-  type KpiSnapshot,
   type RouteState,
   type SnapshotPayload,
   type TickPayload,
@@ -62,8 +61,9 @@ export type Broadcast = (simMs: number) => Promise<WsEnvelope>;
 export interface SnapshotSocketOptions {
   /**
    * Override the payload source. Defaults to the real {@link buildSnapshotPayload}
-   * (geo-track keyframes + hubs + open exceptions; KPI baseline zeroed until
-   * Plan 05-03 wires it). Injected by tests to avoid a live DB.
+   * (geo-track keyframes + hubs + open exceptions; KPIs are NOT carried over ws —
+   * F-02: live KPIs are served by `GET /api/kpis`). Injected by tests to avoid a
+   * live DB.
    */
   readonly buildPayload?: SnapshotPayloadBuilder;
 }
@@ -79,23 +79,6 @@ function catchupView(db: ApiDb): Kysely<CatchupDb> {
 function projView(db: ApiDb): Kysely<ProjectionDb> {
   return db as unknown as Kysely<ProjectionDb>;
 }
-
-// ---------------------------------------------------------------------------
-// Default zeroed KPI baseline (Plan 05-03 fills this in)
-// ---------------------------------------------------------------------------
-
-const ZEROED_KPI_BASE: Omit<KpiSnapshot, "baseline"> = {
-  utilization: 0,
-  rehandleCount: 0,
-  rehandleMinutes: 0,
-  wrongTrailerCount: 0,
-  missedUnloadCount: 0,
-  slaViolationRate: 0,
-  onTimeDeparture: 1,
-  onTimeArrival: 1,
-};
-
-const ZEROED_KPIS: KpiSnapshot = { ...ZEROED_KPI_BASE, baseline: { ...ZEROED_KPI_BASE } };
 
 // ---------------------------------------------------------------------------
 // Default SnapshotPayload builder (real DB, injected in tests)
@@ -194,7 +177,7 @@ export function exceptionSeverityToWire(
  *   - hub list → `HubState[]` (FIX 3: real integer buckets from hub_inventory + exceptions)
  *   - open exceptions → `ExceptionItem[]`
  *   - routes → `RouteState[]` (FIX 3: real route list with load buckets from geo_route + geo_inflight_trip)
- *   - KPI baseline → zeroed (ws snapshot zeroed; live KPIs are from GET /kpis)
+ *   - KPIs → omitted (F-02: live KPIs are served by `GET /api/kpis`, never over ws)
  */
 export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> {
   const catchup = catchupView(db);
@@ -344,7 +327,8 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     trailers,
     hubs,
     routes, // FIX 3: real route metrics (was [])
-    kpis: ZEROED_KPIS,
+    // F-02: live KPIs come from GET /api/kpis — do NOT carry a zeroed placeholder
+    // here, it would clobber the REST-fetched values on the client.
     exceptionsOpen,
   };
 }
@@ -493,11 +477,12 @@ export function attachSnapshotSocket(
 // ---------------------------------------------------------------------------
 
 function emptySnapshotPayload(): SnapshotPayload {
+  // F-02: no `kpis` — the ws channel does not carry KPIs (GET /api/kpis is the
+  // single source of truth). Omitting it keeps `diffTick` from emitting a delta.
   return {
     trailers: [],
     hubs: [],
     routes: [],
-    kpis: ZEROED_KPIS,
     exceptionsOpen: [],
   };
 }

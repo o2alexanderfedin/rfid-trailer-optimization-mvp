@@ -31,31 +31,13 @@ import {
 const FAKE_DB = {} as unknown as ApiDb;
 
 function emptyPayload(): SnapshotPayload {
+  // F-02: the ws channel no longer carries KPIs (live KPIs come from GET /api/kpis).
+  // `kpis` is optional on SnapshotPayload and omitted here to mirror production.
   return {
     trailers: [],
     hubs: [],
     routes: [],
     exceptionsOpen: [],
-    kpis: {
-      utilization: 0,
-      rehandleCount: 0,
-      rehandleMinutes: 0,
-      wrongTrailerCount: 0,
-      missedUnloadCount: 0,
-      slaViolationRate: 0,
-      onTimeDeparture: 1,
-      onTimeArrival: 1,
-      baseline: {
-        utilization: 0,
-        rehandleCount: 0,
-        rehandleMinutes: 0,
-        wrongTrailerCount: 0,
-        missedUnloadCount: 0,
-        slaViolationRate: 0,
-        onTimeDeparture: 1,
-        onTimeArrival: 1,
-      },
-    },
   };
 }
 
@@ -180,7 +162,7 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
     }
   });
 
-  it("snapshot payload contains trailers, hubs, routes, exceptionsOpen, kpis", async () => {
+  it("snapshot payload contains trailers, hubs, routes, exceptionsOpen (no kpis — F-02)", async () => {
     const payload = emptyPayload();
     const { app: a, port } = await buildTestApp((_db) => Promise.resolve(payload));
     app = a;
@@ -192,7 +174,9 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
       expect(Array.isArray(msg.payload.hubs)).toBe(true);
       expect(Array.isArray(msg.payload.routes)).toBe(true);
       expect(Array.isArray(msg.payload.exceptionsOpen)).toBe(true);
-      expect(msg.payload.kpis).toBeDefined();
+      // F-02: live KPIs come from GET /api/kpis — the ws snapshot must NOT carry
+      // a kpis field (a zeroed placeholder would clobber the live REST values).
+      expect("kpis" in msg.payload).toBe(false);
     } finally {
       socket.close();
     }
@@ -463,6 +447,55 @@ describe("buildSnapshotPayload FIX 3 — non-zero hub buckets and route list (VI
     } finally {
       socket.close();
       await a.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-02 — ws channel must NOT carry zeroed KPIs that clobber the REST source.
+// Live KPIs are served by GET /api/kpis (the documented single source of truth).
+// The ws snapshot/tick must NOT carry a `kpis` field at all, so the dashboard's
+// REST-fetched values are never overwritten by a zeroed placeholder.
+// ---------------------------------------------------------------------------
+
+describe("ws snapshot channel: F-02 — no zeroed KPIs on the wire", () => {
+  let app: FastifyInstance | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it("the initial snapshot payload does NOT carry a kpis field", async () => {
+    const { app: a, port } = await buildTestApp();
+    app = a;
+    const { socket, next } = await openSocketBuffered(port);
+    try {
+      const msg = await next();
+      if (msg.type !== "snapshot") throw new Error("expected snapshot");
+      // REST GET /api/kpis is the single source of truth — the ws snapshot must
+      // not carry KPIs (a zeroed placeholder would clobber the live REST values).
+      expect("kpis" in msg.payload).toBe(false);
+    } finally {
+      socket.close();
+    }
+  });
+
+  it("a tick from the real buildSnapshotPayload never emits a kpis partial", async () => {
+    // Use the REAL default builder path (no injected override) so we exercise the
+    // production payload. We assert via diffTick semantics: with no KPI data on
+    // either side, the tick must omit `kpis` entirely.
+    const { app: a, port, broadcast } = await buildTestApp();
+    app = a;
+    const { socket, next } = await openSocketBuffered(port);
+    try {
+      await next(); // consume initial snapshot
+      await broadcast(1000);
+      const tick = await next();
+      if (tick.type !== "tick") throw new Error("expected tick");
+      expect(tick.payload.kpis).toBeUndefined();
+    } finally {
+      socket.close();
     }
   });
 });

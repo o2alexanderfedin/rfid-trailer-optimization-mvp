@@ -44,6 +44,19 @@ export interface KpiCardDef {
 // ---------------------------------------------------------------------------
 
 /**
+ * F-02: decide whether a ws envelope should trigger a `GET /api/kpis` refetch.
+ *
+ * The ws channel no longer carries KPIs (live KPIs are served by REST — the
+ * single source of truth). Both `snapshot` (initial/resync) and `tick`
+ * (sim advanced) envelopes are "data changed" signals, so the dashboard
+ * re-fetches the authoritative KPI snapshot in response to either. Returning a
+ * boolean (rather than refetching inline) keeps this unit-testable without DOM.
+ */
+export function shouldRefetchKpis(envelope: WsEnvelope): boolean {
+  return envelope.type === "snapshot" || envelope.type === "tick";
+}
+
+/**
  * Immutable merge of a `Partial<KpiSnapshot>` onto `prev`.
  * `baseline` is never updated from tick partials (it is set once on mount).
  */
@@ -170,6 +183,49 @@ export function KpiDashboard(): React.JSX.Element {
   const prevRef = useRef<KpiSnapshot>(ZERO_SNAPSHOT);
   const timerRefs = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
+  // Merge a freshly-fetched authoritative KPI snapshot (from GET /api/kpis) into
+  // state, flashing any fields that changed. F-02: the full live snapshot is the
+  // single source of truth — we never merge a ws payload here, so a zeroed
+  // placeholder can never clobber the live values.
+  const mergeLiveKpis = useCallback((next: KpiSnapshot): void => {
+    setSnapshot((prev) => {
+      const changed: string[] = [];
+      for (const card of kpiCards()) {
+        if (shouldAnimate(card.field, prev, next)) {
+          changed.push(card.field);
+        }
+      }
+
+      if (changed.length > 0) {
+        setAnimating((cur) => {
+          const next2 = new Set(cur);
+          for (const f of changed) {
+            next2.add(f);
+            // Clear existing timer for this field
+            const existing = timerRefs.current.get(f);
+            if (existing !== undefined) clearTimeout(existing);
+            // Schedule removal
+            timerRefs.current.set(
+              f,
+              setTimeout(() => {
+                setAnimating((s) => {
+                  const cleared = new Set(s);
+                  cleared.delete(f);
+                  return cleared;
+                });
+                timerRefs.current.delete(f);
+              }, ANIMATE_MS),
+            );
+          }
+          return next2;
+        });
+      }
+
+      prevRef.current = next;
+      return next;
+    });
+  }, []);
+
   // --- Initial fetch --------------------------------------------------------
   useEffect(() => {
     const ac = new AbortController();
@@ -191,61 +247,41 @@ export function KpiDashboard(): React.JSX.Element {
     };
   }, []);
 
-  // --- ws tick updates -------------------------------------------------------
+  // --- ws-driven refetch (F-02) ---------------------------------------------
+  // The ws channel no longer carries KPIs. Each ws envelope (snapshot or tick)
+  // is a "sim advanced" signal, so we RE-FETCH the authoritative KPIs from REST
+  // (the single source of truth). This preserves liveness without letting the ws
+  // payload overwrite the live values, and reuses the single shared WsProvider
+  // socket via `useWsEnvelope` (no second connection).
   const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
+  const refetchAcRef = useRef<AbortController | null>(null);
 
   const onEnvelope = useCallback(
     (envelope: WsEnvelope): void => {
-      const partial =
-        envelope.type === "snapshot"
-          ? envelope.payload.kpis
-          : envelope.payload.kpis;
-      if (partial === undefined) return;
-
-      setSnapshot((prev) => {
-        const next = applyKpiPartial(prev, partial as Partial<KpiSnapshot>);
-
-        // Collect changed fields for animation
-        const changed: string[] = [];
-        for (const card of kpiCards()) {
-          if (shouldAnimate(card.field, prev, next)) {
-            changed.push(card.field);
-          }
-        }
-
-        if (changed.length > 0) {
-          setAnimating((cur) => {
-            const next2 = new Set(cur);
-            for (const f of changed) {
-              next2.add(f);
-              // Clear existing timer for this field
-              const existing = timerRefs.current.get(f);
-              if (existing !== undefined) clearTimeout(existing);
-              // Schedule removal
-              timerRefs.current.set(
-                f,
-                setTimeout(() => {
-                  setAnimating((s) => {
-                    const cleared = new Set(s);
-                    cleared.delete(f);
-                    return cleared;
-                  });
-                  timerRefs.current.delete(f);
-                }, ANIMATE_MS),
-              );
-            }
-            return next2;
-          });
-        }
-
-        prevRef.current = next;
-        return next;
-      });
+      if (!shouldRefetchKpis(envelope)) return;
+      // Coalesce overlapping refetches: abort any in-flight request first.
+      refetchAcRef.current?.abort();
+      const ac = new AbortController();
+      refetchAcRef.current = ac;
+      fetchKpis(ac.signal)
+        .then((kpis) => {
+          mergeLiveKpis(kpis);
+        })
+        .catch(() => {
+          // Aborted or transient network error — keep the last good values.
+        });
     },
-    [],
+    [mergeLiveKpis],
   );
 
   useWsEnvelope(onEnvelope, entityMapsRef.current);
+
+  // Abort any in-flight ws-driven refetch on unmount.
+  useEffect(() => {
+    return () => {
+      refetchAcRef.current?.abort();
+    };
+  }, []);
 
   // --- Render ----------------------------------------------------------------
   const cards = kpiCards();
