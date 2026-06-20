@@ -32,8 +32,22 @@ export interface SimControllerOptions {
    * How many additional ticks to drive when a scenario is injected.
    * A small window (e.g., 5–10 ticks) is enough to trigger one optimizer epoch
    * and produce visible plan changes for the demo.
+   * @deprecated This field is no longer used to drive sim ticks; the scenario
+   * delta path (FIX F) drives only the additive events. It is kept for API
+   * compatibility and used as the `durationTicks` base window for `applyScenario`.
    */
   readonly reoptTicks: number;
+  /**
+   * FIX F: The total number of ticks the initial baseline sim was driven for.
+   * Used to compute the full base stream so `applyScenario` has the correct
+   * window (same as the initial sim), AND to derive a `scenarioEpochMs` that
+   * is guaranteed to be beyond any epoch the optimizer has already processed.
+   *
+   * Must match the `durationTicks` passed to `driveSimulation` in `main.ts`.
+   * Default: `reoptTicks` (backward-compatible; upgrade to the full tick count
+   * by setting this explicitly from the server composition root).
+   */
+  readonly baselineTicks?: number;
   /** RFID config (passed through to the sim). */
   readonly rfid?: Partial<RfidSimConfig>;
   /** Detection config (passed through to the sim). */
@@ -80,10 +94,15 @@ export class SimController {
     // scope — the keystone: knob change ⇒ scoped re-opt ⇒ pushed tick delta.
     // Use spread to respect exactOptionalPropertyTypes: only include optional fields
     // when they are defined, so undefined is never assigned to optional-only fields.
+    // FIX F: use the FULL baseline tick count (not just reoptTicks) as the
+    // `durationTicks` for the base-stream generation, so `scenarioEpochMs`
+    // is computed from the actual end of the full baseline run — guaranteeing
+    // it falls BEYOND any epoch the optimizer has already memoized.
+    const fullTicks = this.opts.baselineTicks ?? this.opts.reoptTicks;
     await driveSimulationWithScenario({
       db: this.opts.db,
       seed: this.opts.seed,
-      durationTicks: this.opts.reoptTicks,
+      durationTicks: fullTicks,
       scenario: knobs,
       broadcast: this.opts.broadcast,
       ...(this.opts.rfid !== undefined ? { rfid: this.opts.rfid } : {}),

@@ -49,6 +49,15 @@ export interface ServerDeps {
    * Must match the seed used by the initial `driveSimulation` call in `main.ts`.
    */
   readonly simSeed?: number;
+  /**
+   * FIX F: the total number of ticks the initial baseline sim was driven for.
+   * Passed to `SimController` so scenario injection computes `scenarioEpochMs`
+   * from the FULL baseline stream end, ensuring the scenario optimizer epoch is
+   * strictly beyond any baseline epoch already memoized by the optimizer.
+   *
+   * Must match `SIM_TICKS` / `durationTicks` used in `main.ts`. Default: 120.
+   */
+  readonly baselineTicks?: number;
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -123,10 +132,14 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // scenario re-opt run using the live loop + broadcast.
   const simSeed = deps.simSeed ?? 4242;
   const reoptTicks = deps.scenarioReoptTicks ?? 5;
+  // FIX F: pass the full baseline tick count so scenario injection computes
+  // scenarioEpochMs beyond any already-memoized baseline epoch.
+  const baselineTicks = deps.baselineTicks ?? 120;
   const simController = new SimController({
     db: deps.db,
     seed: simSeed,
     reoptTicks,
+    baselineTicks,
     loop,
     broadcast,
   });
