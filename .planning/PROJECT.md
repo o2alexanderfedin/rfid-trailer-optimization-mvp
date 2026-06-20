@@ -8,7 +8,7 @@ probabilistic sensor evidence, and continuously re-optimizes hub-to-hub freight 
 reduce package rehandling, blocked freight, missed connections, and SLA failures while
 keeping trailers well utilized.
 
-This v1 is a **simulation-driven MVP**: a synthetic event stream feeds an event-sourced
+This v1 is a **shipped simulation-driven MVP**: a synthetic event stream feeds an event-sourced
 operational twin and a rolling-horizon optimizer, with a **realtime USA-map visualization**
 (OpenLayers / OpenStreetMap) of hubs, trailers, routes, and freight flow as the centerpiece.
 It is a proof-of-value demo, not a production pilot integrated with real WMS/TMS or RFID hardware.
@@ -26,40 +26,77 @@ twin producing explainable plans must work.
 
 <!-- Shipped and confirmed valuable. -->
 
-(None yet — ship to validate)
+All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the milestone audit and were fixed before close (see milestones/v1.0-MILESTONE-AUDIT.md).
+
+**Operational data foundation (FND)**
+- ✓ FND-01 Append-only Postgres event store — v1.0
+- ✓ FND-02 Per-stream optimistic concurrency + monotonic global sequence — v1.0
+- ✓ FND-03 Typed ingestion API/bus — v1.0
+- ✓ FND-04 Deterministic replay (live==rebuilt) — v1.0
+- ✓ FND-05 "Where was package X last seen?" — v1.0
+- ✓ FND-06 "What is on trailer T?" — v1.0
+- ✓ FND-07 Hub current inventory — v1.0
+- ✓ FND-08 Package movement audit timeline — v1.0
+
+**Simulation (SIM)**
+- ✓ SIM-01 USA hub-and-spoke network — v1.0
+- ✓ SIM-02 Seeded deterministic event stream — v1.0
+- ✓ SIM-03 Probabilistic RFID observations (miss rate+noise) — v1.0
+- ✓ SIM-04 Operator scenario knobs — v1.0
+
+**Visualization (VIZ)**
+- ✓ VIZ-01 Realtime OL/OSM map of hubs+routes — v1.0
+- ✓ VIZ-02 Trailers animate along route geometry from keyframes — v1.0
+- ✓ VIZ-03 Hubs/routes colored by state — v1.0
+- ✓ VIZ-04 Realtime state over WebSocket — v1.0
+- ✓ VIZ-05 Click trailer → load order+instructions+explanation — v1.0
+
+**Aggregation (AGG)**
+- ✓ AGG-01 Group packages into load blocks (7-part key) — v1.0
+- ✓ AGG-02 Aggregate volume/weight/count — v1.0
+- ✓ AGG-03 Split oversized/incompatible blocks — v1.0
+- ✓ AGG-04 Priority from SLA+deadline — v1.0
+
+**Load planning (LOAD)**
+- ✓ LOAD-01 Rear-to-nose slice/zone trailer model — v1.0
+- ✓ LOAD-02 Route unload-order map — v1.0
+- ✓ LOAD-03 Route-aware greedy LIFO plan — v1.0
+- ✓ LOAD-04 Independent validator (HARD/SOFT, separate code path) — v1.0
+- ✓ LOAD-05 Partial-LIFO (bounded blockers+rehandle cost) — v1.0
+- ✓ LOAD-06 Rehandle risk score — v1.0
+- ✓ LOAD-07 Utilization vs 75–90% band — v1.0
+- ✓ LOAD-08 Human-readable loading instructions — v1.0
+- ✓ LOAD-09 Naive FIFO baseline on shared KPI plumbing — v1.0
+- ✓ LOAD-10 Per-placement rationale — v1.0
+
+**Sensor fusion (SNS)**
+- ✓ SNS-01 RFID as confidence-scored evidence (never coordinates) — v1.0
+- ✓ SNS-02 Tag→package mapping — v1.0
+- ✓ SNS-03 Confidence-scored zone estimate (rule-based Bayesian) — v1.0
+- ✓ SNS-04 Wrong-trailer detection w/ severity+action — v1.0
+- ✓ SNS-05 Missed-unload detection w/ severity+action — v1.0
+
+**Optimizer (OPT)**
+- ✓ OPT-01 Time-expanded hub graph — v1.0
+- ✓ OPT-02 Min-cost-flow freight→route-leg assignment — v1.0
+- ✓ OPT-03 VRP/VRPTW route planning — v1.0
+- ✓ OPT-04 Sandboxed planning twin (no side effects) — v1.0
+- ✓ OPT-05 Rolling-horizon re-opt (periodic+event-triggered, scoped) — v1.0
+- ✓ OPT-06 Freeze windows + per-epoch idempotency — v1.0
+- ✓ OPT-07 Local repair (split/reassign/hold/over-carry) w/ rationale — v1.0
+- ✓ OPT-08 Plan selection minimizes weighted objective — v1.0
+
+**Operator UI (UI)**
+- ✓ UI-01 Alert feed for every exception — v1.0
+- ✓ UI-02 Read-only audit timeline (w/ captured recommendation) — v1.0
+- ✓ UI-03 KPI dashboard — v1.0
+- ✓ UI-04 Before/after money slide — v1.0
 
 ### Active
 
 <!-- Current scope. Building toward these. Detailed REQ-IDs live in REQUIREMENTS.md. -->
 
-**Operational data foundation (spec Phase 1)**
-- [ ] Event-sourced domain model: Package, LoadBlock, Trailer, TrailerSlice, Hub, DockDoor, Route, Trip
-- [ ] Event ingestion + event store with core event types (scans, trailer movements, RFID, plan lifecycle)
-- [ ] Projections: current package location, trailer state, hub inventory, audit timeline
-- [ ] Answer "where was package X last seen?" and "what is on trailer T?"
-
-**Load planning (spec Phase 2)**
-- [ ] Load-block aggregation (group packages by hub/destination/SLA/deadline/handling/size)
-- [ ] Rear-to-nose trailer slice model with route unload-order map
-- [ ] Route-aware LIFO / partial-LIFO load planner (greedy + local repair)
-- [ ] Rehandle risk scoring and trailer utilization scoring (soft 80% target)
-- [ ] Loading instructions output (load order by zone) + LIFO validation
-
-**RFID-assisted validation (spec Phase 3)**
-- [ ] RFID/barcode observation ingestion as confidence-scored evidence (rule-based Bayesian)
-- [ ] Tag-to-package mapping and confidence-scored zone estimates
-- [ ] Wrong-trailer detection and missed-unload detection with severity + recommended action
-
-**Rolling optimizer (spec Phase 4)**
-- [ ] Time-expanded hub network graph + min-cost flow freight assignment
-- [ ] VRP/VRPTW-style trailer/truck route planning
-- [ ] Rolling-horizon re-optimization (event-triggered + periodic) with freeze windows
-- [ ] Local repair actions: split / reassign / hold / over-carry, with weighted objective function
-
-**Simulation + visualization (delivery wrapper)**
-- [ ] Simulation engine producing realistic package/trailer/sensor events over a USA hub network
-- [ ] Realtime USA-map visualization (OpenLayers/OSM): hubs, trailers in motion, routes, freight/SLA state
-- [ ] Minimal read-only operator UI: load plan view, exception alerts, audit timeline, basic KPI dashboard
+(none — v1.0 complete; run /gsd-new-milestone to scope v1.1)
 
 ### Out of Scope
 
@@ -77,6 +114,7 @@ twin producing explainable plans must work.
 
 ## Context
 
+- **Shipped v1.0** — 42,591 LOC across 251 TS/TSX files, 10 pnpm packages (~21k src / ~21k test, TDD-heavy). Tech stack: TypeScript 5.9 strict / Node 22 / pnpm+Turborepo; Fastify 5 + @fastify/websocket + ws; Zod (not TypeBox); PostgreSQL via Kysely + pg, Testcontainers; custom time-expanded graph + SSP min-cost-flow + custom VRPTW (graphology/ngraph NOT adopted); glpk.js as a TEST-ONLY LP oracle; OpenLayers 10 + React 19 + Vite 7; Vitest 4 (872 unit+int tests / 98 files green) + Playwright (3 real chromium-real e2e). Lint 0 / typecheck 0 / build 10/10 at close. Known tech debt: in-memory (epoch,scopeHash) idempotency (no restart durability); utilization is a package-count proxy not true volume fill; UI-04 money slide is a calibrated seed-42 2-metric before/after (live 8-metric A/B deferred); 2 ws connections in web App (consolidate); scope-completeness under-scopes trailers loaded at a hub. Full debt list in milestones/v1.0-MILESTONE-AUDIT.md.
 - **Source of truth:** A detailed 1,600-line technical specification lives at
   `rfid_middle_mile_trailer_optimization_tech_spec.md` (domain model, algorithms,
   event-sourced architecture, objective function, KPIs, risks, 6-phase roadmap, pilot plan).
@@ -106,13 +144,16 @@ twin producing explainable plans must work.
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Build spec Phases 1–4 as v1 (foundation → load planner → RFID validation → rolling optimizer) | Delivers the spec's "first business value" plus continuous optimization; Phase 5 sim/ML deferred | — Pending |
-| TypeScript/Node + PostgreSQL stack | Single-language velocity for a solo agentic build; full-stack incl. map UI in one ecosystem | — Pending |
-| Simulated data + realtime USA-map (OpenLayers/OSM) as the deliverable | Proves optimization + visibility value without hardware/integration risk; map is the demo centerpiece | — Pending |
-| Optimize at load-block / trailer-zone granularity (not per-package 3D) | Spec recommendation; keeps optimization tractable and operationally realistic | — Pending |
-| Event-sourced architecture with operational + planning twins | Auditability, exception handling, and safe candidate-plan evaluation (spec §9, §18) | — Pending |
-| RFID as probabilistic evidence, rule-based Bayesian fusion | Realistic sensor reliability; ML fusion deferred to Phase 5 | — Pending |
-| Minimal read-only operator UI (no override workflow in v1 beyond audit) | Demo scope; keeps focus on engine + visualization | — Pending |
+| Event-sourced operational twin + sandboxed planning twin on Postgres | auditability, deterministic replay, safe candidate eval; single store (no Kafka/EventStoreDB) | ✓ Good |
+| Single canonical LIFO invariant + independent validator (separate code path) | defend inverted depth↔unload + feasibility-folded-into-score | ✓ Good |
+| Custom SSP min-cost-flow + custom VRPTW in TS, integer arithmetic, glpk.js test-only oracle | no maintained JS lib; needed verifiable correctness | ✓ Good (exact vs glpk on 1,153 instances) |
+| Rule-based Bayesian RFID fusion w/ confidence cap (<1.0) | realistic reliability, explainability over ML, miss≠gone | ✓ Good |
+| Zod (not TypeBox); Kysely for SQL | ergonomic engine parsing; raw-SQL transparency for event log/projections | ✓ Good |
+| Hand-rolled time-expanded graph (graphology/ngraph NOT adopted) | full control over edge kinds + determinism | ✓ Good (note: diverges from original stack rec) |
+| Versioned ws keyframe+delta envelope; client tweens via OL postrender | forward-compatible; smooth animation w/o per-frame React re-render/alloc | ✓ Good (flat-heap soak-proven) |
+| UI-04 money slide as calibrated seed-42 before/after (not live A/B) | reviewer-recommended MVP simplification; reproducible | ⚠️ Revisit (live 8-metric A/B = v2) |
+| In-memory (epoch,scopeHash) idempotency | sufficient for single-process MVP demo | ⚠️ Revisit (no restart durability) |
+| Two ws connections in web App | avoid refactoring MapView under time pressure | ⚠️ Revisit (consolidate) |
 
 ## Evolution
 
@@ -132,4 +173,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-18 after initialization*
+*Last updated: 2026-06-20 after v1.0 milestone*
