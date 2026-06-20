@@ -365,6 +365,47 @@ export function attachSnapshotSocket(
     socket.on("close", () => clients.delete(socket));
     socket.on("error", () => clients.delete(socket));
 
+    // FIX 14: handle client resync requests. When a client detects a seq-gap
+    // (missed ticks), it sends `{ type: "resync" }`. Reply to THAT socket with
+    // a fresh full snapshot envelope so it can re-anchor its local tween clock.
+    socket.on("message", (data: import("ws").RawData) => {
+      let msg: unknown;
+      try {
+        const text =
+          Array.isArray(data) ? Buffer.concat(data).toString("utf8")
+          : data instanceof ArrayBuffer ? Buffer.from(data).toString("utf8")
+          : (data as Buffer).toString("utf8");
+        msg = JSON.parse(text);
+      } catch {
+        // Malformed message — ignore silently (not a security risk: no side effects).
+        return;
+      }
+      if (
+        typeof msg === "object" &&
+        msg !== null &&
+        "type" in msg &&
+        (msg as { type: unknown }).type === "resync"
+      ) {
+        // Client requested a full resync. Build a fresh snapshot and reply to
+        // this socket only (not broadcast — only the requesting client needs it).
+        fetchAndUpdateBaseline()
+          .then((payload) => {
+            seq += 1;
+            const envelope: WsEnvelope = {
+              v: 1,
+              type: "snapshot",
+              seq,
+              simMs: 0, // resync resets the client's tween clock to the current state
+              payload,
+            };
+            sendRawIfOpen(socket, JSON.stringify(envelope));
+          })
+          .catch((err: unknown) => {
+            app.log.error(err, "ws resync snapshot failed");
+          });
+      }
+    });
+
     // Send the initial full snapshot envelope. Fire-and-forget with catch (M-5):
     // a transient DB failure must NOT produce an unhandled rejection that crashes
     // the process under `--unhandled-rejections=throw`.
