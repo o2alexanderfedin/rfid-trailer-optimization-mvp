@@ -36,6 +36,17 @@ import { defineConfig, devices } from "@playwright/test";
  * after a potential leak may look flat (lazy GC masks the leak). See Q5 in
  * 05-RESEARCH.md for the full rationale.
  */
+
+/**
+ * The real web<->server project (chromium-real) + its proxy webServer are
+ * included ONLY when explicitly requested (MM_E2E_REAL=1 or --project=chromium-real),
+ * matching the globalSetup gating — so the bare `test:e2e` (hermetic) run needs no
+ * Docker and never runs real-e2e.e2e.ts against an un-booted backend.
+ */
+const realE2E =
+  process.env.MM_E2E_REAL === "1" ||
+  process.argv.some((a) => a.includes("chromium-real"));
+
 export default defineConfig({
   testDir: "./test",
   timeout: 60_000,
@@ -83,14 +94,17 @@ export default defineConfig({
         },
       },
     },
-    {
-      // F-08: the one real web↔server e2e. Served by the prod bundle on :4273,
-      // whose `vite.preview-real.config.ts` proxies `/api/*` to the REAL Fastify
-      // booted in globalSetup. NO stubbed boundaries.
-      name: "chromium-real",
-      testMatch: /real-e2e\.e2e\.ts$/,
-      use: { ...devices["Desktop Chrome"], baseURL: "http://localhost:4273" },
-    },
+    // F-08: the one real web↔server e2e. Included ONLY when explicitly requested
+    // (realE2E) so the hermetic suite never runs it against an un-booted backend.
+    ...(realE2E
+      ? [
+          {
+            name: "chromium-real",
+            testMatch: /real-e2e\.e2e\.ts$/,
+            use: { ...devices["Desktop Chrome"], baseURL: "http://localhost:4273" },
+          },
+        ]
+      : []),
   ],
   webServer: [
     {
@@ -106,14 +120,17 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
-    {
-      // F-08: prod bundle + the `/api`→real-Fastify proxy preview on :4273.
-      // Build first so the preview serves the freshly-built artifacts; the
-      // proxy target is the real API booted by globalSetup.
-      command: "pnpm build && pnpm preview:real",
-      url: "http://localhost:4273",
-      reuseExistingServer: !process.env.CI,
-      timeout: 180_000,
-    },
+    // F-08: prod bundle + the `/api`→real-Fastify proxy preview on :4273. Only
+    // booted when the real project is selected (realE2E).
+    ...(realE2E
+      ? [
+          {
+            command: "pnpm build && pnpm preview:real",
+            url: "http://localhost:4273",
+            reuseExistingServer: !process.env.CI,
+            timeout: 180_000,
+          },
+        ]
+      : []),
   ],
 });

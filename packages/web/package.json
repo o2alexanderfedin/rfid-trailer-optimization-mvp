@@ -11,7 +11,7 @@
     "lint": "eslint src test",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:real": "playwright test --project=chromium-real"
+    "test:e2e:real": "MM_E2E_REAL=1 playwright test --project=chromium-real"
   },
   "dependencies": {
     "@mm/api": "workspace:*",
