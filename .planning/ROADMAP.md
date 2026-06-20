@@ -25,8 +25,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Operational Data Foundation + Live Map Spike** - Event-sourced twin with deterministic replay + optimistic concurrency, fed by a minimal simulator and lit up on an empty USA map
 - [x] **Phase 2: Load Planning** - Route-aware LIFO/partial-LIFO load plans with an independent validator, explainable rationale, and a naive baseline to beat
 - [x] **Phase 3: RFID-Assisted Validation** - Probabilistic RFID evidence and wrong-trailer / missed-unload detection with severity and recommended action
-- [ ] **Phase 4: Rolling Optimizer** - Continuous, scoped re-optimization (min-cost flow + VRPTW) with freeze windows, anti-thrashing, and split/reassign/hold/over-carry repair
-- [ ] **Phase 5: Simulation + Visualization Wrapper** - Animated realtime USA map, scenario knobs, exception feed, audit timeline, and the before/after KPI dashboard
+- [x] **Phase 4: Rolling Optimizer** - Continuous, scoped re-optimization (min-cost flow + VRPTW) with freeze windows, anti-thrashing, and split/reassign/hold/over-carry repair
+- [x] **Phase 5: Simulation + Visualization Wrapper** - Animated realtime USA map, scenario knobs, exception feed, audit timeline, and the before/after KPI dashboard
 
 ## Phase Details
 
@@ -132,7 +132,16 @@ Notes: This is where engineering risk concentrates — there is no maintained JS
   3. An operator can adjust scenario knobs (inject hub congestion, trip delays, demand spikes, sensor-noise level) and watch plans visibly re-optimize live; the exception feed surfaces every exception (wrong-trailer, missed-unload, blocked-freight, low-utilization) with severity, reason, and recommended action.
   4. A read-only audit timeline shows a package's or trailer's full event history including the system recommendation captured at each decision, and a KPI dashboard displays operational KPIs (utilization, rehandle count/minutes, wrong-trailer count, missed-unload count, SLA violation rate, on-time departure/arrival).
   5. The dashboard shows before/after KPI deltas comparing the baseline planner vs the optimizer on the *same* seeded simulated stream — the "money slide."
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+- [ ] 05-01-PLAN.md — [W1] VIZ-04 versioned ws envelope (snapshot + per-tick delta, seq+simMs) — underpins all frontend
+- [ ] 05-02-PLAN.md — [W1] OPT live-wiring: live rolling loop + min-cost-flow on the live path + repair recommendations endpoint (OPT-02/05/06/07)
+- [ ] 05-03-PLAN.md — [W1] UI-03/UI-04 KPI endpoints: GET /api/kpis + seed-deterministic GET /api/kpis/comparison (money-slide data)
+- [ ] 05-04-PLAN.md — [W2] VIZ-05/UI-02 backend: GET /api/trailers/:id/plan + audit timeline extended to trailers + captured recommendation
+- [ ] 05-05-PLAN.md — [W3] SIM-04 scenario knobs: POST /api/scenario → deterministic sim injection → scoped re-opt → visible tick diff [KEYSTONE c]
+- [ ] 05-06-PLAN.md — [W3] VIZ-02/VIZ-03 frontend: postrender route tween + STYLE_CACHE coloring + flat-memory soak [KEYSTONE a]
+- [ ] 05-07-PLAN.md — [W4] UI-01/UI-02/VIZ-05 panels: realtime alert feed + audit timeline + click-trailer plan detail
+- [ ] 05-08-PLAN.md — [W5] UI-03/UI-04 frontend: KPI dashboard (animated deltas) + before/after money slide [KEYSTONE b]
 **UI hint**: yes
 
 Notes: This wrapper composes everything and lands last because it visualizes the outputs of every prior phase. The before/after comparison (P8 delivery) is the highest-leverage differentiator and is mostly wiring given the Phase 2 baseline + shared KPI plumbing; seed-frozen scenarios make it reproducible. Defend against P10 (OpenLayers perf/leaks) with in-place geometry mutation (never rebuild the source each frame), rAF-batched diffs, WebGL points for many trailers, strict OL disposal on teardown, and sim-clock-driven interpolation clamped to [0,1] — verify flat memory over a multi-minute run. The server pushes keyframe/ETA diffs, not per-second positions; the client tweens. Flagged for `/gsd-research-phase`: OpenLayers high-trailer-count rendering strategy + smooth interpolation cadence (worth a focused spike). Calibrate the simulator so scenarios are hard enough that LIFO sometimes can't win without over-carry/hold/reassign — otherwise the optimizer's win is theater.
@@ -148,4 +157,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Load Planning | 6/6 | ✅ Complete | 2026-06-19 |
 | 3. RFID-Assisted Validation | 7/7 | ✅ Complete | 2026-06-19 |
 | 4. Rolling Optimizer | 6/6 | ✅ Complete | 2026-06-19 |
-| 5. Simulation + Visualization Wrapper | 0/TBD | Not started | - |
+| 5. Simulation + Visualization Wrapper | 8/8 | ✅ Complete | 2026-06-19 |

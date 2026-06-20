@@ -43,11 +43,11 @@
 
 ### RFID-Assisted Validation (SNS)
 
-- [ ] **SNS-01**: The system ingests RFID and barcode observations as confidence-scored evidence (reader/antenna/RSSI → probability), never as exact coordinates
-- [ ] **SNS-02**: The system maps RFID tag IDs to package IDs
-- [ ] **SNS-03**: The system produces a confidence-scored trailer-zone estimate (rear/middle/nose) per package using rule-based Bayesian fusion
-- [ ] **SNS-04**: The system detects wrong-trailer events (package observed in a trailer not assigned by plan) and emits an exception with severity and recommended action
-- [ ] **SNS-05**: The system detects missed-unload events (package for the current hub still observed in the trailer after departure) and emits an exception with severity and recommended action
+- [x] **SNS-01**: The system ingests RFID and barcode observations as confidence-scored evidence (reader/antenna/RSSI → probability), never as exact coordinates
+- [x] **SNS-02**: The system maps RFID tag IDs to package IDs
+- [x] **SNS-03**: The system produces a confidence-scored trailer-zone estimate (rear/middle/nose) per package using rule-based Bayesian fusion
+- [x] **SNS-04**: The system detects wrong-trailer events (package observed in a trailer not assigned by plan) and emits an exception with severity and recommended action
+- [x] **SNS-05**: The system detects missed-unload events (package for the current hub still observed in the trailer after departure) and emits an exception with severity and recommended action
 
 ### Rolling Optimizer (OPT)
 
@@ -60,29 +60,31 @@
 - [x] **OPT-07**: Local repair produces recovery recommendations — split, reassign, hold, or over-carry — when a plan is infeasible or high-cost, each with a rationale*
 - [x] **OPT-08**: Plan selection minimizes the weighted objective function (miles, driver time, dock wait, handling, rehandle, SLA lateness, utilization, over-carry penalties)
 
-> *OPT-02/05/06/07: the algorithms/libraries are delivered + verified (SSP min-cost-flow matched a 1153-instance glpk LP fuzz exactly; rolling shell, freeze/idempotency, and local-repair are unit-tested). The remaining gap is **live wiring** — a periodic/event-triggered rolling loop on the API + a repair-surfacing endpoint + min-cost-flow on the live assignment path. This is deferred to Phase 5, whose SIM-04 "visible re-optimization" depends on that live loop. See 04-REVIEW.md.*
+> *OPT-02/05/06/07: algorithms verified in Phase 4 (SSP min-cost-flow matched a 1153-instance glpk LP fuzz exactly). The live wiring — periodic/event-triggered rolling loop driven by `driveSimulationPaced`, `localRepair` surfaced via `GET /optimizer/recommendations`, min-cost-flow on the live assignment path — was completed in **Phase 5** and is verified end-to-end by `packages/api/test/live-demo.int.test.ts`. See 05-REVIEW.md.*
+>
+> *†UI-04: the live KPI dashboard (UI-03) is fully live; the before/after "money slide" is an intentional **calibrated** baseline-vs-optimizer comparison (seed-frozen) rather than a live-stream A/B — a reviewer-recommended MVP simplification. Live full-A/B is a v2 enhancement. See 05-REVIEW.md.*
 
 ### Simulation Engine (SIM)
 
 - [x] **SIM-01**: The simulator models a USA hub-and-spoke network — hubs with lat/long, linehaul routes, trailers, and packages
 - [x] **SIM-02**: The simulator generates a realistic, seeded, deterministic event stream (scans, trailer trips, arrivals) that drives the operational twin
-- [ ] **SIM-03**: The simulator emits RFID observations with configurable miss rate and noise (probabilistic reads), not perfect reads
-- [ ] **SIM-04**: An operator can adjust scenario knobs (inject hub congestion, trip delays, demand spikes, sensor-noise level) that trigger visible re-optimization
+- [x] **SIM-03**: The simulator emits RFID observations with configurable miss rate and noise (probabilistic reads), not perfect reads
+- [x] **SIM-04**: An operator can adjust scenario knobs (inject hub congestion, trip delays, demand spikes, sensor-noise level) that trigger visible re-optimization
 
 ### Realtime Visualization (VIZ)
 
 - [x] **VIZ-01**: A realtime web map (OpenLayers + OpenStreetMap tiles) shows all hubs and routes across the USA
-- [ ] **VIZ-02**: Trailers animate along their route geometry in realtime, interpolated from server-pushed position/ETA keyframes
-- [ ] **VIZ-03**: Hubs and routes are colored by state (freight volume, SLA risk, congestion)
-- [ ] **VIZ-04**: Realtime state streams to the client over WebSocket as the simulation/optimizer advance
-- [ ] **VIZ-05**: Clicking a trailer shows its rear-to-nose load order, loading instructions, and the plan's explanation
+- [x] **VIZ-02**: Trailers animate along their route geometry in realtime, interpolated from server-pushed position/ETA keyframes
+- [x] **VIZ-03**: Hubs and routes are colored by state (freight volume, SLA risk, congestion)
+- [x] **VIZ-04**: Realtime state streams to the client over WebSocket as the simulation/optimizer advance
+- [x] **VIZ-05**: Clicking a trailer shows its rear-to-nose load order, loading instructions, and the plan's explanation
 
 ### Operator UI & KPIs (UI)
 
-- [ ] **UI-01**: An alert feed surfaces every exception (wrong-trailer, missed-unload, blocked-freight, low-utilization) with severity, human-readable reason, and recommended action
-- [ ] **UI-02**: A read-only audit timeline shows a package's or trailer's full event history, including the system recommendation captured at each decision
-- [ ] **UI-03**: A KPI dashboard displays operational KPIs (utilization, rehandle count/minutes, wrong-trailer count, missed-unload count, SLA violation rate, on-time departure/arrival)
-- [ ] **UI-04**: The dashboard shows **before/after KPI deltas** comparing the baseline planner vs the optimizer on the same simulated stream (the "money slide")
+- [x] **UI-01**: An alert feed surfaces every exception (wrong-trailer, missed-unload, blocked-freight, low-utilization) with severity, human-readable reason, and recommended action
+- [x] **UI-02**: A read-only audit timeline shows a package's or trailer's full event history, including the system recommendation captured at each decision
+- [x] **UI-03**: A KPI dashboard displays operational KPIs (utilization, rehandle count/minutes, wrong-trailer count, missed-unload count, SLA violation rate, on-time departure/arrival)
+- [x] **UI-04**: The dashboard shows **before/after KPI deltas** comparing the baseline planner vs the optimizer on the same simulated stream (the "money slide")
 
 ## v2 Requirements
 
@@ -153,22 +155,22 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase goals an
 | SNS-05 | Phase 3 | Complete* |
 | SIM-03 | Phase 3 | Complete |
 | OPT-01 | Phase 4 | Complete |
-| OPT-02 | Phase 4 | Complete* |
+| OPT-02 | Phase 4 | Complete |
 | OPT-03 | Phase 4 | Complete |
 | OPT-04 | Phase 4 | Complete |
-| OPT-05 | Phase 4 | Complete* |
-| OPT-06 | Phase 4 | Complete* |
-| OPT-07 | Phase 4 | Complete* |
+| OPT-05 | Phase 4 | Complete |
+| OPT-06 | Phase 4 | Complete |
+| OPT-07 | Phase 4 | Complete |
 | OPT-08 | Phase 4 | Complete |
-| SIM-04 | Phase 5 | Pending |
-| VIZ-02 | Phase 5 | Pending |
-| VIZ-03 | Phase 5 | Pending |
-| VIZ-04 | Phase 5 | Pending |
-| VIZ-05 | Phase 5 | Pending |
-| UI-01 | Phase 5 | Pending |
-| UI-02 | Phase 5 | Pending |
-| UI-03 | Phase 5 | Pending |
-| UI-04 | Phase 5 | Pending |
+| SIM-04 | Phase 5 | Complete |
+| VIZ-02 | Phase 5 | Complete |
+| VIZ-03 | Phase 5 | Complete |
+| VIZ-04 | Phase 5 | Complete |
+| VIZ-05 | Phase 5 | Complete |
+| UI-01 | Phase 5 | Complete |
+| UI-02 | Phase 5 | Complete |
+| UI-03 | Phase 5 | Complete |
+| UI-04 | Phase 5 | Complete† |
 
 **Coverage:**
 - v1 requirements: 48 total (FND 8, AGG 4, LOAD 10, SNS 5, OPT 8, SIM 4, VIZ 5, UI 4)

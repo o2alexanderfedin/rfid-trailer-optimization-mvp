@@ -1,3 +1,3 @@
 
-## 14:32 | develop
-P4 merged → develop (4 fix commits, 11-file/22-hunk merge, 4 xphase exhaustive-switch fixes), P5 research done (05-RESEARCH.md), gate green (10/10 build, 587 tests), milestone 80% (4/5).
+## 18:20 | feature/phase-5-simulation-visualization-wrapper
+Phase 5 A1 complete: localRepair wiring (OPT-07), real rehandle (OPT-05), VIZ-03 metric buckets, KPI baseline fix (811 tests +9, 2 commits); A2 smoke test dispatched.

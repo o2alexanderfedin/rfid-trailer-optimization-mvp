@@ -65,15 +65,27 @@ export class RollingOptimizerService {
   private readonly memo = new Map<string, EpochResult>();
   /** The most recent epoch result (what the API endpoint surfaces). */
   private latest: EpochResult | null = null;
+  /**
+   * The most recent epoch result that produced non-empty recommendations.
+   * When the latest result is an empty-scope tick (no trailer events), the
+   * API endpoint surfaces this non-empty result instead so the demo always
+   * shows the most recent meaningful plan output.
+   */
+  private latestNonEmpty: EpochResult | null = null;
 
   constructor(deps: RollingOptimizerDeps) {
     this.db = deps.db;
     this.weights = deps.weights ?? DEFAULT_OBJECTIVE_WEIGHTS;
   }
 
-  /** The latest epoch result the endpoint exposes (`null` before the first run). */
+  /**
+   * The latest epoch result the endpoint exposes.
+   * Returns the most recent result with non-empty recommendations, falling
+   * back to the latest result (which may have empty recommendations).
+   * Returns `null` before the first run.
+   */
   latestResult(): EpochResult | null {
-    return this.latest;
+    return this.latestNonEmpty ?? this.latest;
   }
 
   /**
@@ -91,6 +103,9 @@ export class RollingOptimizerService {
     const memoized = this.memo.get(key);
     if (memoized !== undefined) {
       this.latest = memoized;
+      if (memoized.recommendations.length > 0) {
+        this.latestNonEmpty = memoized;
+      }
       return { result: memoized, committed: false };
     }
 
@@ -104,6 +119,12 @@ export class RollingOptimizerService {
 
     this.memo.set(key, fresh);
     this.latest = fresh;
+    // Track the last result that produced non-empty recommendations so the
+    // API endpoint always surfaces the most recent MEANINGFUL plan output,
+    // even when subsequent empty-scope ticks overwrite `this.latest`.
+    if (fresh.recommendations.length > 0) {
+      this.latestNonEmpty = fresh;
+    }
     return { result: fresh, committed };
   }
 

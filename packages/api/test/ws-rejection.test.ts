@@ -9,23 +9,23 @@ import { attachSnapshotSocket, type ApiDb } from "../src/index.js";
  * initial-snapshot build had no `.catch`, so a rejecting DB read produced an
  * unhandled promise rejection — fatal under Node's default `--unhandled-rejections=throw`.
  *
- * This test injects a `buildSnapshot` that REJECTS (simulating the transient DB
+ * This test injects a `buildPayload` that REJECTS (simulating the transient DB
  * read failure) and asserts that:
  *   (a) no `unhandledRejection` fires on the process, and
  *   (b) the server gracefully CLOSES the socket so the client can reconnect.
  *
  * It needs no Postgres — the db handle is never touched because the injected
- * snapshot builder rejects before any query — so it runs in the unit project.
+ * payload builder rejects before any query — so it runs in the unit project.
  */
 
 const FAKE_DB = {} as unknown as ApiDb;
 
 async function buildWsApp(
-  buildSnapshot: () => Promise<never>,
+  buildPayload: () => Promise<never>,
 ): Promise<{ app: FastifyInstance; port: number }> {
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
-  attachSnapshotSocket(app, FAKE_DB, { buildSnapshot });
+  attachSnapshotSocket(app, FAKE_DB, { buildPayload });
   await app.ready();
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address();
@@ -43,7 +43,7 @@ describe("ws snapshot channel: initial-snapshot rejection is handled (M-5)", () 
     app = undefined;
   });
 
-  it("a rejecting buildSnapshot on connect closes the socket and does not throw unhandled", async () => {
+  it("a rejecting buildPayload on connect closes the socket and does not throw unhandled", async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown): void => {
       unhandled.push(reason);

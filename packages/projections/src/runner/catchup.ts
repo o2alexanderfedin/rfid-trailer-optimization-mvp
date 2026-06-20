@@ -96,18 +96,22 @@ async function upsertAuditRow(
     .values({
       global_seq: entry.globalSeq.toString(),
       package_id: entry.packageId,
+      trailer_id: entry.trailerId,
       event_type: entry.eventType,
       occurred_at: entry.occurredAt,
       hub_id: entry.hubId,
       scan_type: entry.scanType,
+      recommendation: entry.recommendation,
     })
     .onConflict((oc) =>
       oc.column("global_seq").doUpdateSet({
         package_id: entry.packageId,
+        trailer_id: entry.trailerId,
         event_type: entry.eventType,
         occurred_at: entry.occurredAt,
         hub_id: entry.hubId,
         scan_type: entry.scanType,
+        recommendation: entry.recommendation,
       }),
     )
     .execute();
@@ -318,11 +322,42 @@ export async function readAuditTimeline(
     .execute();
   return rows.map((r) => ({
     packageId: r.package_id,
+    trailerId: r.trailer_id,
     globalSeq: BigInt(r.global_seq),
     eventType: r.event_type as AuditTimelineEntry["eventType"],
     occurredAt: toIso(r.occurred_at),
     hubId: r.hub_id,
     scanType: r.scan_type,
+    recommendation: r.recommendation,
+  }));
+}
+
+/**
+ * Read a trailer's full ordered audit timeline (UI-02 — Plan 05-04).
+ * Returns all events that named the trailer in strict `global_seq` order,
+ * including trailer-state events (Departed/ArrivedAtHub/Docked) AND plan-
+ * lifecycle events (PlanGenerated/PlanAccepted) with their captured
+ * recommendation text (anti-repudiation, T-05-09).
+ */
+export async function readTrailerAuditTimeline(
+  db: Kysely<CatchupDb>,
+  trailerId: string,
+): Promise<AuditTimelineEntry[]> {
+  const rows = await db
+    .selectFrom("audit_timeline")
+    .selectAll()
+    .where("trailer_id", "=", trailerId)
+    .orderBy("global_seq", "asc")
+    .execute();
+  return rows.map((r) => ({
+    packageId: r.package_id,
+    trailerId: r.trailer_id,
+    globalSeq: BigInt(r.global_seq),
+    eventType: r.event_type as AuditTimelineEntry["eventType"],
+    occurredAt: toIso(r.occurred_at),
+    hubId: r.hub_id,
+    scanType: r.scan_type,
+    recommendation: r.recommendation,
   }));
 }
 
@@ -367,10 +402,12 @@ export async function serializeCatchup(db: Kysely<CatchupDb>): Promise<string> {
   const audit = auditRows.map((r) => ({
     globalSeq: r.global_seq.toString(),
     packageId: r.package_id,
+    trailerId: r.trailer_id,
     eventType: r.event_type,
     occurredAt: toIso(r.occurred_at),
     hubId: r.hub_id,
     scanType: r.scan_type,
+    recommendation: r.recommendation,
   }));
 
   const geo = (await readGeoKeyframes(db)).map((k) => ({

@@ -35,20 +35,47 @@ const ROUTES = [
   },
 ];
 
+const BASE_SIM_MS = 1_000_000;
+
+const ZERO_KPIS = {
+  utilization: 0, rehandleCount: 0, rehandleMinutes: 0, wrongTrailerCount: 0,
+  missedUnloadCount: 0, slaViolationRate: 0, onTimeDeparture: 0, onTimeArrival: 0,
+  baseline: {
+    utilization: 0, rehandleCount: 0, rehandleMinutes: 0, wrongTrailerCount: 0,
+    missedUnloadCount: 0, slaViolationRate: 0, onTimeDeparture: 0, onTimeArrival: 0,
+  },
+};
+
 function snapshotMessage(): string {
   return JSON.stringify({
-    t: "snapshot",
-    hubs: HUBS.map((h) => ({ hubId: h.hubId, name: h.name, lon: h.lon, lat: h.lat })),
-    trailers: [
-      {
-        trailerId: "T-1",
-        tripId: "trip-T-1",
-        kind: "depart",
-        lon: -90.049,
-        lat: 35.1495,
-        t: "2026-01-01T00:00:00.000Z",
-      },
-    ],
+    v: 1,
+    type: "snapshot",
+    seq: 1,
+    simMs: BASE_SIM_MS,
+    payload: {
+      trailers: [
+        {
+          id: "T-1",
+          routeId: "MEM-ORD",
+          departMs: BASE_SIM_MS,
+          etaMs: BASE_SIM_MS + 3_600_000,
+          state: "onTime",
+        },
+      ],
+      hubs: HUBS.map((h) => ({
+        id: h.hubId,
+        volumeBucket: 0,
+        slaRiskBucket: 0,
+        congestionBucket: 0,
+      })),
+      routes: ROUTES.map((r) => ({
+        id: r.routeId,
+        loadBucket: 0,
+        slaRiskBucket: 0,
+      })),
+      kpis: ZERO_KPIS,
+      exceptionsOpen: [],
+    },
   });
 }
 

@@ -33,14 +33,32 @@ export type {
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
   Broadcast,
-  SnapshotBuilder,
+  SnapshotPayloadBuilder,
   SnapshotSocketOptions,
+  // Legacy shims (deprecated — use WsEnvelope from ./ws/envelope.js directly):
   SnapshotMessage,
   TrailerSnapshot,
   HubSnapshot,
+  SnapshotBuilder,
 } from "./ws/snapshots.js";
-export { driveSimulation } from "./sim/driver.js";
-export type { DriveSimulationOptions } from "./sim/driver.js";
+// VIZ-04 versioned wire types — the new canonical exports for @mm/web:
+export type {
+  WsEnvelope,
+  SnapshotPayload,
+  TickPayload,
+  TrailerKeyframe,
+  HubState,
+  RouteState,
+  ExceptionItem,
+  PlanDelta,
+  KpiSnapshot,
+} from "./ws/envelope.js";
+export { diffTick } from "./ws/envelope.js";
+export { driveSimulation, driveSimulationPaced } from "./sim/driver.js";
+export type {
+  DriveSimulationOptions,
+  DriveSimulationPacedOptions,
+} from "./sim/driver.js";
 
 // --- Walking-skeleton spine (Plan 01) — kept green; GET /hubs preserved ------
 export { buildApp } from "./app.js";

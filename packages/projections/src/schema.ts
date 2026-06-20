@@ -39,17 +39,23 @@ export interface HubInventoryTable {
 }
 
 /**
- * FND-08 (catch-up): one ordered audit-timeline row per stored event that names
- * a package. `global_seq` is the row identity AND the strict order — so the
- * timeline for a package is `WHERE package_id = $1 ORDER BY global_seq`.
+ * FND-08 / UI-02 (catch-up): one ordered audit-timeline row per stored event
+ * that names a package or trailer. `global_seq` is the row identity AND the
+ * strict order. Exactly one of `package_id` / `trailer_id` is non-null per row:
+ *  - Package events: `package_id` set, `trailer_id` null.
+ *  - Trailer / plan-lifecycle events: `trailer_id` set, `package_id` null.
+ * `recommendation` carries the captured system recommendation for plan-lifecycle
+ * events (anti-repudiation, T-05-09); null for all other event types.
  */
 export interface AuditTimelineTable {
   global_seq: ColumnType<bigint, string, string>;
-  package_id: string;
+  package_id: string | null;
+  trailer_id: string | null;
   event_type: string;
   occurred_at: ColumnType<Date, string | Date, string | Date>;
   hub_id: string | null;
   scan_type: string | null;
+  recommendation: string | null;
 }
 
 /**
@@ -292,19 +298,28 @@ CREATE TABLE IF NOT EXISTS exception_kpi (
   CONSTRAINT exception_kpi_singleton CHECK (id)
 );
 
--- FND-08 (CATCH-UP): a package's ordered audit timeline. One row per stored
--- event that names a package; global_seq is the identity AND the strict order.
+-- FND-08 (CATCH-UP): a package's OR a trailer's ordered audit timeline. One row
+-- per stored event that names a package or trailer; global_seq is the identity
+-- AND the strict order. Exactly one of package_id / trailer_id is non-null per
+-- row (package events use package_id; trailer / plan-lifecycle events use
+-- trailer_id). recommendation captures the system recommendation at decision
+-- events (PlanGenerated/PlanAccepted) for anti-repudiation (T-05-09).
 CREATE TABLE IF NOT EXISTS audit_timeline (
-  global_seq  BIGINT PRIMARY KEY,
-  package_id  TEXT        NOT NULL,
-  event_type  TEXT        NOT NULL,
-  occurred_at TIMESTAMPTZ NOT NULL,
-  hub_id      TEXT,
-  scan_type   TEXT
+  global_seq     BIGINT PRIMARY KEY,
+  package_id     TEXT,
+  trailer_id     TEXT,
+  event_type     TEXT        NOT NULL,
+  occurred_at    TIMESTAMPTZ NOT NULL,
+  hub_id         TEXT,
+  scan_type      TEXT,
+  recommendation TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_timeline_package
   ON audit_timeline (package_id, global_seq);
+
+CREATE INDEX IF NOT EXISTS idx_audit_timeline_trailer
+  ON audit_timeline (trailer_id, global_seq);
 
 -- CATCH-UP: the route geometry index, folded incrementally from RouteRegistered
 -- so keyframe resolution never re-scans the log. geometry is a JSONB [lon,lat][].
