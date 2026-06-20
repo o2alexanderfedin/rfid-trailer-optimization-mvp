@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { WebSocketRoute } from "@playwright/test";
 
 /**
  * KEYSTONE (b) — Rendered money slide: seed-deterministic optimizer-beats-baseline.
@@ -110,10 +111,8 @@ async function stubApis(page: import("@playwright/test").Page): Promise<void> {
   });
 
   // Stub WebSocket — send a minimal snapshot so the map doesn't hang
-  await page.routeWebSocket("/api/ws", (ws) => {
-    ws.onOpen(() => {
-      ws.send(JSON.stringify(SNAPSHOT_PAYLOAD));
-    });
+  await page.routeWebSocket(/\/api\/ws$/, (ws: WebSocketRoute) => {
+    ws.send(JSON.stringify(SNAPSHOT_PAYLOAD));
   });
 }
 
