@@ -1,27 +1,463 @@
+/* ==========================================================================
+   Global reset + font
+   ========================================================================== */
+
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
   padding: 0;
-  font-family: system-ui, sans-serif;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  color: #e2e8f0;
+  background: #0f172a;
 }
+
+/* ==========================================================================
+   App shell (VIZ-01 / UI-01 / VIZ-05 / UI-02 layout)
+   ========================================================================== */
 
 .app {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: #0f172a;
 }
 
 .app__header {
+  flex: 0 0 auto;
   padding: 0.5rem 1rem;
   background: #0f172a;
   color: #f8fafc;
   font-size: 0.95rem;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #1e293b;
 }
 
-.app__map {
+/** Map + right-rail split (fills remaining height). */
+.app__body {
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+}
+
+/** Map centerpiece — fills all width not taken by the right-rail. */
+.app__map {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+/* ==========================================================================
+   Right-rail sidebar
+   ========================================================================== */
+
+.right-rail {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+  border-left: 1px solid #1e293b;
+  overflow: hidden;
+}
+
+/** Shared section block. */
+.right-rail__section {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/** Alert feed takes top ~40% of the rail. */
+.right-rail__section--feed {
+  flex: 0 0 40%;
+  border-bottom: none;
+}
+
+/** Detail / timeline takes remaining ~60%. */
+.right-rail__section--detail {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.right-rail__section-header {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.75rem;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.right-rail__section-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/** Red count badge on the Live Exceptions header. */
+.right-rail__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+/** Scrollable feed area inside the alert section. */
+.right-rail__feed-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/** Scrollable detail area. */
+.right-rail__detail-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.right-rail__divider {
+  height: 1px;
+  background: #334155;
+  flex: 0 0 1px;
+}
+
+/* Tabs (Plan / History) */
+.right-rail__tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.right-rail__tab {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.right-rail__tab:hover {
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+.right-rail__tab--active {
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #1d4ed8;
+}
+
+/* ==========================================================================
+   AlertFeed (UI-01)
+   ========================================================================== */
+
+.alert-feed {
+  padding: 0;
+}
+
+.alert-feed__empty {
+  padding: 1rem 0.75rem;
+  color: #475569;
+  font-size: 0.8rem;
+  text-align: center;
+  font-style: italic;
+}
+
+.alert-feed__entry {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #1e293b;
+  border-left: 3px solid transparent;
+}
+
+/* Severity color coding — border-left + background tint */
+.alert-feed__entry--low {
+  border-left-color: #22c55e;
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.alert-feed__entry--med {
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.alert-feed__entry--high {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.07);
+}
+
+.alert-feed__entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.alert-feed__kind {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.alert-feed__severity {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+
+.alert-feed__entry--low .alert-feed__severity {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.alert-feed__entry--med .alert-feed__severity {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.alert-feed__entry--high .alert-feed__severity {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.alert-feed__entity {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-bottom: 0.15rem;
+}
+
+.alert-feed__reason {
+  font-size: 0.78rem;
+  color: #cbd5e1;
+  margin-bottom: 0.2rem;
+  line-height: 1.3;
+}
+
+.alert-feed__action {
+  font-size: 0.72rem;
+  color: #60a5fa;
+  font-style: italic;
+}
+
+/* ==========================================================================
+   TrailerDetail (VIZ-05)
+   ========================================================================== */
+
+.trailer-detail {
+  padding: 0.75rem;
+}
+
+.trailer-detail__prompt,
+.trailer-detail__loading,
+.trailer-detail__error,
+.trailer-detail__empty {
+  padding: 0.5rem 0;
+  color: #475569;
+  font-size: 0.8rem;
+  text-align: center;
+  font-style: italic;
+}
+
+.trailer-detail__error {
+  color: #f87171;
+  font-style: normal;
+}
+
+.trailer-detail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.trailer-detail__id {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.trailer-detail__badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  letter-spacing: 0.04em;
+}
+
+.trailer-detail__section {
+  margin-bottom: 1rem;
+}
+
+.trailer-detail__section-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+}
+
+.trailer-detail__load-order {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trailer-detail__slice {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.75rem;
+}
+
+.trailer-detail__depth {
+  flex: 0 0 72px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.trailer-detail__blocks {
+  flex: 1;
+  color: #cbd5e1;
+  word-break: break-all;
+}
+
+.trailer-detail__zone {
+  padding: 0.3rem 0;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.75rem;
+}
+
+.trailer-detail__zone-name {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #60a5fa;
+  text-transform: capitalize;
+  margin-bottom: 0.15rem;
+}
+
+.trailer-detail__zone-text {
+  display: block;
+  color: #cbd5e1;
+  line-height: 1.4;
+}
+
+.trailer-detail__explanation {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   AuditTimeline (UI-02)
+   ========================================================================== */
+
+.audit-timeline {
+  padding: 0.75rem;
+}
+
+.audit-timeline__prompt,
+.audit-timeline__loading,
+.audit-timeline__empty,
+.audit-timeline__error {
+  padding: 0.5rem 0;
+  color: #475569;
+  font-size: 0.8rem;
+  text-align: center;
+  font-style: italic;
+}
+
+.audit-timeline__error {
+  color: #f87171;
+  font-style: normal;
+}
+
+.audit-timeline__header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+}
+
+.audit-timeline__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.audit-timeline__entry {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.75rem;
+}
+
+/** Decision entries with a captured recommendation get a teal accent. */
+.audit-timeline__entry--has-recommendation {
+  border-left: 2px solid #14b8a6;
+  padding-left: 0.5rem;
+}
+
+.audit-timeline__entry-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.audit-timeline__label {
+  font-weight: 500;
+  color: #cbd5e1;
+  flex: 1;
+  word-break: break-word;
+}
+
+.audit-timeline__time {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.audit-timeline__recommendation {
+  font-size: 0.72rem;
+  color: #2dd4bf;
+  margin-top: 0.2rem;
+  line-height: 1.4;
+}
+
+.audit-timeline__rec-label {
+  font-weight: 600;
+  color: #14b8a6;
 }

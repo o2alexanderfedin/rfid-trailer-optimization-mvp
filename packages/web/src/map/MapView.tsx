@@ -9,6 +9,7 @@ import LineString from "ol/geom/LineString.js";
 import Point from "ol/geom/Point.js";
 import { fromLonLat } from "ol/proj.js";
 import { getUid } from "ol/util.js";
+import type MapBrowserEvent from "ol/MapBrowserEvent.js";
 import { fetchHubs, fetchRoutes } from "../api/client.js";
 import type { RouteDto } from "../api/client.js";
 import {
@@ -60,7 +61,17 @@ const USA_ZOOM = 4;
  * counts + instance counts so the Playwright leak guard can assert the
  * single-source / in-place-update / created-once invariants from the outside.
  */
-export function MapView(): React.JSX.Element {
+
+interface MapViewProps {
+  /**
+   * Called when the user clicks a trailer feature on the map.
+   * Receives the trailerId string. Called with null if the click lands on
+   * an empty area (deselects any current selection).
+   */
+  readonly onTrailerSelect?: ((trailerId: string | null) => void) | undefined;
+}
+
+export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
   const trailerSourceRef = useRef<VectorSource | null>(null);
@@ -78,6 +89,15 @@ export function MapView(): React.JSX.Element {
 
   /** Animation handle — removed on teardown. */
   const animationHandleRef = useRef<TrailerAnimationHandle | null>(null);
+
+  /**
+   * Stable ref for the VIZ-05 click-to-select callback so a changing closure
+   * never requires re-registering the click listener on the OL map.
+   */
+  const onTrailerSelectRef = useRef<((id: string | null) => void) | undefined>(
+    onTrailerSelect,
+  );
+  onTrailerSelectRef.current = onTrailerSelect;
 
   /** Leak guard counters. */
   const mapInstancesRef = useRef(0);
@@ -135,6 +155,26 @@ export function MapView(): React.JSX.Element {
     );
     animationHandleRef.current = handle;
 
+    // VIZ-05: wire map click → trailer selection via forEachFeatureAtPixel.
+    // The handler reads onTrailerSelectRef.current so a changing callback
+    // never requires re-registering the listener (one listener for the map lifetime).
+    const clickHandler = (evt: MapBrowserEvent<PointerEvent>): void => {
+      const cb = onTrailerSelectRef.current;
+      if (cb === undefined) return;
+
+      let selectedId: string | null = null;
+      map.forEachFeatureAtPixel(evt.pixel, (feature) => {
+        const tid = feature.get("trailerId") as string | undefined;
+        if (typeof tid === "string") {
+          selectedId = tid;
+          return true; // stop iterating — take first hit
+        }
+        return false;
+      });
+      cb(selectedId);
+    };
+    map.on("click", clickHandler as (evt: MapBrowserEvent) => void);
+
     // Load the static geo once and insert hub/route layers UNDER the trailers.
     const controller = new AbortController();
     void (async () => {
@@ -167,6 +207,9 @@ export function MapView(): React.JSX.Element {
 
     return () => {
       controller.abort();
+
+      // VIZ-05: unregister the click handler before disposal (Q5 item 6).
+      map.un("click", clickHandler as (evt: MapBrowserEvent) => void);
 
       // VIZ-02 leak discipline: remove the postrender listener before disposal.
       handle.detach();
