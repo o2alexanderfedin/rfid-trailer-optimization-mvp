@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: milestone-complete-pending
 stopped_at: ""
-last_updated: "2026-06-19 (Phase 4 finalized + merged)"
-last_activity: "2026-06-19 — Phase 4 adversarial review (0 blockers; optimizer matched 1153-instance glpk fuzz) → 4 fixes TDD'd (capacity-gate, supply-coalesce, EVENT_SCHEMA_VERSION rename, phantom-blocker). Merged feature/phase-4 → develop (additive event-union + reducer conflicts resolved; 4 cross-phase exhaustiveness breaks fixed). Gate green (turbo 10/10, 587 tests)."
+last_updated: "2026-06-19 (Phase 5 built + review-fixed; ready to merge + run milestone lifecycle)"
+last_activity: "2026-06-19 — Phase 5 (8 plans) built; adversarial review found 12 live-integration blockers (synthetic tests missed the live path) → 3-subagent fix burst (localRepair-in-epoch, real rehandle, real VIZ-03 buckets, live paced ticks, scenario-delta injection, single-clock animation, single ws) + new live-demo.int.test.ts end-to-end keystone. Gate green (827 tests + e2e). Next: merge feature/phase-5 → develop → milestone v1.0 lifecycle (audit→complete→cleanup)."
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 26
-  completed_plans: 26
-  percent: 80
+  completed_phases: 5
+  total_plans: 34
+  completed_plans: 34
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-18)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** Phase 5 — Simulation + Visualization Wrapper (final phase)
+**Current focus:** Milestone v1.0 lifecycle (all 5 phases built) — merge Phase 5 → develop, then audit → complete → cleanup
 
 ## Current Position
 
-Phase: 5 of 5 (Simulation + Visualization Wrapper) — next; greenfield frontend. Research DONE (05-RESEARCH.md via Google AI Mode + ol docs).
-Plan: Phases 1, 2, 3 & 4 complete + merged to develop
-Status: Phase 4 ✅ COMPLETE — review (0 blockers; SSP min-cost-flow matched 1153-instance glpk fuzz) → 4 fixes TDD'd + merged. Gate green (turbo 10/10, 587 tests). OPT-02/05/06/07 live-wiring deferred to Phase 5 (SIM-04 dep). Carried 3 LOW debt (04-REVIEW.md).
-Last activity: 2026-06-19 — Phase 4 finalized & merged to develop. Next: Phase 5 (discuss → UI-spec → plan → rival-execute → review → merge) — also absorbs OPT live-wiring (rolling loop + repair endpoint).
+Phase: 5 of 5 ✅ built + review-fixed on feature/phase-5-simulation-visualization-wrapper — pending merge to develop.
+Plan: Phases 1–4 merged to develop; Phase 5 (8 plans + 3 fix rounds) done, gate green (827 tests + e2e).
+Status: Phase 5 ✅ COMPLETE — all 9 reqs (SIM-04, VIZ-02..05, UI-01..04) + OPT-02/05/06/07 live-wiring. Adversarial review caught 12 live-integration blockers (the synthetic suite missed the live path); 3-subagent fix burst closed them; new live-demo.int.test.ts pins the live path end-to-end. UI-04 = calibrated money-slide (MVP). See 05-REVIEW.md.
+Last activity: 2026-06-19 — Phase 5 built + live-integration fixed. Next: merge feature/phase-5 → develop (clean — develop unchanged since branch) → re-gate → push → milestone lifecycle (gsd-audit-milestone → gsd-complete-milestone v1.0 → gsd-cleanup).
 
-Progress: [████████░░] 80% (4 of 5 phases complete)
+Progress: [██████████] 100% (5 of 5 phases built; pending merge + milestone close)
 
 ## Performance Metrics
 
