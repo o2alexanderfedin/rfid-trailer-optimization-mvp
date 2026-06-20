@@ -1,6 +1,24 @@
-import type { HubDto, RouteDto } from "@mm/api";
+import type { HubDto, RouteDto, KpiSnapshot } from "@mm/api";
 
-export type { HubDto, RouteDto };
+export type { HubDto, RouteDto, KpiSnapshot };
+
+// ---------------------------------------------------------------------------
+// KPI comparison types (mirrors packages/api/src/kpis/comparison.ts — kept
+// here so the web package doesn't import server-side modules directly).
+// ---------------------------------------------------------------------------
+
+/** Scores for one planner run (rehandle + utilization). */
+export interface PlanScore {
+  readonly rehandleScore: number;
+  readonly utilizationScore: number;
+}
+
+/** Baseline-vs-optimizer comparison returned by `GET /api/kpis/comparison`. */
+export interface KpiComparison {
+  readonly baseline: PlanScore;
+  readonly optimizer: PlanScore;
+  readonly deltas: PlanScore;
+}
 
 // ---------------------------------------------------------------------------
 // Wire DTOs for plan-detail endpoints (mirrors server types in plan-detail.ts,
@@ -142,4 +160,37 @@ export async function fetchPackageHistory(
     );
   }
   return (await res.json()) as TrailerHistoryEntryDto[];
+}
+
+/**
+ * `GET /api/kpis` (UI-03) — current live operational KPI snapshot.
+ *
+ * Returns `KpiSnapshot` including baseline sub-object (for the money slide).
+ * The shape is identical to the ws tick `kpis` partial, so the dashboard
+ * reads one shape from both REST and ws (single source of truth).
+ */
+export async function fetchKpis(signal?: AbortSignal): Promise<KpiSnapshot> {
+  const res = await fetch("/api/kpis", signal ? { signal } : {});
+  if (!res.ok) {
+    throw new Error(`GET /api/kpis failed: ${res.status}`);
+  }
+  return (await res.json()) as KpiSnapshot;
+}
+
+/**
+ * `GET /api/kpis/comparison` (UI-04) — seed-deterministic baseline-vs-optimizer
+ * comparison (the "money slide").
+ *
+ * Returns `KpiComparison` with `baseline`, `optimizer`, and `deltas` (each a
+ * `PlanScore`). The comparison is computed on DEMO_SEED=42 and is byte-identical
+ * across calls (KEYSTONE-b determinism contract).
+ */
+export async function fetchKpiComparison(
+  signal?: AbortSignal,
+): Promise<KpiComparison> {
+  const res = await fetch("/api/kpis/comparison", signal ? { signal } : {});
+  if (!res.ok) {
+    throw new Error(`GET /api/kpis/comparison failed: ${res.status}`);
+  }
+  return (await res.json()) as KpiComparison;
 }
