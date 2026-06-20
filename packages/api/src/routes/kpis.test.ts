@@ -141,6 +141,38 @@ describe("GET /kpis", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// FIX 4 — baseline sub-object must NOT be a copy of the live snapshot
+// The baseline is either a real FIFO baseline or removed from GET /kpis.
+// ---------------------------------------------------------------------------
+
+describe("GET /kpis FIX 4 — baseline sub-object is not a misleading copy", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  it("RED: baseline must differ from the live snapshot values OR be absent", async () => {
+    // FIX 4: the current implementation sets baseline = { ...base } which is a
+    // bitwise copy of the live snapshot. This is misleading — if the optimizer
+    // is running, baseline should reflect the FIFO/no-optimizer baseline, not
+    // the live data. The simplest honest fix is to remove the baseline field.
+    // After the fix, baseline should be absent (or differ from live values).
+    // We use a non-null optimizer result to make the live values differ from
+    // a "no-optimizer" baseline scenario.
+    app = await buildApp();
+    const resp = await app.inject({ method: "GET", url: "/kpis" });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json() as Record<string, unknown>;
+    // After FIX 4: the baseline field is removed from GET /kpis response.
+    // It was set to a misleading copy of the live snapshot.
+    // The correct approach: remove it (the money slide in /kpis/comparison
+    // owns the before/after comparison).
+    expect(body["baseline"]).toBeUndefined();
+  });
+});
+
 describe("GET /kpis/comparison", () => {
   let app: FastifyInstance;
 
