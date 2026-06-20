@@ -219,6 +219,34 @@ const AUDIT_ROWS: FakeAuditRow[] = [
   },
 ];
 
+/**
+ * Audit rows for the PKG-001 package history (UI-02 package-keyed timeline,
+ * FND-08). `trailer_id` is null so these package-keyed rows do not pollute the
+ * trailer-keyed (`T1`) history fixture — the two reads filter by different keys.
+ */
+const PACKAGE_AUDIT_ROWS: FakeAuditRow[] = [
+  {
+    global_seq: 30n,
+    package_id: "PKG-001",
+    trailer_id: null,
+    event_type: "PackageScanned",
+    occurred_at: "2026-02-01T00:02:00.000Z",
+    hub_id: "MEM",
+    scan_type: "RFID",
+    recommendation: null,
+  },
+  {
+    global_seq: 40n,
+    package_id: "PKG-001",
+    trailer_id: null,
+    event_type: "PlanGenerated",
+    occurred_at: "2026-02-01T00:03:00.000Z",
+    hub_id: null,
+    scan_type: null,
+    recommendation: "Plan PLAN1 generated for package PKG-001: FEASIBLE, objective cost 5 (epoch E1, scope HASH1123).",
+  },
+];
+
 // ---------------------------------------------------------------------------
 // App fixtures
 // ---------------------------------------------------------------------------
@@ -228,7 +256,7 @@ async function buildAppWithPlan(): Promise<FastifyInstance> {
     trailerRows: [TRAILER_WITH_PLAN],
     hubInventoryRows: [HUB_MEM],
     eventRows: [ROUTE_EVENT, PLAN_ACCEPTED_EVENT],
-    auditRows: AUDIT_ROWS,
+    auditRows: [...AUDIT_ROWS, ...PACKAGE_AUDIT_ROWS],
   });
   const app = Fastify({ logger: false });
   registerPlanDetailRoutes(app, db);
@@ -406,6 +434,94 @@ describe("GET /trailers/:id/history (UI-02)", () => {
     const resp = await app.inject({
       method: "GET",
       url: "/trailers//history",
+    });
+    expect(resp.statusCode).toBeGreaterThanOrEqual(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: GET /packages/:id/history (UI-02, FND-08)
+// ---------------------------------------------------------------------------
+
+describe("GET /packages/:id/history (UI-02)", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  it("returns 200 with an array of audit entries for a known package", async () => {
+    app = await buildAppWithPlan();
+    const resp = await app.inject({
+      method: "GET",
+      url: "/packages/PKG-001/history",
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json() as unknown[];
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBe(2); // PackageScanned + PlanGenerated
+  });
+
+  it("returns entries in globalSeq order", async () => {
+    app = await buildAppWithPlan();
+    const resp = await app.inject({
+      method: "GET",
+      url: "/packages/PKG-001/history",
+    });
+    const body = resp.json() as Array<{ globalSeq: string }>;
+    const seqs = body.map((e) => BigInt(e.globalSeq));
+    for (let i = 1; i < seqs.length; i++) {
+      expect(seqs[i]! >= seqs[i - 1]!).toBe(true);
+    }
+  });
+
+  it("returns the trailer-history DTO shape (globalSeq/eventType/occurredAt/hubId/scanType/recommendation)", async () => {
+    app = await buildAppWithPlan();
+    const resp = await app.inject({
+      method: "GET",
+      url: "/packages/PKG-001/history",
+    });
+    const body = resp.json() as Array<Record<string, unknown>>;
+    const scanRow = body.find((e) => e["eventType"] === "PackageScanned");
+    expect(scanRow).toBeDefined();
+    expect(typeof scanRow!["globalSeq"]).toBe("string");
+    expect(scanRow!["occurredAt"]).toBe("2026-02-01T00:02:00.000Z");
+    expect(scanRow!["hubId"]).toBe("MEM");
+    expect(scanRow!["scanType"]).toBe("RFID");
+    expect(scanRow!["recommendation"]).toBeNull();
+  });
+
+  it("includes the captured recommendation on plan-lifecycle entries", async () => {
+    app = await buildAppWithPlan();
+    const resp = await app.inject({
+      method: "GET",
+      url: "/packages/PKG-001/history",
+    });
+    const body = resp.json() as Array<{
+      eventType: string;
+      recommendation: string | null;
+    }>;
+    const planRow = body.find((e) => e.eventType === "PlanGenerated");
+    expect(planRow).toBeDefined();
+    expect(planRow?.recommendation).not.toBeNull();
+    expect(planRow?.recommendation).toContain("PKG-001");
+  });
+
+  it("returns empty array for an unknown package (no history = empty, not 404)", async () => {
+    app = await buildAppEmpty();
+    const resp = await app.inject({
+      method: "GET",
+      url: "/packages/UNKNOWN/history",
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual([]);
+  });
+
+  it("validates :id as non-empty (T-05-07)", async () => {
+    app = await buildAppWithPlan();
+    const resp = await app.inject({
+      method: "GET",
+      url: "/packages//history",
     });
     expect(resp.statusCode).toBeGreaterThanOrEqual(400);
   });
