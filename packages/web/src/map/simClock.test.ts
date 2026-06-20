@@ -69,4 +69,47 @@ describe("makeSimClock", () => {
     const t2 = clock.fromFrameTime(500);
     expect(t2).toBeGreaterThanOrEqual(t1);
   });
+
+  // ---------------------------------------------------------------------------
+  // FIX D: single-clock-basis invariant
+  // ---------------------------------------------------------------------------
+
+  it("produces a correct fraction when resync and fromFrameTime use the SAME clock basis", () => {
+    // This pins the FIX D invariant: both resync(wallMs) and fromFrameTime(wallMs)
+    // MUST receive values from the SAME wall-clock source.
+    //
+    // OL's frameState.time is Date.now()-based (confirmed: OL animationDelay_ calls
+    // renderFrame_(Date.now())).  So resync() must also receive Date.now() — NOT
+    // performance.now() — as its wallMs argument.
+    //
+    // This test simulates the correct same-basis pattern:
+    //   t=1000 (Date.now()-epoch): resync anchor at simMs=5000
+    //   t=1500 (Date.now()-epoch): fromFrameTime → should give 5500
+    const clock = makeSimClock({ simSpeed: 1 });
+    const basis = 1_700_000_000_000; // simulated Date.now() value (Jan 2024)
+    clock.resync(basis, 5000);
+    expect(clock.fromFrameTime(basis + 500)).toBe(5500);
+    expect(clock.fromFrameTime(basis + 1000)).toBe(6000);
+  });
+
+  it("produces a WRONG fraction when resync and fromFrameTime use DIFFERENT clock bases", () => {
+    // This pins why performance.now() in resync() breaks the animation:
+    // performance.now() is typically a small number (ms since page load, e.g. 50ms),
+    // while Date.now() is a large epoch value (e.g. 1_700_000_000_000).
+    // The elapsed = frameTime - anchorWallMs computation yields a huge negative or
+    // positive number, making the tween fraction completely wrong.
+    const clock = makeSimClock({ simSpeed: 1 });
+    // Simulate: resync receives performance.now()-style value (small, e.g. 50ms since page load)
+    const perfNowStyle = 50;
+    clock.resync(perfNowStyle, 5000); // anchor: wall=50 → sim=5000
+    // But fromFrameTime receives Date.now()-style value (epoch-based, very large).
+    const dateNowStyle = 1_700_000_000_500; // 1_700_000_000_000 + 500ms
+    // The computed simNow would be: 5000 + (dateNowStyle - 50) * 1 = astronomically large
+    const wrongSimNow = clock.fromFrameTime(dateNowStyle);
+    // It is definitely NOT 5500 (what we'd want for +500ms of wall elapsed).
+    // It's orders of magnitude larger — proving the bug.
+    expect(wrongSimNow).toBeGreaterThan(1_000_000_000); // astronomically wrong
+    // Correct answer would be 5500 — completely different.
+    expect(wrongSimNow).not.toBeCloseTo(5500, 0);
+  });
 });
