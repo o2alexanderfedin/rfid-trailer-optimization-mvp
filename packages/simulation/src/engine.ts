@@ -57,6 +57,22 @@ export interface SimulateOptions {
    * byte-identical. Partial: unspecified knobs fall back to {@link DEFAULT_RFID_CONFIG}.
    */
   readonly rfid?: Partial<RfidSimConfig>;
+  /**
+   * F-07 / SNS-05: OPT-IN over-carry rate ∈ [0,1]. When present and > 0, at a
+   * spoke arrival the engine holds back AT MOST ONE carried package (a draw
+   * against this rate), unloads the rest, then emits a SPOKE-ORIGIN
+   * `TrailerDeparted` (fromHubId=spoke, toHubId=center) carrying the held-back
+   * package — so a package destined for the spoke is STILL aboard a trailer that
+   * has departed the spoke (the SNS-05 missed-unload gate). When RFID is on, a
+   * portal read positively observes the held-back package aboard the return leg
+   * so the fusion layer clears the calibrated detection gate. A return arrival at
+   * the center unloads it (no SLA/utilization skew at the spoke).
+   *
+   * OFF BY DEFAULT: absent (or 0) ⇒ the stream is byte-identical to the golden.
+   * ALL randomness flows through a SEPARATE seeded substream (seed XOR a salt
+   * DISTINCT from the RFID salt) so enabling it never perturbs `rng`/`rfidRng`.
+   */
+  readonly overCarry?: number;
 }
 
 /** Options for the store-driven run. */
@@ -134,7 +150,7 @@ class EventQueue {
  * the SINGLE source of truth shared by `simulate` and `runSimulation`.
  */
 function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid } = opts;
+  const { seed, durationTicks, rfid, overCarry } = opts;
   if (!Number.isInteger(durationTicks) || durationTicks < 0) {
     throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
   }
@@ -144,12 +160,23 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   const rfidEnabled = rfid !== undefined;
   const rfidConfig: RfidSimConfig = resolveRfidConfig(rfid);
 
+  // F-07 / SNS-05: over-carry is OPT-IN. Enabled only when a finite, positive
+  // rate is supplied — absent or 0 ⇒ the over-carry substream is NEVER drawn and
+  // NO spoke-origin departure is emitted, so the golden stays byte-identical.
+  const overCarryRate =
+    typeof overCarry === "number" && Number.isFinite(overCarry) ? overCarry : 0;
+  const overCarryEnabled = overCarryRate > 0;
+
   const rng = makeRng(seed);
   // SIM-03: RFID draws from a SEPARATE seeded substream (seed ^ a fixed salt) so
   // enabling RFID never perturbs the operational rng — the non-RFID event order
   // is byte-identical with or without the rfid option, while the RFID stream is
   // still fully reproducible per seed.
   const rfidRng = makeRng((seed ^ 0x5f_1d_a7_c3) >>> 0);
+  // F-07: over-carry draws from its OWN seeded substream — a salt DISTINCT from
+  // the RFID salt (0x5f1da7c3) so it never collides with / perturbs `rfidRng` or
+  // `rng`. Same seed + same rate ⇒ byte-identical over-carry decisions.
+  const overCarryRng = makeRng((seed ^ 0x3c_a7_1d_5f) >>> 0);
   const clock = new VirtualClock(EPOCH_ISO, MS_PER_TICK);
   const queue = new EventQueue();
   const out: SimulatedEvent[] = [];
@@ -325,9 +352,25 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emitRfid("antenna", trailerId, spoke.hubId, carried);
     }
 
-    // Unload each carried package at the destination spoke: unload scan then
-    // arrival (the package has reached its destination hub).
+    // F-07 / SNS-05: OPT-IN over-carry. Before unloading, decide (against the
+    // seeded over-carry substream) whether to HOLD BACK at most ONE carried
+    // package — modelling an operator that fails to pull one block at the spoke.
+    // The held-back package is destined for THIS spoke yet rides on, so once the
+    // spoke records a departure the SNS-05 detector (UNCHANGED) can catch it.
+    // The draw is gated on `overCarryEnabled`, so the over-carry substream is
+    // NEVER consumed when the knob is off ⇒ the golden stream is byte-identical.
+    let heldBack: string | undefined;
+    if (overCarryEnabled && carried.length > 0) {
+      if (overCarryRng.next() < overCarryRate) {
+        // Deterministic choice: the LAST carried package (stable, id-free pick).
+        heldBack = carried[carried.length - 1];
+      }
+    }
+
+    // Unload each carried package at the destination spoke EXCEPT the held-back
+    // one: unload scan then arrival (the package has reached its destination hub).
     for (const packageId of carried) {
+      if (packageId === heldBack) continue;
       const unload: PackageScanned = {
         type: "PackageScanned",
         schemaVersion: 1,
@@ -343,11 +386,92 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emit(`package-${packageId}`, atHub);
     }
 
+    // F-07: emit the SPOKE-ORIGIN return departure carrying the held-back
+    // package, then schedule its unload back at the center. This is the ONLY
+    // place a `TrailerDeparted.fromHubId != center` is produced — and only when
+    // over-carry actually fires — so the missed-unload gate becomes satisfiable
+    // WITHOUT changing the detector or perturbing the golden.
+    if (heldBack !== undefined) {
+      tripCounter += 1;
+      const returnTripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+      const overCarried = [heldBack];
+
+      const returnDeparted: TrailerDeparted = {
+        type: "TrailerDeparted",
+        schemaVersion: 1,
+        payload: {
+          trailerId,
+          fromHubId: spoke.hubId,
+          toHubId: center.hubId,
+          tripId: returnTripId,
+          packageIds: overCarried,
+        },
+      };
+      emit(`trailer-${trailerId}`, returnDeparted);
+
+      // SIM-03: a DOCK-PORTAL read positively observes the over-carried package
+      // aboard the trailer AFTER the spoke is recorded departed — the corroborated
+      // strong-RSSI read the fusion layer needs to clear the calibrated detection
+      // gate (a single antenna read alone sits near the uniform floor).
+      if (rfidEnabled) {
+        emitRfid("portal", trailerId, spoke.hubId, overCarried);
+      }
+
+      // Schedule the return arrival at the center, which unloads the over-carried
+      // package there (so it does NOT skew spoke utilization/SLA).
+      const returnArriveTick = arriveTick + TRANSIT_TICKS;
+      const overCarriedId = heldBack;
+      schedule(returnArriveTick, () =>
+        arriveOverCarriedAtCenter(trailerId, overCarriedId, returnTripId),
+      );
+    }
+
     // Loop: after dwell, the trailer returns toward the center and re-dispatches.
     const nextDepart = arriveTick + DWELL_TICKS;
     if (nextDepart <= durationTicks) {
       schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
     }
+  };
+
+  /**
+   * F-07: the return-leg arrival at the center for an over-carried package. It
+   * mirrors the normal arrival (TrailerArrivedAtHub + TrailerDocked) and unloads
+   * the single over-carried package at the center, so the package finally leaves
+   * the trailer and the demo stays utilization/SLA-clean. Time + ids are all
+   * deterministic (no draw against any rng here).
+   */
+  const arriveOverCarriedAtCenter = (
+    trailerId: string,
+    packageId: string,
+    tripId: string,
+  ): void => {
+    const arrived: TrailerArrivedAtHub = {
+      type: "TrailerArrivedAtHub",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, tripId },
+    };
+    emit(`trailer-${trailerId}`, arrived);
+
+    const docked: TrailerDocked = {
+      type: "TrailerDocked",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, dockDoorId: `${center.hubId}-DOCK1` },
+    };
+    emit(`trailer-${trailerId}`, docked);
+
+    const unload: PackageScanned = {
+      type: "PackageScanned",
+      schemaVersion: 1,
+      payload: { packageId, hubId: center.hubId, scanType: "unload" },
+    };
+    emit(`package-${packageId}`, unload);
+
+    const atHub: PackageArrivedAtHub = {
+      type: "PackageArrivedAtHub",
+      schemaVersion: 1,
+      payload: { packageId, hubId: center.hubId },
+    };
+    emit(`package-${packageId}`, atHub);
   };
 
   /** Schedule an action at `fireTick` with a stable insertion-order tie-break. */

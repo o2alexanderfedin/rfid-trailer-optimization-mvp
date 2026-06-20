@@ -133,6 +133,15 @@ export interface DriveSimulationOptions {
    */
   readonly rfid?: Partial<RfidSimConfig>;
   /**
+   * F-07 / SNS-05: OPT-IN over-carry rate ∈ [0,1]. Threaded into `simulate` only
+   * when DEFINED — so the live demo can model a missed-unload (a package destined
+   * for a spoke still aboard a trailer that has departed the spoke), which the
+   * UNCHANGED detector then catches. The driver's existing `departedHubs` /
+   * `destHubIndex` plumbing carries the spoke-origin departure through the SNS-05
+   * gate with zero detector change. Absent ⇒ the golden stream is byte-identical.
+   */
+  readonly overCarry?: number;
+  /**
    * Detection calibration band; defaults to {@link PRODUCTION_DETECTION_CONFIG}
    * (the ONE production band). Injectable for tuning/tests (DIP).
    */
@@ -345,6 +354,7 @@ export async function driveSimulation(
     seed: opts.seed,
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -374,6 +384,7 @@ export async function driveSimulationPaced(
     seed: opts.seed,
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
   });
   const ticks = intoTicks(stream);
   const intervalMs = opts.tickIntervalMs ?? 500;

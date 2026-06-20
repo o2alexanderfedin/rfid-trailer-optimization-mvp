@@ -86,12 +86,55 @@ export const PRODUCTION_DETECTION_CONFIG: DetectionConfig = {
  * dwell window; `antennaBurst` 6 exercises the fusion windowing. The other knobs
  * inherit the sim defaults (RSSI bases/noise, 0.85 confidence cap).
  *
- * NOTE: `missed-unload` stays 0 on the live path (deferred to Phase 5 — needs
- * over-carry + return-leg `TrailerDeparted(fromHubId=spoke)` trip modeling); the
- * wrong-trailer feed is the visible Phase-3 centerpiece.
+ * NOTE: `missed-unload` is now WIRED on the live path (F-07 / SNS-05). The
+ * simulator's opt-in {@link DEMO_OVER_CARRY_CONFIG} models a held-back package
+ * that rides on past its spoke and emits a spoke-origin
+ * `TrailerDeparted(fromHubId=spoke)` return leg; a corroborating portal read
+ * positively observes it aboard, and the UNCHANGED detector fires through the
+ * driver's `departedHubs` / `destHubIndex` plumbing. The wrong-trailer feed
+ * remains the dense Phase-3 centerpiece; the missed-unload feed is now non-empty.
  */
 export const DEMO_RFID_CONFIG: Partial<RfidSimConfig> = {
   wrongZoneRate: 0.1,
   missRate: 0.05,
   antennaBurst: 6,
+};
+
+/** The demo over-carry config the live entrypoint drives (F-07 / SNS-05). */
+export interface OverCarryConfig {
+  /**
+   * Per-spoke-arrival probability of holding back ONE carried package (the
+   * over-carry). Drawn against a SEPARATE seeded substream so it never perturbs
+   * the operational / RFID streams (golden stays byte-identical when off).
+   */
+  readonly rate: number;
+}
+
+/**
+ * F-07 / SNS-05: the LIVE over-carry profile (`main.ts` drives it alongside
+ * {@link DEMO_RFID_CONFIG}). Without it the demo's missed-unload feed is empty —
+ * every package unloads at its spoke, so the SNS-05 gate (`destHubId ==
+ * departedHub`, still observed aboard) is never satisfiable.
+ *
+ * ## Calibration (seed 4242, 120 ticks, {@link PRODUCTION_DETECTION_CONFIG})
+ * `rate` is the per-spoke-arrival P(hold back one package). An empirical sweep
+ * over the EXACT live path (seed 4242 / 120 ticks / demo RFID / production
+ * detection), reading the persisted exceptions feed, produced these LIVE
+ * missed-unload exception counts:
+ *
+ *   rate  0.05 → 0    0.10 → 0    0.15 → 4    0.20 → 4
+ *
+ * Below ~0.15 the seeded over-carry draws at this seed never coincide with a
+ * spoke arrival that still carries a package, so the feed stays empty. 0.15
+ * lands at 4 — squarely in the demo-credible 1-5 band: clearly visible yet
+ * realistic (a 15% over-carry probability per spoke arrival, not cranked). Each
+ * fired missed-unload clears the calibrated ~0.34 fusion-confidence gate because
+ * the over-carried package gets a corroborating STRONG-RSSI portal read on the
+ * spoke-origin return leg (a single antenna read alone sits near the ~0.33
+ * uniform floor and would NOT clear it). The over-carried package is unloaded at
+ * the CENTER on return, so it does not skew spoke utilization/SLA, and the dense
+ * wrong-trailer feed retains its ample margin (~9).
+ */
+export const DEMO_OVER_CARRY_CONFIG: OverCarryConfig = {
+  rate: 0.15,
 };

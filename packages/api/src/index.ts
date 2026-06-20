@@ -17,7 +17,12 @@ export type {
   ExceptionKpiDto,
   ZoneEstimateDto,
 } from "./routes/exceptions.js";
-export { PRODUCTION_DETECTION_CONFIG, DEMO_RFID_CONFIG } from "./detection-config.js";
+export {
+  PRODUCTION_DETECTION_CONFIG,
+  DEMO_RFID_CONFIG,
+  DEMO_OVER_CARRY_CONFIG,
+} from "./detection-config.js";
+export type { OverCarryConfig } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
 export { registerOptimizerRoutes } from "./routes/optimizer.js";
