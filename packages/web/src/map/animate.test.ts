@@ -9,6 +9,11 @@
  * the unit tests run in the Node vitest environment (no browser / canvas).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type LineString from "ol/geom/LineString.js";
+import type OlPoint from "ol/geom/Point.js";
+import type OlMap from "ol/Map.js";
+import type VectorLayer from "ol/layer/Vector.js";
+import type VectorSource from "ol/source/Vector.js";
 
 // ---------------------------------------------------------------------------
 // Mock OL modules before importing the module under test
@@ -142,6 +147,14 @@ function makePointGeom(): InstanceType<typeof MockPoint> {
   return new MockPoint();
 }
 
+function makeLayer(): VectorLayer<VectorSource> {
+  return new MockVectorLayer() as unknown as VectorLayer<VectorSource>;
+}
+
+function makeMap(): OlMap {
+  return new MockMap() as unknown as OlMap;
+}
+
 function makeTrailerAnim(
   departSimMs: number,
   etaSimMs: number,
@@ -152,11 +165,11 @@ function makeTrailerAnim(
 ): TrailerAnim {
   return {
     trailerId: "T-1",
-    routeGeom: makeGeom(coords) as unknown as import("ol/geom/LineString.js").default,
+    routeGeom: makeGeom(coords) as unknown as LineString,
     routeLengthM: 100,
     departSimMs,
     etaSimMs,
-    pointGeom: makePointGeom() as unknown as import("ol/geom/Point.js").default,
+    pointGeom: makePointGeom() as unknown as OlPoint,
   };
 }
 
@@ -225,43 +238,37 @@ describe("attachTrailerAnimation", () => {
   });
 
   it("registers exactly ONE postrender listener on the trailer layer", () => {
-    const layer = new MockVectorLayer() as unknown as import("ol/layer/Vector.js").default<
-      import("ol/source/Vector.js").default
-    >;
-    const map = new MockMap() as unknown as import("ol/Map.js").default;
+    const layer = makeLayer();
+    const map = makeMap();
     const trailers = new Map<string, TrailerAnim>();
-    const { detach } = attachTrailerAnimation(layer, map, trailers);
+    const handle = attachTrailerAnimation(layer, map, trailers);
     expect(postRenderListeners.length).toBe(1);
-    detach();
+    handle.detach();
   });
 
   it("fires map.render() on each postrender event (keep-alive loop)", () => {
-    const layer = new MockVectorLayer() as unknown as import("ol/layer/Vector.js").default<
-      import("ol/source/Vector.js").default
-    >;
-    const map = new MockMap() as unknown as import("ol/Map.js").default;
+    const layer = makeLayer();
+    const map = makeMap();
     const trailers = new Map<string, TrailerAnim>();
-    const { detach } = attachTrailerAnimation(layer, map, trailers);
+    const handle = attachTrailerAnimation(layer, map, trailers);
 
     const listener = postRenderListeners[0]!;
     listener({ frameState: { time: 500 } });
     expect(mapRenderCount).toBe(1);
     listener({ frameState: { time: 1000 } });
     expect(mapRenderCount).toBe(2);
-    detach();
+    handle.detach();
   });
 
   it("positions a trailer's pointGeom in place via getCoordinateAt(fraction)", () => {
-    const layer = new MockVectorLayer() as unknown as import("ol/layer/Vector.js").default<
-      import("ol/source/Vector.js").default
-    >;
-    const map = new MockMap() as unknown as import("ol/Map.js").default;
+    const layer = makeLayer();
+    const map = makeMap();
     const t = makeTrailerAnim(0, 1000, [
       [0, 0],
       [100, 0],
     ]);
     const trailers = new Map<string, TrailerAnim>([["T-1", t]]);
-    const { detach } = attachTrailerAnimation(layer, map, trailers);
+    const handle = attachTrailerAnimation(layer, map, trailers);
 
     const listener = postRenderListeners[0]!;
     // Simulate simNow = 500 (fraction 0.5 → x=50, y=0)
@@ -274,18 +281,16 @@ describe("attachTrailerAnimation", () => {
     // x should be ~50 (half of 100)
     expect(coord[0]).toBeCloseTo(50, 1);
     expect(coord[1]).toBeCloseTo(0, 1);
-    detach();
+    handle.detach();
   });
 
   it("detach() removes the postrender listener", () => {
-    const layer = new MockVectorLayer() as unknown as import("ol/layer/Vector.js").default<
-      import("ol/source/Vector.js").default
-    >;
-    const map = new MockMap() as unknown as import("ol/Map.js").default;
+    const layer = makeLayer();
+    const map = makeMap();
     const trailers = new Map<string, TrailerAnim>();
-    const { detach } = attachTrailerAnimation(layer, map, trailers);
+    const handle = attachTrailerAnimation(layer, map, trailers);
     expect(postRenderListeners.length).toBe(1);
-    detach();
+    handle.detach();
     expect(postRenderListeners.length).toBe(0);
   });
 
@@ -342,16 +347,14 @@ describe("attachTrailerAnimation", () => {
   });
 
   it("a snapshot mid-tween re-anchors keyframes in place (resync-safe)", () => {
-    const layer = new MockVectorLayer() as unknown as import("ol/layer/Vector.js").default<
-      import("ol/source/Vector.js").default
-    >;
-    const map = new MockMap() as unknown as import("ol/Map.js").default;
+    const layer = makeLayer();
+    const map = makeMap();
     const t = makeTrailerAnim(0, 1000, [
       [0, 0],
       [100, 0],
     ]);
     const trailers = new Map<string, TrailerAnim>([["T-1", t]]);
-    const { detach } = attachTrailerAnimation(layer, map, trailers);
+    const handle = attachTrailerAnimation(layer, map, trailers);
 
     const listener = postRenderListeners[0]!;
     // Initial position at fraction 0.5.
@@ -368,6 +371,6 @@ describe("attachTrailerAnimation", () => {
     // The key invariant: no snap to a vertex — the coord comes from getCoordinateAt.
     expect(coordAfter[0]).toBeCloseTo(25, 1);
     expect(coordBefore[0]).toBeCloseTo(50, 1);
-    detach();
+    handle.detach();
   });
 });

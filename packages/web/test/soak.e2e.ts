@@ -22,6 +22,24 @@
 import { expect, test } from "@playwright/test";
 import type { WebSocketRoute } from "@playwright/test";
 
+/**
+ * Chrome's non-standard `performance.memory` shape (only the field we read).
+ * Typing it locally lets us read `usedJSHeapSize` without an `any` cast.
+ */
+interface PerformanceMemory {
+  readonly usedJSHeapSize: number;
+}
+
+/**
+ * Browser-context callback (serialized + run in the page by `page.evaluate`):
+ * returns the used JS heap size in bytes, or 0 if the browser doesn't expose
+ * `performance.memory` (non-Chromium / no `--enable-precise-memory-info`).
+ */
+function readUsedJSHeapSize(): number {
+  const withMemory = performance as Performance & { memory?: PerformanceMemory };
+  return withMemory.memory?.usedJSHeapSize ?? 0;
+}
+
 // ---------------------------------------------------------------------------
 // Shared geo fixtures
 // ---------------------------------------------------------------------------
@@ -198,10 +216,7 @@ test.describe("KEYSTONE (a): flat-memory soak over multi-minute animated run", (
     // Force GC and take baseline heap measurement.
     await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
     await page.waitForTimeout(500); // let GC settle
-    const heapBefore = await page.evaluate(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (): number => (performance as any).memory?.usedJSHeapSize ?? 0,
-    );
+    const heapBefore = await page.evaluate(readUsedJSHeapSize);
 
     // ---- Main soak period: ~2.5 minutes of animation + ticks ----
     await page.waitForTimeout(SOAK_DURATION_MS);
@@ -209,10 +224,7 @@ test.describe("KEYSTONE (a): flat-memory soak over multi-minute animated run", (
     // Force GC and take final heap measurement.
     await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
     await page.waitForTimeout(500); // let GC settle
-    const heapAfter = await page.evaluate(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (): number => (performance as any).memory?.usedJSHeapSize ?? 0,
-    );
+    const heapAfter = await page.evaluate(readUsedJSHeapSize);
 
     // ---- Memory assertion: bounded growth (not monotonic climb) ----
     const growth = heapAfter - heapBefore;
