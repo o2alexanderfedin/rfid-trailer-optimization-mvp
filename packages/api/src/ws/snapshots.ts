@@ -2,10 +2,12 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import {
   type CatchupDb,
+  type ExceptionKind,
   type ProjectionDb,
   readGeoKeyframes,
   readOpenExceptions,
 } from "@mm/projections";
+import { assertNever, type Severity } from "@mm/domain";
 import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
 import {
@@ -147,6 +149,43 @@ function loadBucketFor(trailerCount: number): number {
   if (trailerCount === 1) return 1;
   if (trailerCount === 2) return 2;
   return 3;
+}
+
+/**
+ * Translate a projection exception `kind` (hyphenated taxonomy) onto the wire
+ * envelope `kind` (camelCase) the frontend `AlertFeed.kindLabel` map expects
+ * (F-01). Exhaustive over `ExceptionKind`; adding a member without a case stops
+ * compilation via {@link assertNever}.
+ */
+export function exceptionKindToWire(kind: ExceptionKind): ExceptionItem["kind"] {
+  switch (kind) {
+    case "wrong-trailer":
+      return "wrongTrailer";
+    case "missed-unload":
+      return "missedUnload";
+    default:
+      return assertNever(kind);
+  }
+}
+
+/**
+ * Translate a projection exception `severity` (`info | warning | critical`) onto
+ * the wire envelope `severity` (`low | med | high`) the frontend
+ * `AlertFeed.severityClass` map expects (F-01). Exhaustive over `Severity`.
+ */
+export function exceptionSeverityToWire(
+  severity: Severity,
+): ExceptionItem["severity"] {
+  switch (severity) {
+    case "info":
+      return "low";
+    case "warning":
+      return "med";
+    case "critical":
+      return "high";
+    default:
+      return assertNever(severity);
+  }
 }
 
 /**
@@ -292,8 +331,8 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   const exceptionsOpen: ExceptionItem[] = openExceptions.map(
     (ex): ExceptionItem => ({
       id: ex.exceptionId,
-      kind: ex.kind as ExceptionItem["kind"],
-      severity: ex.severity as ExceptionItem["severity"],
+      kind: exceptionKindToWire(ex.kind),
+      severity: exceptionSeverityToWire(ex.severity),
       entityId: ex.trailerId,
       reason: `${ex.kind} detected`,
       recommendedAction: ex.recommendedAction,
