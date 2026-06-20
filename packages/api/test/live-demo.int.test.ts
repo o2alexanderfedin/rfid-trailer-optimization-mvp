@@ -6,7 +6,6 @@ import {
   driveSimulation,
   type ApiDb,
   type WsEnvelope,
-  type SnapshotPayload,
 } from "../src/index.js";
 import type { BuiltServer } from "../src/server.js";
 import { startPgFixture, type PgFixture } from "./pg-fixture.js";
@@ -46,7 +45,7 @@ const DURATION = 120;
 function decodeText(data: RawData): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  return (data as Buffer).toString("utf8");
+  return data.toString("utf8");
 }
 
 /** Open a buffered ws socket; collects messages so tests never race open/send. */
@@ -88,7 +87,10 @@ function openSocketBuffered(
         );
         waiters.push({
           resolve: (v) => { clearTimeout(timer); resolve(v); },
-          reject: (e) => { clearTimeout(timer); reject(e); },
+          reject: (e) => {
+            clearTimeout(timer);
+            reject(e instanceof Error ? e : new Error(String(e)));
+          },
         });
       });
     }
@@ -155,7 +157,7 @@ describe("FIX SMOKE — end-to-end live-demo integration test", () => {
       expect(env.type).toBe("snapshot");
       if (env.type !== "snapshot") throw new Error("expected snapshot");
 
-      const payload = env.payload as SnapshotPayload;
+      const payload = env.payload;
 
       // Hubs: at least one hub must have a non-zero metric bucket.
       expect(payload.hubs.length).toBeGreaterThan(0);

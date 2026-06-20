@@ -205,45 +205,6 @@ function infeasibleSnapshot(): TwinSnapshot {
   };
 }
 
-/**
- * Build a snapshot where T1 has blocks in LIFO-WRONG order (B2 destined for
- * H3/stop-1 but volume is smaller, B1 for H2/stop-0). Total volume fits in
- * capacity=20 so the route is FEASIBLE. The rehandle scorer penalises the
- * load arrangement when we synthesise the LoadPlan in FIFO (wrong) order.
- *
- * The test verifies rehandleScore > 0 only when the blocks are in wrong order
- * relative to the route. This is the FIX 2 test.
- */
-function rehandleSnapshot(): TwinSnapshot {
-  return {
-    hubs: ["H1", "H2", "H3"],
-    routes: [
-      { routeId: "R1", fromHubId: "H1", toHubId: "H2", travelMin: 30, capacity: 50 },
-      { routeId: "R2", fromHubId: "H2", toHubId: "H3", travelMin: 40, capacity: 50 },
-    ],
-    trailers: [
-      {
-        trailerId: "T1",
-        currentHubId: "H1",
-        departureMin: 300,
-        capacity: 50,
-        route: [
-          { hubId: "H2", stopIndex: 0 }, // H2 unloads FIRST — must be at rear (low depth)
-          { hubId: "H3", stopIndex: 1 }, // H3 unloads SECOND — must be deeper (high depth)
-        ],
-        // B2 goes to H3 (stop 1, deeper/nose), B1 goes to H2 (stop 0, rear).
-        // In the twin's block list order they come as B1(H2) first then B2(H3).
-        // The epoch must detect that any block destined for a later stop placed
-        // in front of an earlier-stop block incurs rehandle cost.
-        blocks: [
-          { blockId: "B1", nextUnloadHubId: "H2", volume: 5 }, // unloads first → should be at depth 0 (rear)
-          { blockId: "B2", nextUnloadHubId: "H3", volume: 5 }, // unloads second → should be at depth 1 (nose)
-        ],
-      },
-    ],
-  };
-}
-
 describe("runEpoch FIX 1 — localRepair wired for infeasible trailers (OPT-07)", () => {
   const EPOCH_FIX: Epoch = { epochId: "e-fix1", nowMin: 100, freezeWindowMin: 15 };
 

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DomainEvent } from "@mm/domain";
-import {
-  type AuditTimelineEntry,
-  type StoredEventLike,
-  auditTimelineReducer,
-} from "./audit-timeline.js";
+import { type StoredEventLike, auditTimelineReducer } from "./audit-timeline.js";
 
 /**
  * Plan 05-04 Task 1 (TDD RED → GREEN): audit-timeline reducer extended to index

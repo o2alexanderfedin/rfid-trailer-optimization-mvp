@@ -35,9 +35,9 @@ function buildFakeDb(opts?: {
   // or selectFrom(table).selectAll().execute() / executeTakeFirst()
   const makeQueryBuilder = (table: string) => {
     const builder = {
-      select: (_cols: unknown) => builder,
+      select: () => builder,
       selectAll: () => builder,
-      orderBy: (_col: unknown, _dir?: unknown) => builder,
+      orderBy: () => builder,
       execute: () => {
         if (table === "trailer_state") return Promise.resolve(trailerRows);
         if (table === "exceptions") return Promise.resolve([]);
@@ -89,7 +89,7 @@ describe("GET /kpis", () => {
     const resp = await app.inject({ method: "GET", url: "/kpis" });
     expect(resp.statusCode).toBe(200);
 
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
     // Always-numeric KPI fields.
     const numericFields: Array<keyof Omit<KpiSnapshot, "baseline">> = [
       "utilization",
@@ -128,7 +128,7 @@ describe("GET /kpis", () => {
     expect(resp.statusCode).toBe(200);
     // trailerCount feeds into utilization — with 0 packages both trailers
     // contribute utilization = 0. The shape must still be valid.
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
     expect(typeof body["utilization"]).toBe("number");
   });
 
@@ -154,7 +154,7 @@ describe("GET /kpis", () => {
     app = await buildApp(db);
     const resp = await app.inject({ method: "GET", url: "/kpis" });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json() as Record<string, number>;
+    const body = resp.json<Record<string, number>>();
     // 25 unit-volume blocks / 50 capacity = 0.5 (the optimizer's real fill basis).
     expect(body["utilization"]).toBeCloseTo(0.5, 5);
     // And it must NOT be the old proxy 25/30 ≈ 0.8333.
@@ -167,7 +167,7 @@ describe("GET /kpis", () => {
     app = await buildApp(); // empty DB → no departures/arrivals on record
     const resp = await app.inject({ method: "GET", url: "/kpis" });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
     expect(body["onTimeDeparture"]).toBeNull();
     expect(body["onTimeArrival"]).toBeNull();
     expect(body["onTimeDeparture"]).not.toBe(1);
@@ -198,7 +198,7 @@ describe("GET /kpis FIX 4 — baseline sub-object is not a misleading copy", () 
     app = await buildApp();
     const resp = await app.inject({ method: "GET", url: "/kpis" });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
     // After FIX 4: the baseline field is removed from GET /kpis response.
     // It was set to a misleading copy of the live snapshot.
     // The correct approach: remove it (the money slide in /kpis/comparison
@@ -219,7 +219,7 @@ describe("GET /kpis/comparison", () => {
     const resp = await app.inject({ method: "GET", url: "/kpis/comparison" });
     expect(resp.statusCode).toBe(200);
 
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
     expect(body["baseline"]).toBeDefined();
     expect(body["optimizer"]).toBeDefined();
     expect(body["deltas"]).toBeDefined();
@@ -228,7 +228,7 @@ describe("GET /kpis/comparison", () => {
   it("comparison baseline and optimizer each have rehandleScore", async () => {
     app = await buildApp();
     const resp = await app.inject({ method: "GET", url: "/kpis/comparison" });
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
 
     const baseline = body["baseline"] as Record<string, unknown>;
     const optimizer = body["optimizer"] as Record<string, unknown>;
@@ -239,7 +239,7 @@ describe("GET /kpis/comparison", () => {
   it("comparison optimizer wins on rehandleScore (keystone)", async () => {
     app = await buildApp();
     const resp = await app.inject({ method: "GET", url: "/kpis/comparison" });
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
 
     const baseline = body["baseline"] as Record<string, number>;
     const optimizer = body["optimizer"] as Record<string, number>;

@@ -22,9 +22,9 @@ import {
   attachSnapshotSocket,
   routeSlaRiskBucketFor,
   trailerStateFor,
-  type ApiDb,
   type SnapshotPayloadBuilder,
 } from "./snapshots.js";
+import type { ApiDb } from "../routes/queries.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -45,7 +45,7 @@ function emptyPayload(): SnapshotPayload {
 
 /** Build a Fastify app + ws channel; returns { app, port, broadcast }. */
 async function buildTestApp(
-  buildPayload: SnapshotPayloadBuilder = (_db) => Promise.resolve(emptyPayload()),
+  buildPayload: SnapshotPayloadBuilder = () => Promise.resolve(emptyPayload()),
 ): Promise<{
   app: FastifyInstance;
   port: number;
@@ -125,7 +125,7 @@ function openSocketBuffered(
           },
           reject: (e) => {
             clearTimeout(timer);
-            reject(e);
+            reject(e instanceof Error ? e : new Error(String(e)));
           },
         });
       });
@@ -166,7 +166,7 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
 
   it("snapshot payload contains trailers, hubs, routes, exceptionsOpen (no kpis — F-02)", async () => {
     const payload = emptyPayload();
-    const { app: a, port } = await buildTestApp((_db) => Promise.resolve(payload));
+    const { app: a, port } = await buildTestApp(() => Promise.resolve(payload));
     app = a;
     const { socket, next } = await openSocketBuffered(port);
     try {
@@ -266,7 +266,7 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
       ...emptyPayload(),
       trailers: [{ id: "T1", routeId: "R1", departMs: 1000, etaMs: 3000, state: "onTime" }],
     };
-    const { app: a, port, broadcast } = await buildTestApp((_db) => {
+    const { app: a, port, broadcast } = await buildTestApp(() => {
       callCount += 1;
       return Promise.resolve(callCount <= 2 ? t1Payload : t1Changed);
     });
@@ -382,7 +382,7 @@ describe("buildSnapshotPayload FIX 3 — non-zero hub buckets and route list (VI
     };
 
     // A builder that returns real hub state (not all-zero).
-    const builder = (_db: ApiDb) => Promise.resolve(payloadWithHubs);
+    const builder: SnapshotPayloadBuilder = () => Promise.resolve(payloadWithHubs);
     const { app: a, port } = await buildTestApp(builder);
     const { socket, next } = await openSocketBuffered(port);
     try {
@@ -425,7 +425,7 @@ describe("buildSnapshotPayload FIX 3 — non-zero hub buckets and route list (VI
       hubs: [{ id: "HUB-X", volumeBucket: 2, slaRiskBucket: 0, congestionBucket: 0 }],
     };
 
-    const builder = (_db: ApiDb) => {
+    const builder: SnapshotPayloadBuilder = () => {
       call++;
       return Promise.resolve(call <= 2 ? zeroPayload : changedPayload);
     };
@@ -576,7 +576,7 @@ describe("ws snapshot channel: M-5 rejection on connect", () => {
 
     try {
       const { app: a, port } = await buildTestApp(
-        (_db) => Promise.reject(new Error("simulated transient DB failure")),
+        () => Promise.reject(new Error("simulated transient DB failure")),
       );
       app = a;
 

@@ -72,7 +72,10 @@ function openSocketBuffered(
         );
         waiters.push({
           resolve: (v) => { clearTimeout(timer); resolve(v); },
-          reject: (e) => { clearTimeout(timer); reject(e); },
+          reject: (e) => {
+            clearTimeout(timer);
+            reject(e instanceof Error ? e : new Error(String(e)));
+          },
         });
       });
     }

@@ -41,7 +41,7 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
 
   beforeAll(async () => {
     fx = await startPgFixture();
-    db = fx.db as unknown as ApiDb;
+    db = fx.db;
 
     // Build the server with the rolling optimizer loop wired in.
     // FIX F: pass baselineTicks = BASELINE_TICKS so scenario injection computes
@@ -145,7 +145,7 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
   it("(c) DETERMINISM: two identical seed+knob runs produce the same recommendation count", async () => {
     // Run 1: build a fresh server + DB with the same seed and scenario.
     const fx2 = await startPgFixture();
-    const db2 = fx2.db as unknown as ApiDb;
+    const db2 = fx2.db;
     let built2: BuiltServer | undefined;
     try {
       built2 = await buildServer({

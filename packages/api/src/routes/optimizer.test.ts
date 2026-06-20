@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { EpochResult } from "@mm/optimizer";
 import type { RollingOptimizerService } from "../optimizer/rolling-service.js";
 import { registerOptimizerRoutes } from "./optimizer.js";
+import type { OptimizerRecommendationsDto } from "./optimizer.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -24,6 +25,11 @@ type MockService = {
   latestResult: ReturnType<typeof vi.fn>;
   runOnce: ReturnType<typeof vi.fn>;
 };
+
+/** Parse an `app.inject()` body into the real route DTO (anti-`any`). */
+function parseBody(raw: string): OptimizerRecommendationsDto {
+  return JSON.parse(raw) as OptimizerRecommendationsDto;
+}
 
 function makeMockService(result: EpochResult | null): MockService {
   return {
@@ -122,39 +128,6 @@ const RESULT_WITH_REPAIRS: EpochResult = {
   ],
 };
 
-/** A result with repair recs carrying kind + rationale (from localRepair output). */
-const RESULT_WITH_REPAIR_KINDS: EpochResult = {
-  epochId: "epoch-2",
-  scopeHash: "hash-repair",
-  generated: null,
-  accepted: null,
-  recommendations: [
-    {
-      trailerId: "T003",
-      planId: "plan-T003",
-      feasible: false,
-      objectiveCost: 300,
-      breakdown: {
-        total: 300,
-        terms: {
-          miles: 60,
-          driverTimeMin: 60,
-          fuelUnits: 60,
-          dockWaitMin: 0,
-          handlingOps: 3,
-          rehandleScore: 2,
-          slaLatenessMin: 0,
-          utilization: 0.6,
-          overCarryUnits: 0,
-          imbalance: 0,
-          churnVsPrevious: 0,
-        },
-      },
-      frozen: false,
-    },
-  ],
-};
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -198,13 +171,13 @@ describe("GET /optimizer/recommendations", () => {
         url: "/optimizer/recommendations",
       });
       expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.body);
+      const body = parseBody(response.body);
       expect(body.recommendations).toEqual([]);
     });
 
     it("returns the epochId and scopeHash", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
-      const body = JSON.parse(response.body);
+      const body = parseBody(response.body);
       expect(body.epochId).toBe("epoch-0");
       expect(body.scopeHash).toBe("hash-000");
     });
@@ -220,43 +193,43 @@ describe("GET /optimizer/recommendations", () => {
     it("returns 200 with two recommendations", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
       expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.body);
+      const body = parseBody(response.body);
       expect(body.recommendations).toHaveLength(2);
     });
 
     it("each recommendation carries trailerId, planId, objectiveCost", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
-      const body = JSON.parse(response.body);
-      const t1 = body.recommendations.find((r: { trailerId: string }) => r.trailerId === "T001");
+      const body = parseBody(response.body);
+      const t1 = body.recommendations.find((r) => r.trailerId === "T001");
       expect(t1).toBeDefined();
-      expect(t1.planId).toBe("plan-T001");
-      expect(t1.objectiveCost).toBe(120);
+      expect(t1?.planId).toBe("plan-T001");
+      expect(t1?.objectiveCost).toBe(120);
     });
 
     it("feasibility is a SEPARATE boolean field (anti-P2: not folded into objectiveCost)", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
-      const body = JSON.parse(response.body);
-      const t1 = body.recommendations.find((r: { trailerId: string }) => r.trailerId === "T001");
-      const t2 = body.recommendations.find((r: { trailerId: string }) => r.trailerId === "T002");
+      const body = parseBody(response.body);
+      const t1 = body.recommendations.find((r) => r.trailerId === "T001");
+      const t2 = body.recommendations.find((r) => r.trailerId === "T002");
       // Separate: feasible is a boolean, not derived from objectiveCost
-      expect(typeof t1.feasible).toBe("boolean");
-      expect(t1.feasible).toBe(true);
-      expect(t2.feasible).toBe(false);
+      expect(typeof t1?.feasible).toBe("boolean");
+      expect(t1?.feasible).toBe(true);
+      expect(t2?.feasible).toBe(false);
       // objectiveCost is still separately present
-      expect(typeof t1.objectiveCost).toBe("number");
+      expect(typeof t1?.objectiveCost).toBe("number");
     });
 
     it("breakdown carries per-term objective contributions (explainability)", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
-      const body = JSON.parse(response.body);
-      const t1 = body.recommendations.find((r: { trailerId: string }) => r.trailerId === "T001");
-      expect(t1.breakdown).toBeDefined();
-      expect(typeof t1.breakdown.total).toBe("number");
+      const body = parseBody(response.body);
+      const t1 = body.recommendations.find((r) => r.trailerId === "T001");
+      expect(t1?.breakdown).toBeDefined();
+      expect(typeof t1?.breakdown.total).toBe("number");
     });
 
     it("frozen flag is present", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
-      const body = JSON.parse(response.body);
+      const body = parseBody(response.body);
       for (const rec of body.recommendations) {
         expect(typeof rec.frozen).toBe("boolean");
       }
@@ -264,11 +237,11 @@ describe("GET /optimizer/recommendations", () => {
 
     it("accepted and generated payloads are surfaced", async () => {
       const response = await app.inject({ method: "GET", url: "/optimizer/recommendations" });
-      const body = JSON.parse(response.body);
+      const body = parseBody(response.body);
       expect(body.accepted).toBeDefined();
-      expect(body.accepted.trailerId).toBe("T001");
+      expect(body.accepted?.trailerId).toBe("T001");
       expect(body.generated).toBeDefined();
-      expect(body.generated.planId).toBe("plan-T001");
+      expect(body.generated?.planId).toBe("plan-T001");
     });
 
     it("GET is read-only — never calls runOnce (T-04-12)", async () => {
@@ -334,15 +307,16 @@ describe("GET /optimizer/recommendations", () => {
       await app.close();
 
       expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.body);
-      const t4 = body.recommendations.find((r: { trailerId: string }) => r.trailerId === "T004");
+      const body = parseBody(response.body);
+      const t4 = body.recommendations.find((r) => r.trailerId === "T004");
       expect(t4).toBeDefined();
       // The endpoint surfaces the repairRecommendations if present
-      if (t4.repairRecommendations !== undefined) {
-        expect(t4.repairRecommendations[0].kind).toMatch(/^(split|reassign|hold|overCarry)$/);
-        expect(typeof t4.repairRecommendations[0].rationale).toBe("string");
-        expect(t4.repairRecommendations[0].rationale.length).toBeGreaterThan(0);
-        expect(typeof t4.repairRecommendations[0].feasible).toBe("boolean");
+      if (t4?.repairRecommendations !== undefined) {
+        const first = t4.repairRecommendations[0];
+        expect(first?.kind).toMatch(/^(split|reassign|hold|overCarry)$/);
+        expect(typeof first?.rationale).toBe("string");
+        expect(first?.rationale.length).toBeGreaterThan(0);
+        expect(typeof first?.feasible).toBe("boolean");
       }
     });
 
@@ -397,17 +371,13 @@ describe("GET /optimizer/recommendations", () => {
       await app.close();
 
       expect(response.statusCode).toBe(200);
-      const body = JSON.parse(response.body);
-      const t5 = body.recommendations.find((r: { trailerId: string }) => r.trailerId === "T005");
+      const body = parseBody(response.body);
+      const t5 = body.recommendations.find((r) => r.trailerId === "T005");
       expect(t5).toBeDefined();
-      if (t5.repairRecommendations !== undefined) {
+      if (t5?.repairRecommendations !== undefined) {
         // feasible is separate for each repair rec, not derived from its cost/kind
-        const holdRec = t5.repairRecommendations.find(
-          (r: { kind: string }) => r.kind === "hold",
-        );
-        const overCarryRec = t5.repairRecommendations.find(
-          (r: { kind: string }) => r.kind === "overCarry",
-        );
+        const holdRec = t5.repairRecommendations.find((r) => r.kind === "hold");
+        const overCarryRec = t5.repairRecommendations.find((r) => r.kind === "overCarry");
         if (holdRec !== undefined) {
           expect(holdRec.feasible).toBe(true);
         }

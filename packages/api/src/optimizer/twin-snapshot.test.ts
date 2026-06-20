@@ -105,7 +105,6 @@ function makeDb(opts: {
         // Two calls: RouteRegistered events + TrailerDeparted events (in order)
         // We track which events call we're on
         const evenCalls = [routeChain, departedChain];
-        const idx = Math.floor((callCount - 1) / 1) % 2;
         // crude approach: use call order
         return evenCalls[callCount <= 2 ? 0 : 1] ?? routeChain;
       }
