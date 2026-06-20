@@ -2,6 +2,24 @@ import { expect, test } from "@playwright/test";
 import type { WebSocketRoute } from "@playwright/test";
 
 /**
+ * Chrome's non-standard `performance.memory` shape (only the field we read).
+ * Typing it locally lets us read `usedJSHeapSize` without an `any` cast.
+ */
+interface PerformanceMemory {
+  readonly usedJSHeapSize: number;
+}
+
+/**
+ * Browser-context callback (serialized + run in the page by `page.evaluate`):
+ * returns the used JS heap size in bytes, or 0 if the browser doesn't expose
+ * `performance.memory` (non-Chromium / no `--enable-precise-memory-info`).
+ */
+function readUsedJSHeapSize(): number {
+  const withMemory = performance as Performance & { memory?: PerformanceMemory };
+  return withMemory.memory?.usedJSHeapSize ?? 0;
+}
+
+/**
  * VIZ-01 / VIZ-02 / VIZ-03 leak-guard e2e (Task 2 + Task 4):
  * trailer points and hub/route colorings are driven LIVE by versioned ws
  * envelopes and update IN PLACE on single reused vector sources.
@@ -241,23 +259,17 @@ test.describe("MapView leak guard (VIZ-01 / VIZ-02 / VIZ-03)", () => {
     await page.waitForTimeout(5_000);
 
     // Force GC + baseline.
-    await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
+    await page.evaluate(() => { (globalThis as { gc?: () => void }).gc?.(); });
     await page.waitForTimeout(500);
-    const heapBefore = await page.evaluate(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (): number => (performance as any).memory?.usedJSHeapSize ?? 0,
-    );
+    const heapBefore = await page.evaluate(readUsedJSHeapSize);
 
     // Run for smoke duration.
     await page.waitForTimeout(SMOKE_DURATION_MS);
 
     // Force GC + final.
-    await page.evaluate(() => { (globalThis as Record<string, unknown>)["gc"]?.(); });
+    await page.evaluate(() => { (globalThis as { gc?: () => void }).gc?.(); });
     await page.waitForTimeout(500);
-    const heapAfter = await page.evaluate(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (): number => (performance as any).memory?.usedJSHeapSize ?? 0,
-    );
+    const heapAfter = await page.evaluate(readUsedJSHeapSize);
 
     const growth = heapAfter - heapBefore;
     const growthPct = heapBefore > 0 ? growth / heapBefore : 0;

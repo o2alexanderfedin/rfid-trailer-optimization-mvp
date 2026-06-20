@@ -58,8 +58,22 @@ describe("scopeHash (OPT-06 idempotency key)", () => {
 
   it("CHANGES when the input changes (a different trailer load ⇒ different hash)", () => {
     const a = scopeHash(SCOPE, snapshot());
-    const mutated = snapshot();
-    (mutated.trailers[0]!.blocks as { volume: number }[])[0]!.volume = 9;
+    // Build a NEW, fully-typed snapshot with the first block's volume changed
+    // (no unsound `as` cast over the readonly `blocks` array).
+    const base = snapshot();
+    const baseTrailer = base.trailers[0]!;
+    const mutated: TwinSnapshot = {
+      ...base,
+      trailers: [
+        {
+          ...baseTrailer,
+          blocks: baseTrailer.blocks.map((b, i) =>
+            i === 0 ? { ...b, volume: 9 } : b,
+          ),
+        },
+        ...base.trailers.slice(1),
+      ],
+    };
     expect(scopeHash(SCOPE, mutated)).not.toBe(a);
   });
 

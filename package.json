@@ -10,14 +10,18 @@
   "scripts": {
     "build": "turbo run build",
     "lint": "eslint .",
-    "test": "vitest run --project unit",
-    "test:all": "vitest run"
+    "typecheck": "tsc -p tsconfig.eslint.json --noEmit",
+    "check": "pnpm lint && pnpm typecheck && pnpm test:all",
+    "test": "turbo run build && vitest run --project unit",
+    "test:all": "turbo run build && vitest run",
+    "test:e2e:real": "turbo run build --filter @mm/api --filter @mm/web && pnpm --filter @mm/web test:e2e:real"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
     "@types/node": "22.12.0",
     "@vitest/coverage-v8": "4.1.9",
     "eslint": "9.39.4",
+    "jiti": "^2.7.0",
     "testcontainers": "12.0.3",
     "tsx": "4.22.4",
     "turbo": "2.9.18",

@@ -73,7 +73,7 @@ const HUB_STYLE_DEFAULT = new Style({
  * for any missing or out-of-range value — no new `Style` ever allocated here.
  */
 export function hubStyle(feature: FeatureLike): Style {
-  const b = feature.get("volumeBucket");
+  const b: unknown = feature.get("volumeBucket");
   if (typeof b === "number" && b >= 0 && b < HUB_STYLE_CACHE.length) {
     return HUB_STYLE_CACHE[b] as Style;
   }
@@ -116,15 +116,106 @@ const ROUTE_STYLE_DEFAULT = new Style({
   stroke: new Stroke({ color: "#94a3b8", width: 2 }),
 });
 
+// ---------------------------------------------------------------------------
+// Route SLA-risk overlay (FIX 9 — VIZ-03 completeness)
+//
+// `slaRiskBucket` (0..3, driven server-side by open exceptions at the leg's
+// endpoint hubs) was plumbed onto the feature but never rendered. When a leg is
+// at risk (bucket > 0) we draw it in a warm risk ramp (thicker stroke) so the
+// SLA-risk signal is visible ON TOP of the load coloring. Bucket 0 = no risk →
+// fall through to the normal load style. One pre-allocated Style per risk bucket
+// (same zero-per-frame discipline as the load cache).
+// ---------------------------------------------------------------------------
+
+/** Warm risk ramp, index = slaRiskBucket (1..3; 0 means "no risk", not styled). */
+export const ROUTE_RISK_COLORS: readonly string[] = [
+  "#94a3b8", // bucket 0 placeholder (unused — bucket 0 uses the load style)
+  "#f59e0b", // bucket 1 — low risk (amber)
+  "#ea580c", // bucket 2 — medium risk (orange)
+  "#dc2626", // bucket 3 — high risk (red)
+];
+
+const ROUTE_RISK_STYLE_CACHE: readonly Style[] = ROUTE_RISK_COLORS.map(
+  (color) =>
+    new Style({
+      // Slightly thicker than the load stroke so an at-risk leg reads as urgent.
+      stroke: new Stroke({ color, width: 5 }),
+    }),
+);
+
 /**
  * Zero-allocation `StyleFunction` for route (LineString) features.
  *
- * Reads `feature.get("loadBucket")` and returns the cached stroke style.
+ * FIX 9: an at-risk leg (`slaRiskBucket` > 0) is colored from the warm risk ramp
+ * so the SLA-risk signal is visible; otherwise the normal `loadBucket` color is
+ * used. Both paths return a pre-allocated cached `Style` (no per-frame alloc).
  */
 export function routeStyle(feature: FeatureLike): Style {
-  const b = feature.get("loadBucket");
+  const risk: unknown = feature.get("slaRiskBucket");
+  if (
+    typeof risk === "number" &&
+    risk > 0 &&
+    risk < ROUTE_RISK_STYLE_CACHE.length
+  ) {
+    return ROUTE_RISK_STYLE_CACHE[risk] as Style;
+  }
+  const b: unknown = feature.get("loadBucket");
   if (typeof b === "number" && b >= 0 && b < ROUTE_STYLE_CACHE.length) {
     return ROUTE_STYLE_CACHE[b] as Style;
   }
   return ROUTE_STYLE_DEFAULT;
+}
+
+// ---------------------------------------------------------------------------
+// Trailer state coloring (FIX 9 — VIZ-03 completeness)
+//
+// The in-transit trailer `state` ("onTime" | "slaRisk" | "late" | "idle") was
+// set on the feature (`upsertTrailerKeyframe`) but the trailer layer used a
+// single static fill, so the state was never visible. `trailerStyle` colors a
+// trailer marker by its state from a pre-allocated cache (one Style per state).
+// ---------------------------------------------------------------------------
+
+/** One fill color per trailer state (FIX 9). Drives the live trailer markers. */
+export const TRAILER_STATE_COLORS: Readonly<Record<string, string>> = {
+  onTime: "#16a34a", // green — healthy (matches the prior static marker color)
+  slaRisk: "#f59e0b", // amber — flagged by the detector (open exception)
+  late: "#dc2626", // red — reserved (no schedule signal in the MVP yet)
+  idle: "#9aa0a6", // grey — parked at a hub
+};
+
+function makeTrailerStyle(color: string): Style {
+  return new Style({
+    image: new CircleStyle({
+      radius: 5,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: "#ffffff", width: 1.5 }),
+    }),
+  });
+}
+
+// Pre-allocate ONE Style per known state at module load (zero per-frame alloc).
+const TRAILER_STYLE_CACHE: ReadonlyMap<string, Style> = new Map(
+  Object.entries(TRAILER_STATE_COLORS).map(([state, color]) => [
+    state,
+    makeTrailerStyle(color),
+  ]),
+);
+
+/** Default trailer style for an unknown/missing state (grey). */
+const TRAILER_STYLE_DEFAULT = makeTrailerStyle("#9aa0a6");
+
+/**
+ * Zero-allocation `StyleFunction` for live trailer (Point) features.
+ *
+ * Reads `feature.get("state")` and returns the cached `Style` for that state, or
+ * the default for an unknown/missing state. Mutating a trailer's state via
+ * `feature.set("state", s)` re-invokes this on the next render — no new Style.
+ */
+export function trailerStyle(feature: FeatureLike): Style {
+  const state: unknown = feature.get("state");
+  if (typeof state === "string") {
+    const cached = TRAILER_STYLE_CACHE.get(state);
+    if (cached !== undefined) return cached;
+  }
+  return TRAILER_STYLE_DEFAULT;
 }

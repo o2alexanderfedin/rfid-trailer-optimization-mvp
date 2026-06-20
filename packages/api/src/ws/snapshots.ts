@@ -1,18 +1,19 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import {
   type CatchupDb,
+  type ExceptionKind,
   type ProjectionDb,
   readGeoKeyframes,
   readOpenExceptions,
 } from "@mm/projections";
+import { assertNever, type Severity } from "@mm/domain";
 import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
 import {
   diffTick,
   type ExceptionItem,
   type HubState,
-  type KpiSnapshot,
   type RouteState,
   type SnapshotPayload,
   type TickPayload,
@@ -44,6 +45,24 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
+ * Normalize a JSONB string-array column to `string[]`.
+ *
+ * The `hub_inventory` inbound/outbound/staged columns are JSONB; the `pg` driver
+ * deserializes them to a real array, so the value is normally already `string[]`
+ * (its select type). Defensively, if a driver/mock hands back a raw JSON string
+ * we parse it. We inspect via `unknown` so the runtime string fallback stays
+ * type-safe (no `any`, no unnecessary assertion on the already-typed array path).
+ */
+function toStringArray(value: string[]): string[] {
+  const v: unknown = value;
+  if (typeof v === "string") {
+    const parsed: unknown = JSON.parse(v);
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  }
+  return value;
+}
+
+/**
  * Port: builds the current `SnapshotPayload` from the read models.
  * Injected by tests; defaults to the real DB-backed builder.
  */
@@ -60,8 +79,9 @@ export type Broadcast = (simMs: number) => Promise<WsEnvelope>;
 export interface SnapshotSocketOptions {
   /**
    * Override the payload source. Defaults to the real {@link buildSnapshotPayload}
-   * (geo-track keyframes + hubs + open exceptions; KPI baseline zeroed until
-   * Plan 05-03 wires it). Injected by tests to avoid a live DB.
+   * (geo-track keyframes + hubs + open exceptions; KPIs are NOT carried over ws —
+   * F-02: live KPIs are served by `GET /api/kpis`). Injected by tests to avoid a
+   * live DB.
    */
   readonly buildPayload?: SnapshotPayloadBuilder;
 }
@@ -79,32 +99,16 @@ function projView(db: ApiDb): Kysely<ProjectionDb> {
 }
 
 // ---------------------------------------------------------------------------
-// Default zeroed KPI baseline (Plan 05-03 fills this in)
-// ---------------------------------------------------------------------------
-
-const ZEROED_KPI_BASE: Omit<KpiSnapshot, "baseline"> = {
-  utilization: 0,
-  rehandleCount: 0,
-  rehandleMinutes: 0,
-  wrongTrailerCount: 0,
-  missedUnloadCount: 0,
-  slaViolationRate: 0,
-  onTimeDeparture: 1,
-  onTimeArrival: 1,
-};
-
-const ZEROED_KPIS: KpiSnapshot = { ...ZEROED_KPI_BASE, baseline: { ...ZEROED_KPI_BASE } };
-
-// ---------------------------------------------------------------------------
 // Default SnapshotPayload builder (real DB, injected in tests)
 // ---------------------------------------------------------------------------
 
 /**
  * Derive a `TrailerKeyframe` from the geo-track projection.
  * departMs/etaMs are approximated from keyframe ISO timestamps until Plan 05-03
- * wires the trip plan ETAs; state defaults to "onTime" as a placeholder.
- * The CRITICAL fields (id, routeId) come from the projection; timing/state are
- * refined by downstream plans.
+ * wires the trip plan ETAs. In-transit `state` is driven by the open-exceptions
+ * read model (FIX 9 — {@link trailerStateFor}): a trailer the detector flagged
+ * shows as `"slaRisk"`, otherwise `"onTime"`. The CRITICAL fields (id, routeId)
+ * come from the projection.
  */
 function isoToMs(iso: string): number {
   return new Date(iso).getTime();
@@ -150,12 +154,102 @@ function loadBucketFor(trailerCount: number): number {
 }
 
 /**
+ * FIX 9 (VIZ-03 completeness) — REAL route-level SLA-risk bucket.
+ *
+ * Previously hardcoded `0` ("route-level SLA risk needs trip-plan data — future
+ * plan"), so route SLA-risk coloring on the map was permanently dark. We DRIVE it
+ * from the SAME signal that already drives per-hub `slaRiskBucket`: the open
+ * exception count per hub (`exceptionsPerHub`). A directed leg `from→to` carries
+ * freight that is exposed to disruption at BOTH endpoint hubs, so the honest,
+ * DRY derivation is the **max** of the two endpoints' hub SLA-risk buckets
+ * (reusing {@link slaRiskBucketFor} — ONE calibration source, no fabricated
+ * constant). Pure + deterministic.
+ *
+ * Exported for unit testing (the production path calls it inside
+ * {@link buildSnapshotPayload}).
+ */
+export function routeSlaRiskBucketFor(
+  fromHubId: string,
+  toHubId: string,
+  exceptionsPerHub: ReadonlyMap<string, number>,
+): number {
+  const fromRisk = slaRiskBucketFor(exceptionsPerHub.get(fromHubId) ?? 0);
+  const toRisk = slaRiskBucketFor(exceptionsPerHub.get(toHubId) ?? 0);
+  return Math.max(fromRisk, toRisk);
+}
+
+/**
+ * FIX 9 (VIZ-03 completeness) — REAL in-transit trailer SLA `state`.
+ *
+ * Previously every in-transit keyframe was hardcoded `"onTime"`, so trailer
+ * SLA-state coloring was permanently dark. We DRIVE it from the open-exceptions
+ * read model: the detector (`WrongTrailerDetected` / `MissedUnloadDetected`)
+ * names the OBSERVED `trailerId` on every exception. A trailer whose id appears
+ * in any open exception is genuinely at risk → `"slaRisk"`; otherwise it keeps
+ * its base state. `"idle"` is positional (parked at a hub, not in transit) and is
+ * never overridden — risk coloring applies to moving freight only. Pure.
+ *
+ * NOTE (honesty / F-03): we report `"slaRisk"`, NOT `"late"`. The MVP persists no
+ * scheduled ETA to compare against (see `KpiSnapshot.onTimeArrival === null`),
+ * so claiming a trailer is "late" would be fabricated. "At risk because flagged
+ * by the detector" is the strongest claim the available signal supports.
+ *
+ * Exported for unit testing.
+ */
+export function trailerStateFor(
+  trailerId: string,
+  baseState: TrailerKeyframe["state"],
+  implicatedTrailerIds: ReadonlySet<string>,
+): TrailerKeyframe["state"] {
+  // Idle trailers are positional, not a risk signal — never override.
+  if (baseState === "idle") return baseState;
+  return implicatedTrailerIds.has(trailerId) ? "slaRisk" : baseState;
+}
+
+/**
+ * Translate a projection exception `kind` (hyphenated taxonomy) onto the wire
+ * envelope `kind` (camelCase) the frontend `AlertFeed.kindLabel` map expects
+ * (F-01). Exhaustive over `ExceptionKind`; adding a member without a case stops
+ * compilation via {@link assertNever}.
+ */
+export function exceptionKindToWire(kind: ExceptionKind): ExceptionItem["kind"] {
+  switch (kind) {
+    case "wrong-trailer":
+      return "wrongTrailer";
+    case "missed-unload":
+      return "missedUnload";
+    default:
+      return assertNever(kind);
+  }
+}
+
+/**
+ * Translate a projection exception `severity` (`info | warning | critical`) onto
+ * the wire envelope `severity` (`low | med | high`) the frontend
+ * `AlertFeed.severityClass` map expects (F-01). Exhaustive over `Severity`.
+ */
+export function exceptionSeverityToWire(
+  severity: Severity,
+): ExceptionItem["severity"] {
+  switch (severity) {
+    case "info":
+      return "low";
+    case "warning":
+      return "med";
+    case "critical":
+      return "high";
+    default:
+      return assertNever(severity);
+  }
+}
+
+/**
  * Build the current `SnapshotPayload` from:
  *   - geo-track keyframes → `TrailerKeyframe[]` (depart/arrive per trip)
  *   - hub list → `HubState[]` (FIX 3: real integer buckets from hub_inventory + exceptions)
  *   - open exceptions → `ExceptionItem[]`
  *   - routes → `RouteState[]` (FIX 3: real route list with load buckets from geo_route + geo_inflight_trip)
- *   - KPI baseline → zeroed (ws snapshot zeroed; live KPIs are from GET /kpis)
+ *   - KPIs → omitted (F-02: live KPIs are served by `GET /api/kpis`, never over ws)
  */
 export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> {
   const catchup = catchupView(db);
@@ -198,20 +292,29 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   // Collect all trailer ids (from both depart + arrive keyframes)
   const allIds = new Set<string>(keyframes.map((k) => k.trailerId));
 
+  // FIX 9: the set of trailers implicated in any OPEN exception (the detector
+  // names the observed trailerId on every wrong-trailer / missed-unload row).
+  // This is the REAL signal that drives an in-transit trailer's SLA `state`.
+  const implicatedTrailerIds = new Set<string>(
+    openExceptions.map((ex) => ex.trailerId),
+  );
+
   const trailers: TrailerKeyframe[] = [...allIds]
     .map((id): TrailerKeyframe => {
       const dep = departures.get(id);
       const arr = arrivals.get(id);
       if (dep !== undefined) {
+        // FIX 9: base state is "onTime"; escalate to "slaRisk" when the detector
+        // has flagged this trailer (real signal, not a hardcoded constant).
         return {
           id,
           routeId: dep.routeId,
           departMs: dep.ms,
           etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : dep.ms + 3_600_000, // 1hr fallback
-          state: "onTime", // VIZ-03 refines this via hub/route metrics in later plans
+          state: trailerStateFor(id, "onTime", implicatedTrailerIds),
         };
       }
-      // Only arrive keyframe → trailer is idle at a hub
+      // Only arrive keyframe → trailer is idle at a hub (positional, not risk).
       return {
         id,
         routeId: arr?.routeId ?? "",
@@ -230,10 +333,11 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   // Index hub inventory by hubId for O(1) lookup.
   const invByHub = new Map<string, { inbound: string[]; outbound: string[]; staged: string[] }>();
   for (const row of hubInventoryRows) {
-    const inbound = Array.isArray(row.inbound) ? row.inbound : (JSON.parse(row.inbound as string) as string[]);
-    const outbound = Array.isArray(row.outbound) ? row.outbound : (JSON.parse(row.outbound as string) as string[]);
-    const staged = Array.isArray(row.staged) ? row.staged : (JSON.parse(row.staged as string) as string[]);
-    invByHub.set(row.hub_id, { inbound, outbound, staged });
+    invByHub.set(row.hub_id, {
+      inbound: toStringArray(row.inbound),
+      outbound: toStringArray(row.outbound),
+      staged: toStringArray(row.staged),
+    });
   }
 
   // Count open exceptions per hub (keyed by hubId from the exception row).
@@ -283,7 +387,13 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     routes.push({
       id: legKey, // stable unique key for this directed leg
       loadBucket: loadBucketFor(inTransit),
-      slaRiskBucket: 0, // route-level SLA risk needs trip-plan data (future plan)
+      // FIX 9: REAL route SLA-risk — max of the two endpoint hubs' open-exception
+      // risk (reuses the hub slaRisk plumbing, DRY). Was a hardcoded 0.
+      slaRiskBucket: routeSlaRiskBucketFor(
+        row.from_hub_id,
+        row.to_hub_id,
+        exceptionsPerHub,
+      ),
     });
   }
   routes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -292,8 +402,8 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   const exceptionsOpen: ExceptionItem[] = openExceptions.map(
     (ex): ExceptionItem => ({
       id: ex.exceptionId,
-      kind: ex.kind as ExceptionItem["kind"],
-      severity: ex.severity as ExceptionItem["severity"],
+      kind: exceptionKindToWire(ex.kind),
+      severity: exceptionSeverityToWire(ex.severity),
       entityId: ex.trailerId,
       reason: `${ex.kind} detected`,
       recommendedAction: ex.recommendedAction,
@@ -305,7 +415,8 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     trailers,
     hubs,
     routes, // FIX 3: real route metrics (was [])
-    kpis: ZEROED_KPIS,
+    // F-02: live KPIs come from GET /api/kpis — do NOT carry a zeroed placeholder
+    // here, it would clobber the REST-fetched values on the client.
     exceptionsOpen,
   };
 }
@@ -368,13 +479,13 @@ export function attachSnapshotSocket(
     // FIX 14: handle client resync requests. When a client detects a seq-gap
     // (missed ticks), it sends `{ type: "resync" }`. Reply to THAT socket with
     // a fresh full snapshot envelope so it can re-anchor its local tween clock.
-    socket.on("message", (data: import("ws").RawData) => {
+    socket.on("message", (data: RawData) => {
       let msg: unknown;
       try {
         const text =
           Array.isArray(data) ? Buffer.concat(data).toString("utf8")
           : data instanceof ArrayBuffer ? Buffer.from(data).toString("utf8")
-          : (data as Buffer).toString("utf8");
+          : data.toString("utf8");
         msg = JSON.parse(text);
       } catch {
         // Malformed message — ignore silently (not a security risk: no side effects).
@@ -384,7 +495,7 @@ export function attachSnapshotSocket(
         typeof msg === "object" &&
         msg !== null &&
         "type" in msg &&
-        (msg as { type: unknown }).type === "resync"
+        msg.type === "resync"
       ) {
         // Client requested a full resync. Build a fresh snapshot and reply to
         // this socket only (not broadcast — only the requesting client needs it).
@@ -454,11 +565,12 @@ export function attachSnapshotSocket(
 // ---------------------------------------------------------------------------
 
 function emptySnapshotPayload(): SnapshotPayload {
+  // F-02: no `kpis` — the ws channel does not carry KPIs (GET /api/kpis is the
+  // single source of truth). Omitting it keeps `diffTick` from emitting a delta.
   return {
     trailers: [],
     hubs: [],
     routes: [],
-    kpis: ZEROED_KPIS,
     exceptionsOpen: [],
   };
 }

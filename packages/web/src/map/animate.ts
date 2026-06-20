@@ -131,17 +131,11 @@ export function attachTrailerAnimation(
     map.render();
   };
 
-  // Cast: OL's layer.on("postrender") is overloaded and TS doesn't unify the
-  // overload for the string literal form when the handler type is RenderEvent.
-  // Using the type-safe overloaded form directly:
-  const listenerKey = layer.on(
-    "postrender",
-    handler as (event: RenderEvent) => void,
-  );
+  const listenerKey = layer.on("postrender", handler);
 
   return {
     detach(): void {
-      layer.un("postrender", handler as (event: RenderEvent) => void);
+      layer.un("postrender", handler);
       void listenerKey; // suppress unused-var warning; un() uses the function ref
     },
   };

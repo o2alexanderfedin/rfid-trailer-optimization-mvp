@@ -81,7 +81,7 @@ function makeEnvelope(
   if (type === "snapshot") {
     return { v: 1, type, seq, simMs, payload: payload as SnapshotPayload };
   }
-  return { v: 1, type, seq, simMs, payload: payload as TickPayload };
+  return { v: 1, type, seq, simMs, payload };
 }
 
 const TRAILER_A: TrailerKeyframe = {

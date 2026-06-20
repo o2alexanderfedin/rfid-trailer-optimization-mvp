@@ -44,6 +44,19 @@ export interface KpiCardDef {
 // ---------------------------------------------------------------------------
 
 /**
+ * F-02: decide whether a ws envelope should trigger a `GET /api/kpis` refetch.
+ *
+ * The ws channel no longer carries KPIs (live KPIs are served by REST — the
+ * single source of truth). Both `snapshot` (initial/resync) and `tick`
+ * (sim advanced) envelopes are "data changed" signals, so the dashboard
+ * re-fetches the authoritative KPI snapshot in response to either. Returning a
+ * boolean (rather than refetching inline) keeps this unit-testable without DOM.
+ */
+export function shouldRefetchKpis(envelope: WsEnvelope): boolean {
+  return envelope.type === "snapshot" || envelope.type === "tick";
+}
+
+/**
  * Immutable merge of a `Partial<KpiSnapshot>` onto `prev`.
  * `baseline` is never updated from tick partials (it is set once on mount).
  */
@@ -58,8 +71,13 @@ export function applyKpiPartial(
     wrongTrailerCount: partial.wrongTrailerCount ?? prev.wrongTrailerCount,
     missedUnloadCount: partial.missedUnloadCount ?? prev.missedUnloadCount,
     slaViolationRate: partial.slaViolationRate ?? prev.slaViolationRate,
-    onTimeDeparture: partial.onTimeDeparture ?? prev.onTimeDeparture,
-    onTimeArrival: partial.onTimeArrival ?? prev.onTimeArrival,
+    // on-time fields are `number | null` (F-03): use key-presence (not `??`) so a
+    // genuine `null` ("no schedule data") in a partial is preserved rather than
+    // masked by the previous value.
+    onTimeDeparture:
+      partial.onTimeDeparture !== undefined ? partial.onTimeDeparture : prev.onTimeDeparture,
+    onTimeArrival:
+      partial.onTimeArrival !== undefined ? partial.onTimeArrival : prev.onTimeArrival,
     baseline: prev.baseline, // never from tick partials
   };
 }
@@ -98,11 +116,14 @@ function formatKindFor(field: string): FormatKind {
 
 /**
  * Format a KPI value for display.
+ *  - `null` (no data, e.g. on-time with no schedule data — F-03) → "—"
  *  - counts     → integer string ("7")
  *  - minutes    → 1dp with "min" suffix ("18.5 min")
  *  - rates/fractions → percentage 1dp ("75.0%")
  */
-export function formatKpiValue(field: string, value: number): string {
+export function formatKpiValue(field: string, value: number | null): string {
+  // F-03: an unavailable metric renders as an em-dash, never a fabricated 100%.
+  if (value === null) return "—";
   const kind = formatKindFor(field);
   if (kind === "count") return String(Math.round(value));
   if (kind === "minutes") return `${value.toFixed(1)} min`;
@@ -135,8 +156,9 @@ const ZERO_SNAPSHOT: KpiSnapshot = {
   wrongTrailerCount: 0,
   missedUnloadCount: 0,
   slaViolationRate: 0,
-  onTimeDeparture: 1,
-  onTimeArrival: 1,
+  // F-03: honest "no data yet" default — renders "—", not a fabricated 100%.
+  onTimeDeparture: null,
+  onTimeArrival: null,
   baseline: {
     utilization: 0,
     rehandleCount: 0,
@@ -144,8 +166,8 @@ const ZERO_SNAPSHOT: KpiSnapshot = {
     wrongTrailerCount: 0,
     missedUnloadCount: 0,
     slaViolationRate: 0,
-    onTimeDeparture: 1,
-    onTimeArrival: 1,
+    onTimeDeparture: null,
+    onTimeArrival: null,
   },
 };
 
@@ -170,6 +192,49 @@ export function KpiDashboard(): React.JSX.Element {
   const prevRef = useRef<KpiSnapshot>(ZERO_SNAPSHOT);
   const timerRefs = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
+  // Merge a freshly-fetched authoritative KPI snapshot (from GET /api/kpis) into
+  // state, flashing any fields that changed. F-02: the full live snapshot is the
+  // single source of truth — we never merge a ws payload here, so a zeroed
+  // placeholder can never clobber the live values.
+  const mergeLiveKpis = useCallback((next: KpiSnapshot): void => {
+    setSnapshot((prev) => {
+      const changed: string[] = [];
+      for (const card of kpiCards()) {
+        if (shouldAnimate(card.field, prev, next)) {
+          changed.push(card.field);
+        }
+      }
+
+      if (changed.length > 0) {
+        setAnimating((cur) => {
+          const next2 = new Set(cur);
+          for (const f of changed) {
+            next2.add(f);
+            // Clear existing timer for this field
+            const existing = timerRefs.current.get(f);
+            if (existing !== undefined) clearTimeout(existing);
+            // Schedule removal
+            timerRefs.current.set(
+              f,
+              setTimeout(() => {
+                setAnimating((s) => {
+                  const cleared = new Set(s);
+                  cleared.delete(f);
+                  return cleared;
+                });
+                timerRefs.current.delete(f);
+              }, ANIMATE_MS),
+            );
+          }
+          return next2;
+        });
+      }
+
+      prevRef.current = next;
+      return next;
+    });
+  }, []);
+
   // --- Initial fetch --------------------------------------------------------
   useEffect(() => {
     const ac = new AbortController();
@@ -191,61 +256,41 @@ export function KpiDashboard(): React.JSX.Element {
     };
   }, []);
 
-  // --- ws tick updates -------------------------------------------------------
+  // --- ws-driven refetch (F-02) ---------------------------------------------
+  // The ws channel no longer carries KPIs. Each ws envelope (snapshot or tick)
+  // is a "sim advanced" signal, so we RE-FETCH the authoritative KPIs from REST
+  // (the single source of truth). This preserves liveness without letting the ws
+  // payload overwrite the live values, and reuses the single shared WsProvider
+  // socket via `useWsEnvelope` (no second connection).
   const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
+  const refetchAcRef = useRef<AbortController | null>(null);
 
   const onEnvelope = useCallback(
     (envelope: WsEnvelope): void => {
-      const partial =
-        envelope.type === "snapshot"
-          ? envelope.payload.kpis
-          : envelope.payload.kpis;
-      if (partial === undefined) return;
-
-      setSnapshot((prev) => {
-        const next = applyKpiPartial(prev, partial as Partial<KpiSnapshot>);
-
-        // Collect changed fields for animation
-        const changed: string[] = [];
-        for (const card of kpiCards()) {
-          if (shouldAnimate(card.field, prev, next)) {
-            changed.push(card.field);
-          }
-        }
-
-        if (changed.length > 0) {
-          setAnimating((cur) => {
-            const next2 = new Set(cur);
-            for (const f of changed) {
-              next2.add(f);
-              // Clear existing timer for this field
-              const existing = timerRefs.current.get(f);
-              if (existing !== undefined) clearTimeout(existing);
-              // Schedule removal
-              timerRefs.current.set(
-                f,
-                setTimeout(() => {
-                  setAnimating((s) => {
-                    const cleared = new Set(s);
-                    cleared.delete(f);
-                    return cleared;
-                  });
-                  timerRefs.current.delete(f);
-                }, ANIMATE_MS),
-              );
-            }
-            return next2;
-          });
-        }
-
-        prevRef.current = next;
-        return next;
-      });
+      if (!shouldRefetchKpis(envelope)) return;
+      // Coalesce overlapping refetches: abort any in-flight request first.
+      refetchAcRef.current?.abort();
+      const ac = new AbortController();
+      refetchAcRef.current = ac;
+      fetchKpis(ac.signal)
+        .then((kpis) => {
+          mergeLiveKpis(kpis);
+        })
+        .catch(() => {
+          // Aborted or transient network error — keep the last good values.
+        });
     },
-    [],
+    [mergeLiveKpis],
   );
 
   useWsEnvelope(onEnvelope, entityMapsRef.current);
+
+  // Abort any in-flight ws-driven refetch on unmount.
+  useEffect(() => {
+    return () => {
+      refetchAcRef.current?.abort();
+    };
+  }, []);
 
   // --- Render ----------------------------------------------------------------
   const cards = kpiCards();
@@ -254,7 +299,7 @@ export function KpiDashboard(): React.JSX.Element {
     <div className="kpi-dashboard" data-testid="kpi-dashboard">
       <div className="kpi-dashboard__grid">
         {cards.map((card) => {
-          const value = snapshot[card.field] as number;
+          const value = snapshot[card.field];
           const isAnimating = animating.has(card.field);
           return (
             <div

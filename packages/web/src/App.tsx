@@ -42,7 +42,7 @@ function AppInner(): React.JSX.Element {
   const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
 
   const onAlertEnvelope = useCallback(
-    (envelope: WsEnvelope, _maps: EntityMaps): void => {
+    (envelope: WsEnvelope): void => {
       if (envelope.type === "snapshot") {
         if (envelope.payload.exceptionsOpen.length > 0) {
           onExceptionsNew(envelope.payload.exceptionsOpen);

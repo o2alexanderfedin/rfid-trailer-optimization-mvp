@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { computeComparison, type KpiComparison, DEMO_SEED } from "./comparison.js";
+import { computeComparison, DEMO_SEED } from "./comparison.js";
 
 describe("computeComparison", () => {
   // ---------------------------------------------------------------------------

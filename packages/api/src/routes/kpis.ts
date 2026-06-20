@@ -32,6 +32,7 @@ import {
 import type { ApiDb } from "./queries.js";
 import { readOpenExceptions, readExceptionKpi } from "@mm/projections";
 import type { RollingOptimizerService } from "../optimizer/rolling-service.js";
+import { DEFAULT_TRAILER_CAPACITY } from "../optimizer/twin-snapshot.js";
 
 // ---------------------------------------------------------------------------
 // Live KPI reader
@@ -46,10 +47,14 @@ import type { RollingOptimizerService } from "../optimizer/rolling-service.js";
  *   Since `DEFAULT_OBJECTIVE_WEIGHTS.rehandle === 1`, `breakdown.rehandle` IS
  *   the raw `rehandleScore` (no un-weighting needed).
  * - `openExceptions` / `exceptionKpi`: from Phase-3 projection reads.
- * - `utilizationFraction`: estimated from `assignedPackageIds` counts vs a
- *   fixed capacity proxy (30 packages per trailer = §8 DEFAULT_PLANNER_CONFIG).
- *   This is a proxy — on-time departure/arrival tallies require a dedicated
- *   event-log scan that is out of scope for the MVP (tracked as a stub).
+ * - `utilizationFraction`: REAL volume fill ratio (finding #10) — used volume
+ *   (`assignedPackageIds.length`, since each package is a unit-volume block) over
+ *   the optimizer's true `DEFAULT_TRAILER_CAPACITY` (50), averaged across
+ *   trailers. Reuses the optimizer's capacity constant (DRY) so the KPI matches
+ *   its real fill basis, not the old `/30` package-count proxy.
+ * - on-time departure/arrival: reported as `null` (F-03) — the MVP persists no
+ *   scheduled departure/arrival times, so an honest "no data" is surfaced rather
+ *   than a fabricated 100%.
  */
 /**
  * FIX 4: returns `LiveKpiSnapshot` (no `baseline`) instead of `KpiSnapshot`.
@@ -71,17 +76,21 @@ async function readLiveKpiSnapshot(
     .execute();
   const trailerCount = trailerRows.length;
 
-  // Estimate utilization: avg (assignedPackageCount / PROXY_CAPACITY) across
-  // all trailers. PROXY_CAPACITY = 30 packages (§8 demo config).
-  const PROXY_CAPACITY = 30;
+  // Real volume fill ratio (finding #10): each assigned package is a unit-volume
+  // load block (`TwinBlock.volume === 1`, twin-snapshot.ts), so a trailer's used
+  // volume equals its assigned-package count and its capacity is the optimizer's
+  // real `DEFAULT_TRAILER_CAPACITY` (50 unit blocks). We reuse that SAME constant
+  // (DRY) so the KPI matches the optimizer's true fill basis (`Σ vol / capacity`)
+  // instead of the old arbitrary `/30` package-count proxy. Averaged across all
+  // trailers and clamped to [0,1].
   let totalUtilization = 0;
   for (const row of trailerRows) {
     const pkgIds = row.assigned_package_ids;
-    const pkgCount =
+    const usedVolume =
       Array.isArray(pkgIds) ? pkgIds.length
       : typeof pkgIds === "string" ? (JSON.parse(pkgIds) as unknown[]).length
       : 0;
-    totalUtilization += Math.min(1, pkgCount / PROXY_CAPACITY);
+    totalUtilization += Math.min(1, usedVolume / DEFAULT_TRAILER_CAPACITY);
   }
   const utilizationFraction = trailerCount > 0 ? totalUtilization / trailerCount : 0;
 
@@ -112,10 +121,16 @@ async function readLiveKpiSnapshot(
     optimizerUtilizationScore: 0, // not surfaced; utilization from breakdown proxy
     utilizationFraction,
     trailerCount,
-    onTimeDepartureCount: 0, // stub: requires event-log scan (tracked in SUMMARY)
-    onTimeArrivalCount: 0,   // stub: requires event-log scan (tracked in SUMMARY)
-    totalDepartureCount: 0,  // stub: 0 → onTimeDeparture defaults to 1.0 in computeKpis
-    totalArrivalCount: 0,
+    // F-03 (HIGH / UI-03): on-time rates are reported as UNAVAILABLE (`null`),
+    // NOT a fabricated 100%. The MVP persists no scheduled/planned departure or
+    // arrival times (no domain event carries one — see `trailerDepartedSchema` /
+    // `trailerArrivedAtHubSchema`), so there is no ground truth to measure
+    // "on-time" against. Passing `null` makes `computeKpis` return `null`, and the
+    // UI shows "—" instead of a dishonest "always 100% on-time" metric.
+    onTimeDepartureCount: null,
+    onTimeArrivalCount: null,
+    totalDepartureCount: null,
+    totalArrivalCount: null,
     openExceptions,
     exceptionKpi,
   });

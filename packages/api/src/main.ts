@@ -3,7 +3,7 @@ import { PROJECTIONS_SCHEMA_SQL } from "@mm/projections";
 import { sql } from "kysely";
 import { buildServer } from "./server.js";
 import { driveSimulationPaced } from "./sim/driver.js";
-import { DEMO_RFID_CONFIG } from "./detection-config.js";
+import { DEMO_RFID_CONFIG, DEMO_OVER_CARRY_CONFIG } from "./detection-config.js";
 import type { ApiDb } from "./routes/queries.js";
 
 /**
@@ -56,11 +56,14 @@ async function main(): Promise<void> {
   // Drive the sim AFTER listen so every connected client receives live ticks.
   // Enable seeded RFID emission so the WHOLE Phase-3 pipeline fires end-to-end
   // (reads → fused zone estimates → per-tick detector → exception feed).
+  // F-07 / SNS-05: also enable the seeded over-carry so the missed-unload feed is
+  // live — the UNCHANGED detector fires on spoke-origin over-carry return legs.
   driveSimulationPaced({
     db,
     seed,
     durationTicks,
     rfid: DEMO_RFID_CONFIG,
+    overCarry: DEMO_OVER_CARRY_CONFIG.rate,
     broadcast,
     loop,
     tickIntervalMs,

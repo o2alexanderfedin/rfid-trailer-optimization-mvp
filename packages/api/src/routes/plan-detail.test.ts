@@ -90,7 +90,7 @@ function buildFakeDb(opts: {
 
     const chain = {
       selectAll: () => chain,
-      select: (_cols: unknown) => chain,
+      select: () => chain,
       where: (field: string, _op: string, val: unknown) => {
         whereField = field;
         whereValue = val;
@@ -101,14 +101,14 @@ function buildFakeDb(opts: {
         orderByDir = dir;
         return chain;
       },
-      executeTakeFirst: async () => {
+      executeTakeFirst: () => {
         if (tableName === "trailer_state") {
-          return trailerRows.find((r) => r.trailer_id === whereValue);
+          return Promise.resolve(trailerRows.find((r) => r.trailer_id === whereValue));
         }
-        return undefined;
+        return Promise.resolve(undefined);
       },
-      execute: async () => {
-        if (tableName === "hub_inventory") return hubInventoryRows;
+      execute: () => {
+        if (tableName === "hub_inventory") return Promise.resolve(hubInventoryRows);
         if (tableName === "events") {
           let rows = eventRows;
           if (whereField === "event_type") {
@@ -120,7 +120,7 @@ function buildFakeDb(opts: {
               return orderByDir === "asc" ? diff : -diff;
             });
           }
-          return rows;
+          return Promise.resolve(rows);
         }
         if (tableName === "audit_timeline") {
           let rows = auditRows;
@@ -134,9 +134,9 @@ function buildFakeDb(opts: {
               a.global_seq < b.global_seq ? -1 : 1,
             );
           }
-          return rows;
+          return Promise.resolve(rows);
         }
-        return [];
+        return Promise.resolve([]);
       },
     };
     return chain;
@@ -228,7 +228,7 @@ async function buildAppWithPlan(): Promise<FastifyInstance> {
     trailerRows: [TRAILER_WITH_PLAN],
     hubInventoryRows: [HUB_MEM],
     eventRows: [ROUTE_EVENT, PLAN_ACCEPTED_EVENT],
-    auditRows: AUDIT_ROWS,
+    auditRows: [...AUDIT_ROWS],
   });
   const app = Fastify({ logger: false });
   registerPlanDetailRoutes(app, db);
@@ -267,7 +267,7 @@ describe("GET /trailers/:id/plan (VIZ-05)", () => {
       url: "/trailers/T1/plan",
     });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json() as Record<string, unknown>;
+    const body = resp.json<Record<string, unknown>>();
 
     // Shape assertions
     expect(Array.isArray(body["rearToNose"])).toBe(true);
@@ -283,7 +283,7 @@ describe("GET /trailers/:id/plan (VIZ-05)", () => {
       url: "/trailers/T1/plan",
     });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json() as { rearToNose: Array<{ depth: number }> };
+    const body = resp.json<{ rearToNose: Array<{ depth: number }> }>();
     // The rearToNose array is ordered depth ascending (0 = rear = first)
     const depths = body.rearToNose.map((s) => s.depth);
     for (let i = 1; i < depths.length; i++) {
@@ -363,7 +363,7 @@ describe("GET /trailers/:id/history (UI-02)", () => {
       url: "/trailers/T1/history",
     });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json() as unknown[];
+    const body = resp.json<unknown[]>();
     expect(Array.isArray(body)).toBe(true);
     expect(body.length).toBe(2); // TrailerDocked + PlanGenerated
   });
@@ -371,7 +371,7 @@ describe("GET /trailers/:id/history (UI-02)", () => {
   it("returns entries in globalSeq order", async () => {
     app = await buildAppWithPlan();
     const resp = await app.inject({ method: "GET", url: "/trailers/T1/history" });
-    const body = resp.json() as Array<{ globalSeq: string }>;
+    const body = resp.json<Array<{ globalSeq: string }>>();
     const seqs = body.map((e) => BigInt(e.globalSeq));
     for (let i = 1; i < seqs.length; i++) {
       expect(seqs[i]! >= seqs[i - 1]!).toBe(true);
@@ -381,10 +381,7 @@ describe("GET /trailers/:id/history (UI-02)", () => {
   it("includes the captured recommendation on plan-lifecycle entries", async () => {
     app = await buildAppWithPlan();
     const resp = await app.inject({ method: "GET", url: "/trailers/T1/history" });
-    const body = resp.json() as Array<{
-      eventType: string;
-      recommendation: string | null;
-    }>;
+    const body = resp.json<Array<{ eventType: string; recommendation: string | null }>>();
     const planRow = body.find((e) => e.eventType === "PlanGenerated");
     expect(planRow).toBeDefined();
     expect(planRow?.recommendation).not.toBeNull();

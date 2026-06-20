@@ -178,7 +178,6 @@ export function WsProvider({ children }: WsProviderProps): React.JSX.Element {
       socket.close();
     };
     // value is stable (created once in ref above) — no deps needed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <WsContext.Provider value={value}>{children}</WsContext.Provider>;

@@ -48,14 +48,17 @@ export interface KpiInput {
   readonly utilizationFraction: number;
   /** Total trailer count in the network. */
   readonly trailerCount: number;
-  /** Trailers that departed on time this window. */
-  readonly onTimeDepartureCount: number;
-  /** Trailers that arrived on time this window. */
-  readonly onTimeArrivalCount: number;
-  /** Total trailers that departed in this window (denominator). */
-  readonly totalDepartureCount: number;
-  /** Total trailers that arrived in this window (denominator). */
-  readonly totalArrivalCount: number;
+  /**
+   * Trailers that departed on time this window, or `null` when on-time cannot be
+   * measured (no scheduled-departure data is persisted in the MVP — F-03).
+   */
+  readonly onTimeDepartureCount: number | null;
+  /** Trailers that arrived on time this window, or `null` when unmeasurable (F-03). */
+  readonly onTimeArrivalCount: number | null;
+  /** Total trailers that departed in this window (denominator), or `null` when no data (F-03). */
+  readonly totalDepartureCount: number | null;
+  /** Total trailers that arrived in this window (denominator), or `null` when no data (F-03). */
+  readonly totalArrivalCount: number | null;
   /**
    * Live open exceptions from Phase-3 `readOpenExceptions`.
    * Drives wrongTrailerCount / missedUnloadCount by filtering on `kind`.
@@ -113,15 +116,14 @@ export function computeKpis(input: KpiInput): Omit<KpiSnapshot, "baseline"> {
   // operation cycle — the unloadReloadMin from the config is the floor).
   const rehandleCount = optimizerRehandleScore > 0 ? Math.max(1, Math.floor(optimizerRehandleScore)) : 0;
 
-  // --- On-time ratios -------------------------------------------------------
-  const onTimeDeparture =
-    totalDepartureCount > 0
-      ? round4(onTimeDepartureCount / totalDepartureCount)
-      : 1;
-  const onTimeArrival =
-    totalArrivalCount > 0
-      ? round4(onTimeArrivalCount / totalArrivalCount)
-      : 1;
+  // --- On-time ratios (F-03 / UI-03: HONEST — no fabricated 100%) -----------
+  // The MVP persists no scheduled/planned departure or arrival times (no domain
+  // event carries one), so there is no ground truth to measure "on-time" against.
+  // A no-data case (null counts) OR a zero denominator (0/0) is therefore NOT a
+  // fabricated 1.0 — it is reported as `null` ("—" in the UI). A real ratio is
+  // returned ONLY when both an on-time count and a positive total are present.
+  const onTimeDeparture = onTimeRate(onTimeDepartureCount, totalDepartureCount);
+  const onTimeArrival = onTimeRate(onTimeArrivalCount, totalArrivalCount);
 
   // --- SLA violation rate ---------------------------------------------------
   // The false-positive rate from the exception KPI serves as the SLA violation
@@ -157,4 +159,16 @@ function round2(v: number): number {
 /** Round to 4 decimal places (rates/fractions). */
 function round4(v: number): number {
   return Math.round(v * 10000) / 10000;
+}
+
+/**
+ * Honest on-time rate (F-03 / UI-03). Returns the real ratio `onTime / total` in
+ * [0,1] ONLY when both inputs are present and `total > 0`; otherwise returns
+ * `null` ("no schedule data"). This deliberately replaces the previous behavior
+ * that returned a fabricated `1.0` for a 0/0 denominator — a dishonest "always
+ * 100% on-time" metric on the live demo path.
+ */
+function onTimeRate(onTime: number | null, total: number | null): number | null {
+  if (onTime === null || total === null || total <= 0) return null;
+  return round4(onTime / total);
 }

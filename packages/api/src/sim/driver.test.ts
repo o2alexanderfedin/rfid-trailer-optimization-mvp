@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DomainEvent } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
-import type { DriveSimulationWithScenarioOptions } from "./driver.js";
 
 /**
  * Unit tests for the sim driver's scenario-injection and live-loop integration.
@@ -13,46 +12,6 @@ import type { DriveSimulationWithScenarioOptions } from "./driver.js";
  *
  * The integration tests (pg-backed) are in test/*.int.test.ts.
  */
-
-// --- Minimal DB mock (satisfies the driveSimulation dependency) ---------------
-
-/** Minimal simulation of an in-memory event store for unit tests. */
-function makeInMemoryDb() {
-  const streams = new Map<string, { version: number; events: DomainEvent[] }>();
-  const allEvents: Array<{ event: DomainEvent; streamId: string; globalSeq: bigint }> = [];
-  let nextSeq = 1n;
-
-  return {
-    selectFrom: (table: string) => {
-      if (table === "streams") {
-        return {
-          select: () => ({
-            where: (_col: string, _op: string, streamId: string) => ({
-              executeTakeFirst: async () => {
-                const s = streams.get(streamId);
-                return s !== undefined ? { version: s.version } : undefined;
-              },
-            }),
-          }),
-        };
-      }
-      // For trailer_state, hub_inventory etc.
-      return {
-        select: () => ({ where: () => ({ executeTakeFirst: async () => undefined }) }),
-        selectAll: () => ({ execute: async () => [] }),
-      };
-    },
-    transaction: () => ({
-      execute: async (fn: (trx: unknown) => Promise<unknown>) => fn({}),
-    }),
-    destroy: async () => {},
-  };
-}
-
-// --- Determinism helpers -----------------------------------------------------
-
-const SEED = 99;
-const DURATION = 10; // small enough for fast unit tests
 
 // --- Tests -------------------------------------------------------------------
 
@@ -115,9 +74,9 @@ describe("makeSimRunner — rolling optimizer is triggered per tick", () => {
       recommendations: [],
     };
     const mockLoop = {
-      tick: vi.fn(async (input: { events: readonly DomainEvent[]; simMs: number }) => {
+      tick: vi.fn((input: { events: readonly DomainEvent[]; simMs: number }) => {
         tickResults.push(input);
-        return fakeResult;
+        return Promise.resolve(fakeResult);
       }),
     };
 
@@ -139,9 +98,9 @@ describe("makeSimRunner — rolling optimizer is triggered per tick", () => {
       recommendations: [],
     };
     const mockLoop = {
-      tick: vi.fn(async (input: { events: readonly DomainEvent[]; simMs: number }) => {
+      tick: vi.fn((input: { events: readonly DomainEvent[]; simMs: number }) => {
         tickCalls.push(input.simMs);
-        return fakeResult;
+        return Promise.resolve(fakeResult);
       }),
     };
     const runner = makeSimRunner({ loop: mockLoop });

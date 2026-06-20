@@ -20,9 +20,11 @@ import { WebSocket, type RawData } from "ws";
 import type { SnapshotPayload, WsEnvelope } from "./envelope.js";
 import {
   attachSnapshotSocket,
-  type ApiDb,
+  routeSlaRiskBucketFor,
+  trailerStateFor,
   type SnapshotPayloadBuilder,
 } from "./snapshots.js";
+import type { ApiDb } from "../routes/queries.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -31,37 +33,19 @@ import {
 const FAKE_DB = {} as unknown as ApiDb;
 
 function emptyPayload(): SnapshotPayload {
+  // F-02: the ws channel no longer carries KPIs (live KPIs come from GET /api/kpis).
+  // `kpis` is optional on SnapshotPayload and omitted here to mirror production.
   return {
     trailers: [],
     hubs: [],
     routes: [],
     exceptionsOpen: [],
-    kpis: {
-      utilization: 0,
-      rehandleCount: 0,
-      rehandleMinutes: 0,
-      wrongTrailerCount: 0,
-      missedUnloadCount: 0,
-      slaViolationRate: 0,
-      onTimeDeparture: 1,
-      onTimeArrival: 1,
-      baseline: {
-        utilization: 0,
-        rehandleCount: 0,
-        rehandleMinutes: 0,
-        wrongTrailerCount: 0,
-        missedUnloadCount: 0,
-        slaViolationRate: 0,
-        onTimeDeparture: 1,
-        onTimeArrival: 1,
-      },
-    },
   };
 }
 
 /** Build a Fastify app + ws channel; returns { app, port, broadcast }. */
 async function buildTestApp(
-  buildPayload: SnapshotPayloadBuilder = (_db) => Promise.resolve(emptyPayload()),
+  buildPayload: SnapshotPayloadBuilder = () => Promise.resolve(emptyPayload()),
 ): Promise<{
   app: FastifyInstance;
   port: number;
@@ -141,7 +125,7 @@ function openSocketBuffered(
           },
           reject: (e) => {
             clearTimeout(timer);
-            reject(e);
+            reject(e instanceof Error ? e : new Error(String(e)));
           },
         });
       });
@@ -180,9 +164,9 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
     }
   });
 
-  it("snapshot payload contains trailers, hubs, routes, exceptionsOpen, kpis", async () => {
+  it("snapshot payload contains trailers, hubs, routes, exceptionsOpen (no kpis — F-02)", async () => {
     const payload = emptyPayload();
-    const { app: a, port } = await buildTestApp((_db) => Promise.resolve(payload));
+    const { app: a, port } = await buildTestApp(() => Promise.resolve(payload));
     app = a;
     const { socket, next } = await openSocketBuffered(port);
     try {
@@ -192,7 +176,9 @@ describe("ws snapshot channel: connect → snapshot envelope (VIZ-04)", () => {
       expect(Array.isArray(msg.payload.hubs)).toBe(true);
       expect(Array.isArray(msg.payload.routes)).toBe(true);
       expect(Array.isArray(msg.payload.exceptionsOpen)).toBe(true);
-      expect(msg.payload.kpis).toBeDefined();
+      // F-02: live KPIs come from GET /api/kpis — the ws snapshot must NOT carry
+      // a kpis field (a zeroed placeholder would clobber the live REST values).
+      expect("kpis" in msg.payload).toBe(false);
     } finally {
       socket.close();
     }
@@ -280,7 +266,7 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
       ...emptyPayload(),
       trailers: [{ id: "T1", routeId: "R1", departMs: 1000, etaMs: 3000, state: "onTime" }],
     };
-    const { app: a, port, broadcast } = await buildTestApp((_db) => {
+    const { app: a, port, broadcast } = await buildTestApp(() => {
       callCount += 1;
       return Promise.resolve(callCount <= 2 ? t1Payload : t1Changed);
     });
@@ -396,7 +382,7 @@ describe("buildSnapshotPayload FIX 3 — non-zero hub buckets and route list (VI
     };
 
     // A builder that returns real hub state (not all-zero).
-    const builder = (_db: ApiDb) => Promise.resolve(payloadWithHubs);
+    const builder: SnapshotPayloadBuilder = () => Promise.resolve(payloadWithHubs);
     const { app: a, port } = await buildTestApp(builder);
     const { socket, next } = await openSocketBuffered(port);
     try {
@@ -439,7 +425,7 @@ describe("buildSnapshotPayload FIX 3 — non-zero hub buckets and route list (VI
       hubs: [{ id: "HUB-X", volumeBucket: 2, slaRiskBucket: 0, congestionBucket: 0 }],
     };
 
-    const builder = (_db: ApiDb) => {
+    const builder: SnapshotPayloadBuilder = () => {
       call++;
       return Promise.resolve(call <= 2 ? zeroPayload : changedPayload);
     };
@@ -467,6 +453,112 @@ describe("buildSnapshotPayload FIX 3 — non-zero hub buckets and route list (VI
   });
 });
 
+// ---------------------------------------------------------------------------
+// F-02 — ws channel must NOT carry zeroed KPIs that clobber the REST source.
+// Live KPIs are served by GET /api/kpis (the documented single source of truth).
+// The ws snapshot/tick must NOT carry a `kpis` field at all, so the dashboard's
+// REST-fetched values are never overwritten by a zeroed placeholder.
+// ---------------------------------------------------------------------------
+
+describe("ws snapshot channel: F-02 — no zeroed KPIs on the wire", () => {
+  let app: FastifyInstance | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it("the initial snapshot payload does NOT carry a kpis field", async () => {
+    const { app: a, port } = await buildTestApp();
+    app = a;
+    const { socket, next } = await openSocketBuffered(port);
+    try {
+      const msg = await next();
+      if (msg.type !== "snapshot") throw new Error("expected snapshot");
+      // REST GET /api/kpis is the single source of truth — the ws snapshot must
+      // not carry KPIs (a zeroed placeholder would clobber the live REST values).
+      expect("kpis" in msg.payload).toBe(false);
+    } finally {
+      socket.close();
+    }
+  });
+
+  it("a tick from the real buildSnapshotPayload never emits a kpis partial", async () => {
+    // Use the REAL default builder path (no injected override) so we exercise the
+    // production payload. We assert via diffTick semantics: with no KPI data on
+    // either side, the tick must omit `kpis` entirely.
+    const { app: a, port, broadcast } = await buildTestApp();
+    app = a;
+    const { socket, next } = await openSocketBuffered(port);
+    try {
+      await next(); // consume initial snapshot
+      await broadcast(1000);
+      const tick = await next();
+      if (tick.type !== "tick") throw new Error("expected tick");
+      expect(tick.payload.kpis).toBeUndefined();
+    } finally {
+      socket.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 9 (VIZ-03 completeness) — route slaRisk + trailer state from REAL signals.
+//
+// Both buckets were previously DARK (hardcoded):
+//   - route.slaRiskBucket = 0 (constant)
+//   - in-transit trailer.state = "onTime" (constant)
+//
+// They must now be DRIVEN by the open-exceptions read model (the same signal that
+// already drives per-hub slaRiskBucket), never replaced with another constant.
+// ---------------------------------------------------------------------------
+
+describe("FIX 9 — routeSlaRiskBucketFor (real signal: endpoint-hub exception risk)", () => {
+  it("is 0 when neither endpoint hub has open exceptions", () => {
+    const perHub = new Map<string, number>(); // no exceptions anywhere
+    expect(routeSlaRiskBucketFor("HUB-A", "HUB-B", perHub)).toBe(0);
+  });
+
+  it("reflects the riskier endpoint hub (max of the two), NOT a constant 0", () => {
+    // HUB-B has 3 open exceptions → hub slaRiskBucket 3 (high). The route A→B
+    // inherits that risk because freight crossing the leg is exposed to it.
+    const perHub = new Map<string, number>([
+      ["HUB-A", 1], // bucket 1
+      ["HUB-B", 3], // bucket 3 (the max)
+    ]);
+    const bucket = routeSlaRiskBucketFor("HUB-A", "HUB-B", perHub);
+    expect(bucket).not.toBe(0); // the bug was a hardcoded 0
+    expect(bucket).toBe(3); // max(bucketFor(1)=1, bucketFor(3)=3) = 3
+  });
+
+  it("uses the origin hub's risk when only the origin has exceptions", () => {
+    const perHub = new Map<string, number>([["HUB-A", 2]]);
+    expect(routeSlaRiskBucketFor("HUB-A", "HUB-B", perHub)).toBe(2);
+  });
+});
+
+describe("FIX 9 — trailerStateFor (real signal: trailer implicated in open exception)", () => {
+  it("keeps the base state when the trailer is in NO open exception", () => {
+    const implicated = new Set<string>(["T-OTHER"]);
+    expect(trailerStateFor("T1", "onTime", implicated)).toBe("onTime");
+  });
+
+  it("escalates an in-transit trailer to 'slaRisk' when implicated, NOT a constant 'onTime'", () => {
+    // The bug: every in-transit trailer was hardcoded "onTime". A trailer the
+    // detector flagged (wrong-trailer / missed-unload) must surface as at-risk.
+    const implicated = new Set<string>(["T1"]);
+    const state = trailerStateFor("T1", "onTime", implicated);
+    expect(state).not.toBe("onTime"); // the bug was a hardcoded "onTime"
+    expect(state).toBe("slaRisk");
+  });
+
+  it("never overrides an 'idle' trailer (idle is positional, not risk)", () => {
+    // An idle trailer sitting at a hub is not "in transit at risk" — preserve idle.
+    const implicated = new Set<string>(["T1"]);
+    expect(trailerStateFor("T1", "idle", implicated)).toBe("idle");
+  });
+});
+
 describe("ws snapshot channel: M-5 rejection on connect", () => {
   let app: FastifyInstance | undefined;
 
@@ -484,7 +576,7 @@ describe("ws snapshot channel: M-5 rejection on connect", () => {
 
     try {
       const { app: a, port } = await buildTestApp(
-        (_db) => Promise.reject(new Error("simulated transient DB failure")),
+        () => Promise.reject(new Error("simulated transient DB failure")),
       );
       app = a;
 

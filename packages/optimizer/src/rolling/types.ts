@@ -175,6 +175,34 @@ export interface EpochResult {
   readonly accepted: PlanAccepted["payload"] | null;
   /** Per-trailer recommendations with objective breakdowns (for the API). */
   readonly recommendations: readonly EpochRecommendation[];
+  /**
+   * F-06 / OPT-02 — the min-cost-flow freight stage's result for this epoch:
+   * which freight block flows over which route legs at minimum total cost
+   * (`assignments`), the optimum `flowCost`, and `feasible`. OPTIONAL + additive
+   * (non-breaking): it does NOT influence the deterministic selectPlan winner,
+   * so it is purely observational. Always present once MCF is wired (fail-soft:
+   * empty/infeasible ⇒ `{ assignments: [], flowCost: 0, feasible: true }`).
+   */
+  readonly freightAssignment?: EpochFreightAssignmentResult;
+}
+
+/**
+ * The observable shape of the epoch's min-cost-flow freight stage (F-06/OPT-02).
+ * Mirrors {@link import("../flow/freight-stage.js").EpochFreightAssignment} but
+ * is declared here so the rolling contract stays self-describing (no cross-import
+ * cycle: `flow` imports `rolling/types`, not the reverse for values).
+ */
+export interface EpochFreightAssignmentResult {
+  /** Per-block leg assignments (`blockId`, `legEdgeIds`, integer `cost`). */
+  readonly assignments: readonly {
+    readonly blockId: string;
+    readonly legEdgeIds: readonly string[];
+    readonly cost: number;
+  }[];
+  /** `Σ assignment.cost` — the min-cost-flow optimum (0 when none / infeasible). */
+  readonly flowCost: number;
+  /** Whether the requested freight could be routed (true when empty/fail-soft). */
+  readonly feasible: boolean;
 }
 
 export type { ObjectiveWeights, OptimizerScope, Recommendation };
