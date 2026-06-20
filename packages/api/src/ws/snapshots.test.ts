@@ -20,6 +20,8 @@ import { WebSocket, type RawData } from "ws";
 import type { SnapshotPayload, WsEnvelope } from "./envelope.js";
 import {
   attachSnapshotSocket,
+  routeSlaRiskBucketFor,
+  trailerStateFor,
   type ApiDb,
   type SnapshotPayloadBuilder,
 } from "./snapshots.js";
@@ -497,6 +499,63 @@ describe("ws snapshot channel: F-02 — no zeroed KPIs on the wire", () => {
     } finally {
       socket.close();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 9 (VIZ-03 completeness) — route slaRisk + trailer state from REAL signals.
+//
+// Both buckets were previously DARK (hardcoded):
+//   - route.slaRiskBucket = 0 (constant)
+//   - in-transit trailer.state = "onTime" (constant)
+//
+// They must now be DRIVEN by the open-exceptions read model (the same signal that
+// already drives per-hub slaRiskBucket), never replaced with another constant.
+// ---------------------------------------------------------------------------
+
+describe("FIX 9 — routeSlaRiskBucketFor (real signal: endpoint-hub exception risk)", () => {
+  it("is 0 when neither endpoint hub has open exceptions", () => {
+    const perHub = new Map<string, number>(); // no exceptions anywhere
+    expect(routeSlaRiskBucketFor("HUB-A", "HUB-B", perHub)).toBe(0);
+  });
+
+  it("reflects the riskier endpoint hub (max of the two), NOT a constant 0", () => {
+    // HUB-B has 3 open exceptions → hub slaRiskBucket 3 (high). The route A→B
+    // inherits that risk because freight crossing the leg is exposed to it.
+    const perHub = new Map<string, number>([
+      ["HUB-A", 1], // bucket 1
+      ["HUB-B", 3], // bucket 3 (the max)
+    ]);
+    const bucket = routeSlaRiskBucketFor("HUB-A", "HUB-B", perHub);
+    expect(bucket).not.toBe(0); // the bug was a hardcoded 0
+    expect(bucket).toBe(3); // max(bucketFor(1)=1, bucketFor(3)=3) = 3
+  });
+
+  it("uses the origin hub's risk when only the origin has exceptions", () => {
+    const perHub = new Map<string, number>([["HUB-A", 2]]);
+    expect(routeSlaRiskBucketFor("HUB-A", "HUB-B", perHub)).toBe(2);
+  });
+});
+
+describe("FIX 9 — trailerStateFor (real signal: trailer implicated in open exception)", () => {
+  it("keeps the base state when the trailer is in NO open exception", () => {
+    const implicated = new Set<string>(["T-OTHER"]);
+    expect(trailerStateFor("T1", "onTime", implicated)).toBe("onTime");
+  });
+
+  it("escalates an in-transit trailer to 'slaRisk' when implicated, NOT a constant 'onTime'", () => {
+    // The bug: every in-transit trailer was hardcoded "onTime". A trailer the
+    // detector flagged (wrong-trailer / missed-unload) must surface as at-risk.
+    const implicated = new Set<string>(["T1"]);
+    const state = trailerStateFor("T1", "onTime", implicated);
+    expect(state).not.toBe("onTime"); // the bug was a hardcoded "onTime"
+    expect(state).toBe("slaRisk");
+  });
+
+  it("never overrides an 'idle' trailer (idle is positional, not risk)", () => {
+    // An idle trailer sitting at a hub is not "in transit at risk" — preserve idle.
+    const implicated = new Set<string>(["T1"]);
+    expect(trailerStateFor("T1", "idle", implicated)).toBe("idle");
   });
 });
 

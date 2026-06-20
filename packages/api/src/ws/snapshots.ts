@@ -87,9 +87,10 @@ function projView(db: ApiDb): Kysely<ProjectionDb> {
 /**
  * Derive a `TrailerKeyframe` from the geo-track projection.
  * departMs/etaMs are approximated from keyframe ISO timestamps until Plan 05-03
- * wires the trip plan ETAs; state defaults to "onTime" as a placeholder.
- * The CRITICAL fields (id, routeId) come from the projection; timing/state are
- * refined by downstream plans.
+ * wires the trip plan ETAs. In-transit `state` is driven by the open-exceptions
+ * read model (FIX 9 — {@link trailerStateFor}): a trailer the detector flagged
+ * shows as `"slaRisk"`, otherwise `"onTime"`. The CRITICAL fields (id, routeId)
+ * come from the projection.
  */
 function isoToMs(iso: string): number {
   return new Date(iso).getTime();
@@ -132,6 +133,59 @@ function loadBucketFor(trailerCount: number): number {
   if (trailerCount === 1) return 1;
   if (trailerCount === 2) return 2;
   return 3;
+}
+
+/**
+ * FIX 9 (VIZ-03 completeness) — REAL route-level SLA-risk bucket.
+ *
+ * Previously hardcoded `0` ("route-level SLA risk needs trip-plan data — future
+ * plan"), so route SLA-risk coloring on the map was permanently dark. We DRIVE it
+ * from the SAME signal that already drives per-hub `slaRiskBucket`: the open
+ * exception count per hub (`exceptionsPerHub`). A directed leg `from→to` carries
+ * freight that is exposed to disruption at BOTH endpoint hubs, so the honest,
+ * DRY derivation is the **max** of the two endpoints' hub SLA-risk buckets
+ * (reusing {@link slaRiskBucketFor} — ONE calibration source, no fabricated
+ * constant). Pure + deterministic.
+ *
+ * Exported for unit testing (the production path calls it inside
+ * {@link buildSnapshotPayload}).
+ */
+export function routeSlaRiskBucketFor(
+  fromHubId: string,
+  toHubId: string,
+  exceptionsPerHub: ReadonlyMap<string, number>,
+): number {
+  const fromRisk = slaRiskBucketFor(exceptionsPerHub.get(fromHubId) ?? 0);
+  const toRisk = slaRiskBucketFor(exceptionsPerHub.get(toHubId) ?? 0);
+  return Math.max(fromRisk, toRisk);
+}
+
+/**
+ * FIX 9 (VIZ-03 completeness) — REAL in-transit trailer SLA `state`.
+ *
+ * Previously every in-transit keyframe was hardcoded `"onTime"`, so trailer
+ * SLA-state coloring was permanently dark. We DRIVE it from the open-exceptions
+ * read model: the detector (`WrongTrailerDetected` / `MissedUnloadDetected`)
+ * names the OBSERVED `trailerId` on every exception. A trailer whose id appears
+ * in any open exception is genuinely at risk → `"slaRisk"`; otherwise it keeps
+ * its base state. `"idle"` is positional (parked at a hub, not in transit) and is
+ * never overridden — risk coloring applies to moving freight only. Pure.
+ *
+ * NOTE (honesty / F-03): we report `"slaRisk"`, NOT `"late"`. The MVP persists no
+ * scheduled ETA to compare against (see `KpiSnapshot.onTimeArrival === null`),
+ * so claiming a trailer is "late" would be fabricated. "At risk because flagged
+ * by the detector" is the strongest claim the available signal supports.
+ *
+ * Exported for unit testing.
+ */
+export function trailerStateFor(
+  trailerId: string,
+  baseState: TrailerKeyframe["state"],
+  implicatedTrailerIds: ReadonlySet<string>,
+): TrailerKeyframe["state"] {
+  // Idle trailers are positional, not a risk signal — never override.
+  if (baseState === "idle") return baseState;
+  return implicatedTrailerIds.has(trailerId) ? "slaRisk" : baseState;
 }
 
 /**
@@ -220,20 +274,29 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   // Collect all trailer ids (from both depart + arrive keyframes)
   const allIds = new Set<string>(keyframes.map((k) => k.trailerId));
 
+  // FIX 9: the set of trailers implicated in any OPEN exception (the detector
+  // names the observed trailerId on every wrong-trailer / missed-unload row).
+  // This is the REAL signal that drives an in-transit trailer's SLA `state`.
+  const implicatedTrailerIds = new Set<string>(
+    openExceptions.map((ex) => ex.trailerId),
+  );
+
   const trailers: TrailerKeyframe[] = [...allIds]
     .map((id): TrailerKeyframe => {
       const dep = departures.get(id);
       const arr = arrivals.get(id);
       if (dep !== undefined) {
+        // FIX 9: base state is "onTime"; escalate to "slaRisk" when the detector
+        // has flagged this trailer (real signal, not a hardcoded constant).
         return {
           id,
           routeId: dep.routeId,
           departMs: dep.ms,
           etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : dep.ms + 3_600_000, // 1hr fallback
-          state: "onTime", // VIZ-03 refines this via hub/route metrics in later plans
+          state: trailerStateFor(id, "onTime", implicatedTrailerIds),
         };
       }
-      // Only arrive keyframe → trailer is idle at a hub
+      // Only arrive keyframe → trailer is idle at a hub (positional, not risk).
       return {
         id,
         routeId: arr?.routeId ?? "",
@@ -305,7 +368,13 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     routes.push({
       id: legKey, // stable unique key for this directed leg
       loadBucket: loadBucketFor(inTransit),
-      slaRiskBucket: 0, // route-level SLA risk needs trip-plan data (future plan)
+      // FIX 9: REAL route SLA-risk — max of the two endpoint hubs' open-exception
+      // risk (reuses the hub slaRisk plumbing, DRY). Was a hardcoded 0.
+      slaRiskBucket: routeSlaRiskBucketFor(
+        row.from_hub_id,
+        row.to_hub_id,
+        exceptionsPerHub,
+      ),
     });
   }
   routes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

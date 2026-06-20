@@ -50,6 +50,7 @@ function makeFeature(props: Record<string, unknown>) {
 import {
   hubStyle,
   routeStyle,
+  trailerStyle,
   HUB_COLORS,
   HUB_BUCKET_LABELS,
   ROUTE_COLORS,
@@ -176,5 +177,45 @@ describe("routeStyle", () => {
     const f0 = makeFeature({ loadBucket: 0 }) as FeatureLike;
     const f1 = makeFeature({ loadBucket: 1 }) as FeatureLike;
     expect(routeStyle(f0)).not.toBe(routeStyle(f1));
+  });
+
+  // FIX 9 (VIZ-03 completeness): route slaRiskBucket must now drive coloring.
+  // It was plumbed onto the feature but routeStyle ignored it (dark on the map).
+  it("FIX 9: a route with slaRiskBucket > 0 renders a DIFFERENT style than load-only", () => {
+    // Same loadBucket, but one is flagged at-risk → must NOT collapse to the same
+    // style (otherwise the SLA-risk signal is invisible on the map).
+    const loadOnly = makeFeature({ loadBucket: 1, slaRiskBucket: 0 }) as FeatureLike;
+    const atRisk = makeFeature({ loadBucket: 1, slaRiskBucket: 3 }) as FeatureLike;
+    expect(routeStyle(atRisk)).not.toBe(routeStyle(loadOnly));
+  });
+
+  it("FIX 9: same slaRiskBucket → same cached style (zero per-frame allocation)", () => {
+    const f = makeFeature({ loadBucket: 2, slaRiskBucket: 2 }) as FeatureLike;
+    expect(routeStyle(f)).toBe(routeStyle(f));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX 9 — trailerStyle: state-driven coloring (was a single static style).
+// The in-transit trailer `state` ("onTime" | "slaRisk" | "late" | "idle") was
+// set on the feature but never rendered. trailerStyle must color by state.
+// ---------------------------------------------------------------------------
+
+describe("trailerStyle (FIX 9 — state-driven trailer coloring)", () => {
+  it("returns the same cached ref for the same state (zero alloc)", () => {
+    const f = makeFeature({ state: "onTime" }) as FeatureLike;
+    expect(trailerStyle(f)).toBe(trailerStyle(f));
+  });
+
+  it("renders an at-risk trailer DIFFERENTLY than an on-time one", () => {
+    const onTime = makeFeature({ state: "onTime" }) as FeatureLike;
+    const atRisk = makeFeature({ state: "slaRisk" }) as FeatureLike;
+    expect(trailerStyle(atRisk)).not.toBe(trailerStyle(onTime));
+  });
+
+  it("falls back to a default style for an unknown/missing state", () => {
+    const missing = makeFeature({}) as FeatureLike;
+    const unknown = makeFeature({ state: "bogus" }) as FeatureLike;
+    expect(trailerStyle(missing)).toBe(trailerStyle(unknown));
   });
 });
