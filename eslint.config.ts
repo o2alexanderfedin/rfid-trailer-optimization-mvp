@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 /**
- * ESLint 9 flat config. The hard constraint: NO `any`.
+ * ESLint 9 flat config (TypeScript). The hard constraint: NO `any`.
  * `@typescript-eslint/no-explicit-any` is set to "error" and we also
  * forbid the unsafe-`any` family so values cannot leak in untyped.
  */
