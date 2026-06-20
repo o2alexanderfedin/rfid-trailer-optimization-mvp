@@ -461,3 +461,269 @@ body,
   font-weight: 600;
   color: #14b8a6;
 }
+
+/* ==========================================================================
+   KpiDashboard (UI-03)
+   ========================================================================== */
+
+.kpi-dashboard {
+  padding: 0.5rem 0.5rem 0.75rem;
+}
+
+.kpi-dashboard__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+/* One KPI card */
+.kpi-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  transition: border-color 0.15s;
+}
+
+.kpi-card--animating {
+  border-color: #60a5fa;
+  /* Flash the card briefly when the value changes */
+  animation: kpi-flash 0.7s ease-out;
+}
+
+@keyframes kpi-flash {
+  0%   { background: rgba(96, 165, 250, 0.18); }
+  100% { background: #1e293b; }
+}
+
+.kpi-card__label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+  color: #64748b;
+  line-height: 1.2;
+}
+
+.kpi-card__value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+/* During animation: value text brightens */
+.kpi-card--animating .kpi-card__value {
+  color: #93c5fd;
+  animation: kpi-value-pulse 0.7s ease-out;
+}
+
+@keyframes kpi-value-pulse {
+  0%   { color: #bfdbfe; transform: scale(1.08); }
+  60%  { color: #93c5fd; }
+  100% { color: #e2e8f0; transform: scale(1); }
+}
+
+/* ==========================================================================
+   MoneySlide (UI-04) — before/after baseline-vs-optimizer comparison
+   ========================================================================== */
+
+.money-slide {
+  padding: 0.5rem 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.money-slide__loading,
+.money-slide__error {
+  padding: 1rem 0;
+  text-align: center;
+  font-size: 0.8rem;
+  color: #475569;
+  font-style: italic;
+}
+
+.money-slide__error {
+  color: #f87171;
+  font-style: normal;
+}
+
+/* Header block */
+.money-slide__header {
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid #334155;
+}
+
+.money-slide__title {
+  margin: 0 0 0.15rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: -0.01em;
+}
+
+.money-slide__subtitle {
+  margin: 0;
+  font-size: 0.67rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* Comparison table */
+.money-slide__table {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.money-slide__row {
+  display: grid;
+  /* metric | baseline | optimizer | delta */
+  grid-template-columns: 2fr 1fr 1fr 1.4fr;
+  align-items: center;
+}
+
+.money-slide__row--header {
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+
+/* Win/loss row color coding */
+.money-slide__row--win {
+  background: rgba(34, 197, 94, 0.04);
+  border-bottom: 1px solid #1e293b;
+}
+
+.money-slide__row--loss {
+  background: rgba(239, 68, 68, 0.04);
+  border-bottom: 1px solid #1e293b;
+}
+
+.money-slide__row--neutral {
+  background: transparent;
+  border-bottom: 1px solid #1e293b;
+}
+
+.money-slide__cell {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+/* Column header cells */
+.money-slide__row--header .money-slide__cell {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+.money-slide__cell--metric {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+
+.money-slide__cell--baseline {
+  color: #94a3b8;
+  text-align: right;
+}
+
+.money-slide__cell--optimizer {
+  text-align: right;
+  font-weight: 600;
+}
+
+/* Optimizer value colors by outcome */
+.money-slide__optimizer-val--win {
+  color: #4ade80;
+}
+
+.money-slide__optimizer-val--loss {
+  color: #f87171;
+}
+
+.money-slide__optimizer-val--neutral {
+  color: #94a3b8;
+}
+
+.money-slide__cell--delta {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+
+/* Delta text colors */
+.money-slide__delta--win {
+  color: #4ade80;
+}
+
+.money-slide__delta--loss {
+  color: #f87171;
+}
+
+.money-slide__delta--neutral {
+  color: #64748b;
+}
+
+/* Win/loss badge pill */
+.money-slide__win-badge {
+  font-size: 0.55rem;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.money-slide__win-badge--win {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+
+.money-slide__win-badge--loss {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.money-slide__win-badge--neutral {
+  display: none;
+}
+
+/* Summary footer */
+.money-slide__summary {
+  padding-top: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.money-slide__summary-win {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #4ade80;
+}
+
+.money-slide__summary-neutral {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.money-slide__seed-note {
+  margin: 0;
+  font-size: 0.62rem;
+  color: #475569;
+  font-style: italic;
+}
