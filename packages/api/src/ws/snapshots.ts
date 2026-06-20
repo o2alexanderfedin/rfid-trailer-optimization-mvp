@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import {
   type CatchupDb,
   type ExceptionKind,
@@ -43,6 +43,24 @@ import {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Normalize a JSONB string-array column to `string[]`.
+ *
+ * The `hub_inventory` inbound/outbound/staged columns are JSONB; the `pg` driver
+ * deserializes them to a real array, so the value is normally already `string[]`
+ * (its select type). Defensively, if a driver/mock hands back a raw JSON string
+ * we parse it. We inspect via `unknown` so the runtime string fallback stays
+ * type-safe (no `any`, no unnecessary assertion on the already-typed array path).
+ */
+function toStringArray(value: string[]): string[] {
+  const v: unknown = value;
+  if (typeof v === "string") {
+    const parsed: unknown = JSON.parse(v);
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  }
+  return value;
+}
 
 /**
  * Port: builds the current `SnapshotPayload` from the read models.
@@ -315,10 +333,11 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   // Index hub inventory by hubId for O(1) lookup.
   const invByHub = new Map<string, { inbound: string[]; outbound: string[]; staged: string[] }>();
   for (const row of hubInventoryRows) {
-    const inbound = Array.isArray(row.inbound) ? row.inbound : (JSON.parse(row.inbound as string) as string[]);
-    const outbound = Array.isArray(row.outbound) ? row.outbound : (JSON.parse(row.outbound as string) as string[]);
-    const staged = Array.isArray(row.staged) ? row.staged : (JSON.parse(row.staged as string) as string[]);
-    invByHub.set(row.hub_id, { inbound, outbound, staged });
+    invByHub.set(row.hub_id, {
+      inbound: toStringArray(row.inbound),
+      outbound: toStringArray(row.outbound),
+      staged: toStringArray(row.staged),
+    });
   }
 
   // Count open exceptions per hub (keyed by hubId from the exception row).
@@ -460,13 +479,13 @@ export function attachSnapshotSocket(
     // FIX 14: handle client resync requests. When a client detects a seq-gap
     // (missed ticks), it sends `{ type: "resync" }`. Reply to THAT socket with
     // a fresh full snapshot envelope so it can re-anchor its local tween clock.
-    socket.on("message", (data: import("ws").RawData) => {
+    socket.on("message", (data: RawData) => {
       let msg: unknown;
       try {
         const text =
           Array.isArray(data) ? Buffer.concat(data).toString("utf8")
           : data instanceof ArrayBuffer ? Buffer.from(data).toString("utf8")
-          : (data as Buffer).toString("utf8");
+          : data.toString("utf8");
         msg = JSON.parse(text);
       } catch {
         // Malformed message — ignore silently (not a security risk: no side effects).
@@ -476,7 +495,7 @@ export function attachSnapshotSocket(
         typeof msg === "object" &&
         msg !== null &&
         "type" in msg &&
-        (msg as { type: unknown }).type === "resync"
+        msg.type === "resync"
       ) {
         // Client requested a full resync. Build a fresh snapshot and reply to
         // this socket only (not broadcast — only the requesting client needs it).

@@ -115,7 +115,7 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // SIM-04 / OPT-02: The live rolling-optimizer loop (Plan 05-02).
   // `buildSnapshot` reads the current live projections to assemble the TwinSnapshot.
   // The sim driver calls `loop.tick(...)` per tick so the optimizer runs live.
-  const snapshotDb = deps.db as unknown as SnapshotDb;
+  const snapshotDb: SnapshotDb = deps.db;
   const loop = new RollingLoop({
     service: optimizer,
     buildSnapshot: () => buildTwinSnapshot(snapshotDb),

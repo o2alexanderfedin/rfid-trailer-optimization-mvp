@@ -87,7 +87,7 @@ export type SimTickRunner = (
  */
 export function makeSimRunner(opts: SimRunnerOptions): SimTickRunner {
   if (opts.loop === undefined) {
-    return async (_events: readonly DomainEvent[], _simMs: number) => undefined;
+    return (): Promise<EpochResult | undefined> => Promise.resolve(undefined);
   }
   const { loop } = opts;
   return async (events: readonly DomainEvent[], simMs: number) => {

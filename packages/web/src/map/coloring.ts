@@ -73,7 +73,7 @@ const HUB_STYLE_DEFAULT = new Style({
  * for any missing or out-of-range value — no new `Style` ever allocated here.
  */
 export function hubStyle(feature: FeatureLike): Style {
-  const b = feature.get("volumeBucket");
+  const b: unknown = feature.get("volumeBucket");
   if (typeof b === "number" && b >= 0 && b < HUB_STYLE_CACHE.length) {
     return HUB_STYLE_CACHE[b] as Style;
   }
@@ -151,7 +151,7 @@ const ROUTE_RISK_STYLE_CACHE: readonly Style[] = ROUTE_RISK_COLORS.map(
  * used. Both paths return a pre-allocated cached `Style` (no per-frame alloc).
  */
 export function routeStyle(feature: FeatureLike): Style {
-  const risk = feature.get("slaRiskBucket");
+  const risk: unknown = feature.get("slaRiskBucket");
   if (
     typeof risk === "number" &&
     risk > 0 &&
@@ -159,7 +159,7 @@ export function routeStyle(feature: FeatureLike): Style {
   ) {
     return ROUTE_RISK_STYLE_CACHE[risk] as Style;
   }
-  const b = feature.get("loadBucket");
+  const b: unknown = feature.get("loadBucket");
   if (typeof b === "number" && b >= 0 && b < ROUTE_STYLE_CACHE.length) {
     return ROUTE_STYLE_CACHE[b] as Style;
   }
@@ -212,7 +212,7 @@ const TRAILER_STYLE_DEFAULT = makeTrailerStyle("#9aa0a6");
  * `feature.set("state", s)` re-invokes this on the next render — no new Style.
  */
 export function trailerStyle(feature: FeatureLike): Style {
-  const state = feature.get("state");
+  const state: unknown = feature.get("state");
   if (typeof state === "string") {
     const cached = TRAILER_STYLE_CACHE.get(state);
     if (cached !== undefined) return cached;
