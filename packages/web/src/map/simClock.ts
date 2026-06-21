@@ -45,6 +45,20 @@ export interface SimClock {
    * @param simMs   The authoritative sim-clock milliseconds from the envelope.
    */
   resync(wallMs: number, simMs: number): void;
+
+  /**
+   * Set the local playback rate (sim-ms per wall-ms).
+   *
+   * Driven from each envelope's `speed.simSpeed` so the local tween advances at
+   * the SAME rate the server jumps `simMs` per tick (= MS_PER_TICK /
+   * tickIntervalMs). A simSpeed of 0 (paused) freezes the tween: `fromFrameTime`
+   * returns a constant value while wall time elapses.
+   *
+   * Negative speeds are clamped to 0 (the clock never runs backward — it is
+   * monotonic by contract). Changing the speed does NOT re-anchor; the rate
+   * change takes effect from the current frame forward.
+   */
+  setSpeed(simSpeed: number): void;
 }
 
 /**
@@ -60,7 +74,9 @@ export interface SimClock {
  * ```
  */
 export function makeSimClock(opts: SimClockOptions = {}): SimClock {
-  const simSpeed = opts.simSpeed ?? 1;
+  // Mutable so `setSpeed` can retune the playback rate live from the envelope.
+  // Clamp to >= 0 — the clock is monotonic and never runs backward.
+  let simSpeed = Math.max(0, opts.simSpeed ?? 1);
   const maxNudgeMs = opts.maxNudgeMs ?? 500;
 
   /** true once we have at least one anchor. */
@@ -71,8 +87,11 @@ export function makeSimClock(opts: SimClockOptions = {}): SimClock {
   let anchorSimMs = 0;
   /** The last sim time we returned — guards monotonicity. */
   let lastSimMs = 0;
+  /** The last wall time observed (frame time or resync) — used to re-anchor on setSpeed. */
+  let lastWallMs = 0;
 
   function fromFrameTime(wallMs: number): number {
+    lastWallMs = wallMs;
     if (!anchored) return 0;
     const elapsed = wallMs - anchorWallMs;
     const computed = anchorSimMs + elapsed * simSpeed;
@@ -83,6 +102,7 @@ export function makeSimClock(opts: SimClockOptions = {}): SimClock {
   }
 
   function resync(wallMs: number, serverSimMs: number): void {
+    lastWallMs = wallMs;
     if (!anchored) {
       // First anchor: accept unconditionally.
       anchorWallMs = wallMs;
@@ -116,5 +136,18 @@ export function makeSimClock(opts: SimClockOptions = {}): SimClock {
     }
   }
 
-  return { fromFrameTime, resync };
+  function setSpeed(nextSpeed: number): void {
+    // Re-anchor at the CURRENT projected sim value BEFORE changing the rate,
+    // so the new rate applies going forward without a discontinuity. We can
+    // only do this once anchored; before the first resync the speed is just
+    // stored for when the anchor arrives.
+    if (anchored) {
+      const projected = anchorSimMs + (lastWallMs - anchorWallMs) * simSpeed;
+      anchorSimMs = projected > lastSimMs ? projected : lastSimMs;
+      anchorWallMs = lastWallMs;
+    }
+    simSpeed = Math.max(0, nextSpeed);
+  }
+
+  return { fromFrameTime, resync, setSpeed };
 }

@@ -92,6 +92,117 @@ describe("makeSimClock", () => {
     expect(clock.fromFrameTime(basis + 1000)).toBe(6000);
   });
 
+  // ---------------------------------------------------------------------------
+  // T1 — the latent clock bug: simSpeed=1 cannot track the 120× server cadence.
+  //
+  // The paced driver jumps the authoritative simMs by MS_PER_TICK (60_000) every
+  // tickIntervalMs (~500 wall-ms) → a 120× time compression. A simSpeed=1 clock
+  // only advances ~500 sim-ms per 500 wall-ms and the resync nudge is clamped to
+  // maxNudgeMs (500), so it can recover at most ~1000 sim-ms/tick while the server
+  // moves 60_000 — it falls progressively, unboundedly behind. simSpeed=120 makes
+  // the local advance (500 × 120 = 60_000) match the server jump exactly, so it
+  // tracks within a tiny nudge tolerance.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Replay the real paced cadence against a clock: every 500 wall-ms the server
+   * has advanced simMs by 60_000; we resync, then sample `fromFrameTime` at that
+   * same wall instant. Returns the absolute lag (serverSim − clockSim) after N
+   * ticks. A high lag means the clock cannot keep up with the cadence.
+   */
+  function replayCadenceLag(simSpeed: number, ticks: number): number {
+    const clock = makeSimClock({ simSpeed });
+    const TICK_WALL = 500; // wall-ms between server ticks
+    const TICK_SIM = 60_000; // sim-ms the server jumps per tick (MS_PER_TICK)
+    const wall0 = 1_700_000_000_000; // Date.now()-style basis
+
+    let serverSim = 0;
+    let wall = wall0;
+    let clockSim = 0;
+    for (let i = 0; i < ticks; i++) {
+      // First sample at i=0 anchors; subsequent samples advance the clock.
+      clockSim = clock.fromFrameTime(wall);
+      clock.resync(wall, serverSim);
+      wall += TICK_WALL;
+      serverSim += TICK_SIM;
+    }
+    // Final reading at the last wall instant.
+    clockSim = clock.fromFrameTime(wall);
+    return Math.abs(serverSim - clockSim);
+  }
+
+  it("RED: simSpeed=1 lags the 120× server cadence by a huge margin after ~30 ticks", () => {
+    const lag = replayCadenceLag(1, 30);
+    // The server has advanced 31 × 60_000 = 1_860_000 sim-ms. A simSpeed=1 clock
+    // recovers at most ~1000 sim-ms/tick → it is behind by well over a million ms.
+    expect(lag).toBeGreaterThan(1_000_000);
+  });
+
+  it("GREEN: simSpeed=120 tracks the same cadence within a small tolerance", () => {
+    const lag = replayCadenceLag(120, 30);
+    // 500 wall-ms × 120 = 60_000 sim-ms per tick == the server jump → near-zero lag.
+    // Allow one nudge-clamp's worth of slack for the initial anchor settling.
+    expect(lag).toBeLessThanOrEqual(maxNudgeTolerance());
+  });
+
+  function maxNudgeTolerance(): number {
+    // One maxNudgeMs (500) of residual is the worst-case single-step correction.
+    return 1000;
+  }
+
+  it("setSpeed(120) HALTS the unbounded lag growth that simSpeed=1 suffers", () => {
+    // Start mistuned at simSpeed=1, then correct to 120 — as MapView does on the
+    // first envelope. The defining property: once retuned, the lag STOPS growing
+    // (per-tick advance now matches the server jump), whereas at simSpeed=1 it
+    // grows by ~59_000/tick forever.
+    const TICK_WALL = 500;
+    const TICK_SIM = 60_000;
+    const wall0 = 1_700_000_000_000;
+
+    function lagAfter(setSpeedTo120: boolean): number {
+      const clock = makeSimClock({ simSpeed: 1 });
+      let serverSim = 0;
+      let wall = wall0;
+      // 5 mistuned ticks accumulate a fixed lag.
+      for (let i = 0; i < 5; i++) {
+        clock.fromFrameTime(wall);
+        clock.resync(wall, serverSim);
+        wall += TICK_WALL;
+        serverSim += TICK_SIM;
+      }
+      if (setSpeedTo120) clock.setSpeed(120);
+      // 30 more ticks: at 120 the lag holds/shrinks; at 1 it keeps growing.
+      for (let i = 0; i < 30; i++) {
+        clock.fromFrameTime(wall);
+        clock.resync(wall, serverSim);
+        wall += TICK_WALL;
+        serverSim += TICK_SIM;
+      }
+      return Math.abs(serverSim - clock.fromFrameTime(wall));
+    }
+
+    const lagRetuned = lagAfter(true);
+    const lagStuck = lagAfter(false);
+    // Retuning to 120 keeps the lag near the small residual from the 5 mistuned
+    // ticks; leaving it at 1 lets the lag balloon by another ~30 × 59_000.
+    expect(lagRetuned).toBeLessThan(lagStuck);
+    expect(lagStuck - lagRetuned).toBeGreaterThan(1_000_000);
+  });
+
+  it("setSpeed(0) freezes the clock: fromFrameTime stays constant as wall time elapses", () => {
+    const clock = makeSimClock({ simSpeed: 120 });
+    const wall0 = 1_700_000_000_000;
+    clock.resync(wall0, 600_000);
+    const frozenAt = clock.fromFrameTime(wall0);
+
+    clock.setSpeed(0); // pause
+
+    // Wall time keeps elapsing, but the sim clock must not advance.
+    expect(clock.fromFrameTime(wall0 + 500)).toBe(frozenAt);
+    expect(clock.fromFrameTime(wall0 + 5_000)).toBe(frozenAt);
+    expect(clock.fromFrameTime(wall0 + 60_000)).toBe(frozenAt);
+  });
+
   it("produces a WRONG fraction when resync and fromFrameTime use DIFFERENT clock bases", () => {
     // This pins why performance.now() in resync() breaks the animation:
     // performance.now() is typically a small number (ms since page load, e.g. 50ms),
