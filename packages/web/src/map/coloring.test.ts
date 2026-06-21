@@ -24,14 +24,20 @@ vi.mock("ol/style.js", () => {
   class MockCircleStyle {
     constructor(readonly opts: { radius: number; fill: MockFill; stroke?: MockStroke }) {}
   }
+  class MockText {
+    constructor(readonly opts: { text: string; font?: string }) {}
+  }
   class MockStyle {
-    constructor(readonly opts: { image?: MockCircleStyle; stroke?: MockStroke }) {}
+    constructor(
+      readonly opts: { image?: MockCircleStyle; stroke?: MockStroke; text?: MockText },
+    ) {}
   }
   return {
     Style: MockStyle,
     Fill: MockFill,
     Stroke: MockStroke,
     Circle: MockCircleStyle,
+    Text: MockText,
   };
 });
 
@@ -55,6 +61,9 @@ import {
   HUB_BUCKET_LABELS,
   ROUTE_COLORS,
   ROUTE_BUCKET_LABELS,
+  HUB_EMOJI,
+  TRAILER_EMOJI,
+  TRAILER_STATE_COLORS,
 } from "./coloring.js";
 import type { FeatureLike } from "ol/Feature.js";
 
@@ -217,5 +226,48 @@ describe("trailerStyle (FIX 9 — state-driven trailer coloring)", () => {
     const missing = makeFeature({}) as FeatureLike;
     const unknown = makeFeature({ state: "bogus" }) as FeatureLike;
     expect(trailerStyle(missing)).toBe(trailerStyle(unknown));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Emoji markers: hubs render 🏭 and trailers render 🚛 ON a colored disc (the
+// disc keeps the volume/state color encoding + the click hit-area; the emoji
+// adds at-a-glance identity). Glyphs are single-source-of-truth constants.
+// ---------------------------------------------------------------------------
+
+interface StyleShape {
+  opts: {
+    image?: { opts: { radius: number; fill: { opts: { color: string } } } };
+    text?: { opts: { text: string } };
+  };
+}
+function shape(s: unknown): StyleShape {
+  return s as StyleShape;
+}
+
+describe("emoji markers (hubs 🏭 / trailers 🚛)", () => {
+  it("exports non-empty emoji glyph constants", () => {
+    expect(typeof HUB_EMOJI).toBe("string");
+    expect(HUB_EMOJI.length).toBeGreaterThan(0);
+    expect(typeof TRAILER_EMOJI).toBe("string");
+    expect(TRAILER_EMOJI.length).toBeGreaterThan(0);
+  });
+
+  it("hubStyle renders the hub emoji on a size-16 volume-colored disc (every bucket)", () => {
+    for (let b = 0; b < HUB_COLORS.length; b++) {
+      const s = shape(hubStyle(makeFeature({ volumeBucket: b }) as FeatureLike));
+      expect(s.opts.text?.opts.text).toBe(HUB_EMOJI);
+      // Color encoding preserved: the disc fill still tracks the volume bucket.
+      expect(s.opts.image?.opts.fill.opts.color).toBe(HUB_COLORS[b]);
+      // Disc radius is 16 per the sizing spec.
+      expect(s.opts.image?.opts.radius).toBe(16);
+    }
+  });
+
+  it("trailerStyle renders the trailer emoji on a size-16 state-colored disc", () => {
+    const s = shape(trailerStyle(makeFeature({ state: "onTime" }) as FeatureLike));
+    expect(s.opts.text?.opts.text).toBe(TRAILER_EMOJI);
+    expect(s.opts.image?.opts.fill.opts.color).toBe(TRAILER_STATE_COLORS.onTime);
+    expect(s.opts.image?.opts.radius).toBe(16);
   });
 });
