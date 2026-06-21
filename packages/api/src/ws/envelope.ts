@@ -16,6 +16,30 @@
  */
 
 // ---------------------------------------------------------------------------
+// Sim-speed contract (shared by the backend SpeedController, the ws envelope,
+// and the POST /api/sim/speed route)
+// ---------------------------------------------------------------------------
+
+/**
+ * The effective "speed of time" state echoed on every ws envelope and returned
+ * by `GET/POST /api/sim/speed`.
+ *
+ *  - `multiplier`     — speed relative to the default 1× (= 500 / tickIntervalMs).
+ *  - `tickIntervalMs` — wall-clock ms the paced driver waits between sim ticks
+ *                       (presentation pacing only — NEVER fed to the sim engine).
+ *  - `simSpeed`       — the frontend clock's playback rate in sim-ms per wall-ms
+ *                       (= MS_PER_TICK / tickIntervalMs), or **0 while paused** so
+ *                       the trailer tween freezes.
+ *  - `paused`         — whether the driver holds before advancing the next tick.
+ */
+export interface SimSpeedState {
+  readonly multiplier: number;
+  readonly tickIntervalMs: number;
+  readonly simSpeed: number;
+  readonly paused: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Entity shapes
 // ---------------------------------------------------------------------------
 
