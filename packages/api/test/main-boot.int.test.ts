@@ -118,12 +118,27 @@ describe("main.ts runnable entrypoint boots + serves + shuts down (regression: a
     }
     expect(outcome.ok, `main.ts never served /health in time.\n--- child stderr ---\n${stderr}`).toBe(true);
 
-    // The live read API is wired against the real projected store.
-    const hubsRes = await fetch(`http://127.0.0.1:${port}/hubs`);
-    expect(hubsRes.status).toBe(200);
-    const hubs: unknown = await hubsRes.json();
-    expect(Array.isArray(hubs)).toBe(true);
-    if (Array.isArray(hubs)) expect(hubs.length).toBeGreaterThan(0);
+    // The live read API is wired against the real projected store. /hubs is
+    // seeded by the paced sim AFTER listen (main.ts listens first, then drives
+    // the sim), so poll until the first tick populates the projection rather
+    // than racing the seed.
+    let hubsLen = 0;
+    const hubsDeadline = Date.now() + 25_000;
+    while (Date.now() < hubsDeadline) {
+      const r = await fetch(`http://127.0.0.1:${port}/hubs`);
+      if (r.ok) {
+        const body: unknown = await r.json();
+        if (Array.isArray(body) && body.length > 0) {
+          hubsLen = body.length;
+          break;
+        }
+      }
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    expect(
+      hubsLen,
+      `main.ts never populated /hubs (projection seed).\n--- child stderr ---\n${stderr}`,
+    ).toBeGreaterThan(0);
 
     // Clean shutdown: the SIGTERM handler closes the server + destroys the pool
     // and exits 0 (the behaviour that replaced the broken onClose hook).
