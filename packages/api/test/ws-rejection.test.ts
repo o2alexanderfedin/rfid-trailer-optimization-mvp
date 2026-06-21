@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { WebSocket } from "ws";
-import { attachSnapshotSocket, type ApiDb } from "../src/index.js";
+import { attachSnapshotSocket, makeSpeedController, type ApiDb } from "../src/index.js";
 
 /**
  * M-5: a DB blip on ws connect must NOT crash the process. The fire-and-forget
@@ -25,7 +25,7 @@ async function buildWsApp(
 ): Promise<{ app: FastifyInstance; port: number }> {
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
-  attachSnapshotSocket(app, FAKE_DB, { buildPayload });
+  attachSnapshotSocket(app, FAKE_DB, makeSpeedController(), { buildPayload });
   await app.ready();
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address();

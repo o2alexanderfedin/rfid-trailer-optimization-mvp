@@ -16,11 +16,19 @@ import {
   makeSubscriberRegistry,
   type SubscriberRegistry,
 } from "./WsProvider.js";
-import type { WsEnvelope, SnapshotPayload } from "@mm/api";
+import type { WsEnvelope, SnapshotPayload, SimSpeedState } from "@mm/api";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/** Default speed state stamped on every envelope. */
+const DEFAULT_SPEED: SimSpeedState = {
+  multiplier: 1,
+  tickIntervalMs: 500,
+  simSpeed: 120,
+  paused: false,
+};
 
 const ZERO_KPIS = {
   utilization: 0,
@@ -62,6 +70,7 @@ function makeSnapshotEnvelope(seq: number, simMs = 0): WsEnvelope {
     type: "snapshot",
     seq,
     simMs,
+    speed: DEFAULT_SPEED,
     payload: makeSnapshotPayload(),
   };
 }
@@ -72,6 +81,7 @@ function makeTickEnvelope(seq: number, simMs = 0): WsEnvelope {
     type: "tick",
     seq,
     simMs,
+    speed: DEFAULT_SPEED,
     payload: {},
   };
 }

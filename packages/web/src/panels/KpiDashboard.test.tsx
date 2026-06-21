@@ -134,6 +134,7 @@ describe("F-02: ws envelope drives a REST refetch, never overwrites live KPIs", 
       type: "tick",
       seq: 7,
       simMs: 1000,
+      speed: { multiplier: 1, tickIntervalMs: 500, simSpeed: 120, paused: false },
       payload: {},
     };
     expect(shouldRefetchKpis(tick)).toBe(true);
@@ -145,6 +146,7 @@ describe("F-02: ws envelope drives a REST refetch, never overwrites live KPIs", 
       type: "snapshot",
       seq: 1,
       simMs: 0,
+      speed: { multiplier: 1, tickIntervalMs: 500, simSpeed: 120, paused: false },
       payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: [] },
     };
     expect(shouldRefetchKpis(snap)).toBe(true);

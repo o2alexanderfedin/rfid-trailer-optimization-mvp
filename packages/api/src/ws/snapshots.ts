@@ -15,11 +15,13 @@ import {
   type ExceptionItem,
   type HubState,
   type RouteState,
+  type SimSpeedState,
   type SnapshotPayload,
   type TickPayload,
   type TrailerKeyframe,
   type WsEnvelope,
 } from "./envelope.js";
+import type { SpeedController } from "../sim/speed-controller.js";
 
 /**
  * The realtime ws channel (VIZ-04 versioned envelope).
@@ -455,10 +457,16 @@ function closeIfOpen(socket: WebSocket): void {
 export function attachSnapshotSocket(
   app: FastifyInstance,
   db: ApiDb,
+  speedController: SpeedController,
   options: SnapshotSocketOptions = {},
 ): Broadcast {
   const clients = new Set<WebSocket>();
   const build = options.buildPayload ?? buildSnapshotPayload;
+
+  /** The effective speed state stamped on every envelope (snapshot/resync/tick). */
+  function currentSpeed(): SimSpeedState {
+    return speedController.snapshot();
+  }
 
   // Channel state: current seq counter and the baseline payload for diffTick.
   let seq = 0;
@@ -507,6 +515,7 @@ export function attachSnapshotSocket(
               type: "snapshot",
               seq,
               simMs: 0, // resync resets the client's tween clock to the current state
+              speed: currentSpeed(),
               payload,
             };
             sendRawIfOpen(socket, JSON.stringify(envelope));
@@ -528,6 +537,7 @@ export function attachSnapshotSocket(
           type: "snapshot",
           seq,
           simMs: 0, // initial snapshot: sim clock starts at 0
+          speed: currentSpeed(),
           payload,
         };
         sendRawIfOpen(socket, JSON.stringify(envelope));
@@ -545,6 +555,10 @@ export function attachSnapshotSocket(
     const prev = baseline ?? emptySnapshotPayload();
     baseline = current;
 
+    // Record the authoritative sim time so a later pause/speed POST can push an
+    // immediate envelope at the right clock anchor (controller.getLastSimMs()).
+    speedController.noteSimMs(simMs);
+
     const delta: TickPayload = diffTick(prev, current);
     seq += 1;
     const envelope: WsEnvelope = {
@@ -552,6 +566,7 @@ export function attachSnapshotSocket(
       type: "tick",
       seq,
       simMs,
+      speed: currentSpeed(),
       payload: delta,
     };
     const wire = JSON.stringify(envelope);

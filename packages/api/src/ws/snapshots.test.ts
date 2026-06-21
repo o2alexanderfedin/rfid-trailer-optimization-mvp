@@ -24,6 +24,7 @@ import {
   trailerStateFor,
   type SnapshotPayloadBuilder,
 } from "./snapshots.js";
+import { makeSpeedController } from "../sim/speed-controller.js";
 import type { ApiDb } from "../routes/queries.js";
 
 // ---------------------------------------------------------------------------
@@ -53,7 +54,9 @@ async function buildTestApp(
 }> {
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
-  const broadcast = attachSnapshotSocket(app, FAKE_DB, { buildPayload });
+  const broadcast = attachSnapshotSocket(app, FAKE_DB, makeSpeedController(), {
+    buildPayload,
+  });
   await app.ready();
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address();
@@ -254,6 +257,55 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
     } finally {
       socket.close();
     }
+  });
+
+  it("stamps envelope-level `speed` from the controller snapshot (snapshot + tick)", async () => {
+    const controller = makeSpeedController();
+    controller.setMultiplier(2); // tickIntervalMs 250, simSpeed 240
+    const app = Fastify({ logger: false });
+    await app.register(fastifyWebsocket);
+    const broadcast = attachSnapshotSocket(app, FAKE_DB, controller, {
+      buildPayload: () => Promise.resolve(emptyPayload()),
+    });
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") throw new Error("no port");
+    const { socket, next } = await openSocketBuffered(address.port);
+    try {
+      const snap = await next();
+      expect(snap.speed).toEqual({
+        multiplier: 2,
+        tickIntervalMs: 250,
+        simSpeed: 240,
+        paused: false,
+      });
+
+      // A pause flips simSpeed to 0 on the very next envelope.
+      controller.setPaused(true);
+      await broadcast(60_000);
+      const tick = await next();
+      expect(tick.speed.simSpeed).toBe(0);
+      expect(tick.speed.paused).toBe(true);
+      expect(tick.speed.tickIntervalMs).toBe(250); // interval retained while paused
+    } finally {
+      socket.close();
+      await app.close();
+    }
+  });
+
+  it("broadcast records the simMs via controller.noteSimMs (anchor for immediate pushes)", async () => {
+    const controller = makeSpeedController();
+    const app = Fastify({ logger: false });
+    await app.register(fastifyWebsocket);
+    const broadcast = attachSnapshotSocket(app, FAKE_DB, controller, {
+      buildPayload: () => Promise.resolve(emptyPayload()),
+    });
+    await app.ready();
+    expect(controller.getLastSimMs()).toBe(0);
+    await broadcast(123_456);
+    expect(controller.getLastSimMs()).toBe(123_456);
+    await app.close();
   });
 
   it("tick payload carries ONLY changed entities (diffTick)", async () => {

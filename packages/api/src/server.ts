@@ -14,6 +14,7 @@ import { RollingLoop } from "./optimizer/live-loop.js";
 import { buildTwinSnapshot } from "./optimizer/twin-snapshot.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
 import { SimController } from "./sim/sim-controller.js";
+import { makeSpeedController, type SpeedController } from "./sim/speed-controller.js";
 import type { SnapshotDb } from "./optimizer/twin-snapshot.js";
 
 /**
@@ -122,10 +123,22 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
     freezeWindowMin: 15,
   });
 
+  // ONE SpeedController seeded from the env default tick interval (1× by
+  // default). `onChange` pushes an immediate envelope so a pause/speed POST
+  // reflects without waiting for a (possibly paused) next tick — simSpeed:0 on
+  // pause. `broadcast` is assigned just below; the closure reads it lazily.
   let broadcast: Broadcast | undefined;
+  const defaultIntervalMs = Number(process.env.SIM_TICK_INTERVAL_MS ?? 500);
+  const speedController: SpeedController = makeSpeedController({
+    defaultIntervalMs,
+    onChange: () => {
+      void broadcast?.(speedController.getLastSimMs());
+    },
+  });
+
   if (deps.enableWs ?? true) {
     await app.register(fastifyWebsocket);
-    broadcast = attachSnapshotSocket(app, deps.db);
+    broadcast = attachSnapshotSocket(app, deps.db, speedController);
   }
 
   // SIM-04: The scenario controller — wires `POST /scenario` to a short
