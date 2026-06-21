@@ -30,6 +30,9 @@ pnpm-debug.log*
 # Test / coverage
 coverage/
 .nyc_output/
+# Vitest Browser Mode transient artifacts (attachments + failure screenshots)
+.vitest-attachments/
+**/__screenshots__/
 
 # Editors / OS
 .DS_Store
