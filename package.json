@@ -14,6 +14,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test:all",
     "test": "turbo run build && vitest run --project unit",
     "test:all": "turbo run build && vitest run --no-file-parallelism",
+    "coverage": "vitest run --config vitest.coverage.config.ts --no-file-parallelism",
     "test:e2e:real": "turbo run build --filter @mm/api --filter @mm/web && pnpm --filter @mm/web test:e2e:real"
   },
   "devDependencies": {
