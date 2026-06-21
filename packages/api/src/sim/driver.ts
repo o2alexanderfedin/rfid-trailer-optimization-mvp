@@ -170,8 +170,49 @@ export interface DriveSimulationPacedOptions extends DriveSimulationOptions {
    * Wall-clock milliseconds to wait between consecutive tick broadcasts.
    * Default: 500ms (2 ticks/sec). Increase for a slower demo, decrease for speed.
    * Pure presentation pacing — NOT fed into the sim engine.
+   *
+   * Back-compat fallback: used only when {@link getTickIntervalMs} is absent.
    */
   readonly tickIntervalMs?: number;
+  /**
+   * LIVE tick interval source, read FRESH before each inter-tick pause so the
+   * speed can be retuned mid-run (via the SpeedController). When present it takes
+   * precedence over the once-captured {@link tickIntervalMs}. Returning <= 0 is
+   * coerced to the fallback so the loop never busy-spins. Presentation pacing
+   * only — never fed into the sim engine (DETERMINISM CONTRACT).
+   */
+  readonly getTickIntervalMs?: () => number;
+  /**
+   * LIVE pause source, polled before each tick. While it returns `true` the
+   * driver HOLDS (does not advance/broadcast the next tick) — freezing the demo
+   * without affecting the deterministic event stream. Presentation only.
+   */
+  readonly isPaused?: () => boolean;
+}
+
+/** Poll interval (ms) used while holding for an external pause flag. */
+const PAUSE_POLL_MS = 100;
+
+/** Promise-based sleep helper (presentation pacing only). */
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Resolve the effective inter-tick interval for the current iteration: prefer
+ * the LIVE source, fall back to the captured value, then to 500ms. A non-finite
+ * or non-positive live value falls back too (never 0 → never a busy spin).
+ *
+ * Pure + presentation-only — exported for hermetic unit testing.
+ */
+export function resolveTickIntervalMs(
+  live: (() => number) | undefined,
+  fallbackMs: number | undefined,
+): number {
+  const fallback = fallbackMs ?? 500;
+  if (live === undefined) return fallback;
+  const value = live();
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 /**
@@ -387,7 +428,6 @@ export async function driveSimulationPaced(
     ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
   });
   const ticks = intoTicks(stream);
-  const intervalMs = opts.tickIntervalMs ?? 500;
 
   // Drive ticks one at a time with a wall-clock pause between each.
   // We inline the per-tick logic from `driveTickStream` here to preserve
@@ -407,6 +447,15 @@ export async function driveSimulationPaced(
 
   let driven = 0;
   for (const tick of ticks) {
+    // (0) Honor an external pause BEFORE advancing this tick. While paused the
+    //     driver holds — it does NOT append/project/broadcast — so both the
+    //     backend tick advance and (via simSpeed:0 on the envelope) the frontend
+    //     tween freeze. Polling is cheap and presentation-only; the deterministic
+    //     event STREAM is untouched (pausing only delays delivery).
+    while (opts.isPaused?.() === true) {
+      await sleep(PAUSE_POLL_MS);
+    }
+
     // (a) Append this tick's events (OCC-safe per stream).
     const perStream = new Map<string, SimulatedEvent[]>();
     for (const item of tick) {
@@ -479,9 +528,12 @@ export async function driveSimulationPaced(
 
     driven += 1;
 
-    // Wall-clock pause between ticks (presentation-layer only).
-    if (driven < ticks.length && intervalMs > 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+    // Wall-clock pause between ticks (presentation-layer only). The interval is
+    // read FRESH each iteration so a live speed change (SpeedController) takes
+    // effect on the very next gap — not captured once at start.
+    if (driven < ticks.length) {
+      const intervalMs = resolveTickIntervalMs(opts.getTickIntervalMs, opts.tickIntervalMs);
+      if (intervalMs > 0) await sleep(intervalMs);
     }
   }
   return { ticks: driven };
