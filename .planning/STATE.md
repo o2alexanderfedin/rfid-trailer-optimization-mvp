@@ -84,9 +84,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-20 — v1.0 milestone close-out
-Stopped at: Milestone v1.0 completed + archived; merge to develop + push pending
-Resume file: None
+Last session: 2026-06-20 — v1.0 published (develop @ 00743db, in sync) + post-ship hardening (main.ts boot fix, emoji markers, int-test stability)
+Stopped at: Session resumed at clean between-milestones boundary; awaiting /gsd-new-milestone to scope v1.1
+Resume file: .continue-here.md (root)
 
 ## Operator Next Steps
 
