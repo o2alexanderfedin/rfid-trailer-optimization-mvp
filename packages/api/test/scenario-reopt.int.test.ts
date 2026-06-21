@@ -28,10 +28,15 @@ import { startPgFixture, type PgFixture } from "./pg-fixture.js";
  */
 
 const SEED = 7777;
-// Ticks must be in [31, 40] so trailers have arrived at spokes (tick 31)
-// but have NOT yet departed again (tick 41). At tick 35 all 9 trailers are
-// docked at spoke hubs with currentHubId set — the twin is optimizable.
-const BASELINE_TICKS = 35;
+// Re-baselined for seeded LOG-NORMAL dwell/transit (timing is no longer the old
+// fixed 30/10 ticks). Under seed 7777 the trailers now dock at spokes across
+// ticks 17–34 (T001 docks at ORD at tick 25), so the frontier is set at tick 26
+// — the tick at which the hubCongestion(ORD) injection lands its extra
+// `TrailerDocked` for T001 (docked@25, congested@26). That keeps the test's
+// ORIGINAL intent: a trailer is freshly docked at ORD at the optimizer frontier
+// so the congestion knob implicates T001 in scope and meaningfully changes the
+// objective cost. (Old fixed timing docked T001 at tick 31, hence the old 35.)
+const BASELINE_TICKS = 26;
 const SCENARIO_REOPT_TICKS = 5; // How many ticks the scenario re-opt drives.
 
 describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () => {
@@ -93,7 +98,7 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
     });
     const beforeBody = before.json<{
       epochId: string;
-      recommendations: Array<{ trailerId: string; feasible: boolean; objectiveCost: number }>;
+      recommendations: Array<{ trailerId: string; planId: string; feasible: boolean; objectiveCost: number }>;
     }>();
     const preEpochId = beforeBody.epochId;
     const preRecs = beforeBody.recommendations;
@@ -122,24 +127,32 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
     expect(after.statusCode).toBe(200);
     const afterBody = after.json<{
       epochId: string;
-      recommendations: Array<{ trailerId: string; feasible: boolean; objectiveCost: number }>;
+      recommendations: Array<{ trailerId: string; planId: string; feasible: boolean; objectiveCost: number }>;
     }>();
 
     // FIX G assertion (a): post-injection result must have non-empty recommendations.
     expect(afterBody.recommendations.length).toBeGreaterThan(0);
 
     // FIX G assertion (b): the epochId must be DIFFERENT (a new epoch ran).
-    // The demand spike injects new PackageCreated events → new twin state →
+    // The congestion knob injects a new `TrailerDocked` at ORD → new twin state →
     // the optimizer produces a DIFFERENT (distinct) epoch result.
     expect(afterBody.epochId).not.toBe(preEpochId);
 
-    // FIX G assertion (c): the post-injection total objectiveCost must be
-    // DIFFERENT from the pre-injection total — the demand spike raises load
-    // which changes the rehandle / utilization scores meaningfully.
-    const preTotalCost = preRecs.reduce((s, r) => s + r.objectiveCost, 0);
-    const postTotalCost = afterBody.recommendations.reduce((s, r) => s + r.objectiveCost, 0);
-    // The total objective must differ (rounding tolerance ε = 1e-6).
-    expect(Math.abs(postTotalCost - preTotalCost)).toBeGreaterThan(1e-6);
+    // FIX G assertion (c): the post-injection recommendation SET must differ from
+    // pre — the hubCongestion(ORD) knob brings the ORD-docked trailer (T001) into
+    // the optimizer scope, so the scoped trailers / their plans CHANGE. This is the
+    // meaningful-re-optimization signal. (Asserting on the recommendation IDENTITY
+    // — scoped trailers + plan ids — is timing-robust: the old assertion compared
+    // total objectiveCost, which ties whenever pre and post both scope a single
+    // feasible trailer of equal cost — a numeric coincidence, not a real signal.)
+    const recKey = (recs: ReadonlyArray<{ trailerId: string; planId: string }>): string =>
+      recs
+        .map((r) => `${r.trailerId}:${r.planId}`)
+        .sort()
+        .join("|");
+    expect(recKey(afterBody.recommendations)).not.toBe(recKey(preRecs));
+    // The congested trailer (T001, docked at ORD) is now in scope.
+    expect(afterBody.recommendations.some((r) => r.trailerId === "T001")).toBe(true);
   });
 
   it("(c) DETERMINISM: two identical seed+knob runs produce the same recommendation count", async () => {

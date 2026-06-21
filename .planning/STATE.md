@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 Phase: Milestone v1.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-06-21 — Test coverage 78%→95.2% lines (jsdom+Browser-Mode+MSW web harness; honest cross-package measurement fix)
+Last activity: 2026-06-21 — Seeded log-normal dwell+transit timing in @mm/simulation (realistic right-skew, deterministic; replaces fixed 10/30-tick constants)
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Recent decisions affecting current work:
 
 - [RESOLVED 2026-06-21] The `*.test.tsx`-never-run gap is FIXED (branch feature/test-coverage-90): added a jsdom (`ui`) + Browser-Mode (`browser`, Playwright/Chromium) Vitest project + RTL + MSW; `test:all` now runs the jsdom lane, `test:browser` runs the map. Plus the honest cross-package coverage fix (`pnpm coverage` + `vitest.coverage.config.ts` aliasing `@mm/*`→src). Result: 78%→**95.2% lines / 94.0% stmts / 95.5% fn**, every package ≥91.7%, web 19%→93.3%.
 - [optional follow-up] `wsClient.ts` raw-socket connect path still 56% (the WsProvider render test drives a test context, not a live socket), and overall **branch** coverage is 82% (lines/stmts/fn are 94–95%). A focused top-up would close both if a 90% *branch* bar is wanted.
+- [v1.1 candidate — "realistic time model"] Dwell + transit are now seeded **log-normal** (260621-j57), but: (a) the optimizer still does NOT consume dwell/transit (time-expanded graph uses 15-min steps; populate `serviceMin`/wait-edge weights from the timing draws); (b) no distinct CENTER-hub dwell site exists in the modeled cycle (center arrival is a terminal unload) — `dwellCenter` is wired but unused until a center re-dispatch is modeled; (c) transit is randomized around a median, not yet **distance-derived** (pairs with the ORS road-directions idea).
 
 ### Blockers/Concerns
 
@@ -80,6 +81,7 @@ None — all v1.0 phase blockers resolved at ship. (Phase 4 settled on custom SS
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
 | 260621-0fy | UI speed-of-time gauge (live sim-speed control + clock fix) | 2026-06-21 | 1154ddd | Verified | [260621-0fy-sim-speed-gauge](./quick/260621-0fy-sim-speed-gauge/) |
+| 260621-j57 | Seeded log-normal dwell + transit timing (realistic right-skew, deterministic) | 2026-06-21 | b52d762 | Done | [260621-lognormal-timing](./quick/260621-lognormal-timing/) |
 
 ## Deferred Items
 
@@ -91,8 +93,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-21 — (1) UI speed-of-time gauge (quick task 260621-0fy, merged); (2) test coverage 78%→95.2% lines: fixed a v8 cross-package attribution artifact (`@mm/*`→src alias in a dedicated `pnpm coverage` config) AND added a jsdom+Browser-Mode+MSW web test harness with 14 component/hook/layer tests. Dist gate green: 1138 tests / 115 files.
-Stopped at: coverage work merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1
+Last session: 2026-06-21 — three merges to develop: (1) UI speed-of-time gauge (quick task 260621-0fy); (2) test coverage 78%→95.2% lines (v8 attribution fix + jsdom/Browser-Mode/MSW web harness, 14 tests); (3) seeded log-normal dwell+transit timing (260621-j57) replacing fixed 10/30-tick constants — dedicated timing RNG keeps it orthogonal to RFID/over-carry; deterministic; scenario-reopt keystone re-baselined + strengthened. Gate green: 1149 tests / 117 files.
+Stopped at: log-normal timing merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1 (realistic-time-model items queued in Pending Todos)
 Resume file: .continue-here.md (root)
 
 ## Operator Next Steps

@@ -18,6 +18,8 @@ export { buildRoutes, greatCircle } from "./network/routes.js";
 export type { Rng } from "./rng.js";
 export { makeRng } from "./rng.js";
 export { VirtualClock } from "./clock.js";
+export type { LogNormalParams, TimingConfig } from "./timing.js";
+export { sampleLogNormal, DEFAULT_TIMING_CONFIG } from "./timing.js";
 
 // --- SIM-02: the deterministic tick/event-queue engine ----------------------
 export type {
