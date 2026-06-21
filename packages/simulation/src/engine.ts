@@ -14,6 +14,7 @@ import { buildRoutes } from "./network/routes.js";
 import { makeRng } from "./rng.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
+import { DEFAULT_TIMING_CONFIG, sampleLogNormal, type TimingConfig } from "./timing.js";
 
 /**
  * SIM-02: the seeded, deterministic tick/event-queue engine.
@@ -73,6 +74,14 @@ export interface SimulateOptions {
    * DISTINCT from the RFID salt) so enabling it never perturbs `rng`/`rfidRng`.
    */
   readonly overCarry?: number;
+  /**
+   * DIP: override the seeded log-normal DWELL/TRANSIT distributions. When absent
+   * the engine uses {@link DEFAULT_TIMING_CONFIG}. ALL timing draws flow through a
+   * DEDICATED seeded substream (seed XOR a salt distinct from RFID/over-carry) so
+   * timing variance never perturbs those streams; the result is still fully
+   * reproducible per seed (same seed + same config ⇒ byte-identical timestamps).
+   */
+  readonly timing?: TimingConfig;
 }
 
 /** Options for the store-driven run. */
@@ -88,10 +97,6 @@ const MS_PER_TICK = 60_000;
 /** The seeded domain epoch — the clock starts here; no wall-clock read. */
 const EPOCH_ISO = "2026-04-01T00:00:00.000Z";
 
-/** Ticks a trailer spends in transit on a linehaul leg. */
-const TRANSIT_TICKS = 30;
-/** Ticks between a trailer docking and its next departure (dwell + reload). */
-const DWELL_TICKS = 10;
 /** Ticks between successive package-creation batches at the center hub. */
 const PACKAGE_INTERVAL_TICKS = 15;
 /** Max packages created per batch (1..MAX). */
@@ -150,7 +155,7 @@ class EventQueue {
  * the SINGLE source of truth shared by `simulate` and `runSimulation`.
  */
 function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid, overCarry } = opts;
+  const { seed, durationTicks, rfid, overCarry, timing } = opts;
   if (!Number.isInteger(durationTicks) || durationTicks < 0) {
     throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
   }
@@ -177,6 +182,22 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // the RFID salt (0x5f1da7c3) so it never collides with / perturbs `rfidRng` or
   // `rng`. Same seed + same rate ⇒ byte-identical over-carry decisions.
   const overCarryRng = makeRng((seed ^ 0x3c_a7_1d_5f) >>> 0);
+  // Timing (dwell/transit) draws from its OWN seeded substream — a salt DISTINCT
+  // from the RFID (0x5f1da7c3) and over-carry (0x3ca71d5f) salts — so the
+  // log-normal timing variance is fully reproducible per seed yet NEVER perturbs
+  // the operational `rng`, `rfidRng`, or `overCarryRng` draws. The draws happen
+  // in deterministic event-queue order, so the timestamps are byte-identical for
+  // a fixed seed + timing config.
+  const timingRng = makeRng((seed ^ 0x00_00_77_17) >>> 0);
+  const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
+  /** Draw a whole-tick transit duration (≥1) for one departure. */
+  const drawTransitTicks = (): number =>
+    Math.max(1, Math.round(sampleLogNormal(timingRng, timingConfig.transit)));
+  /** Draw a whole-tick dwell duration (≥1) for one arrival, chosen by hub role. */
+  const drawDwellTicks = (role: "spoke" | "center"): number => {
+    const params = role === "center" ? timingConfig.dwellCenter : timingConfig.dwellSpoke;
+    return Math.max(1, Math.round(sampleLogNormal(timingRng, params)));
+  };
   const clock = new VirtualClock(EPOCH_ISO, MS_PER_TICK);
   const queue = new EventQueue();
   const out: SimulatedEvent[] = [];
@@ -320,7 +341,8 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emitRfid("portal", trailerId, center.hubId, loaded);
     }
 
-    const arriveTick = departTick + TRANSIT_TICKS;
+    // Per-departure seeded log-normal transit (right-skewed; same seed ⇒ same).
+    const arriveTick = departTick + drawTransitTicks();
     schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
   };
 
@@ -418,8 +440,9 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       }
 
       // Schedule the return arrival at the center, which unloads the over-carried
-      // package there (so it does NOT skew spoke utilization/SLA).
-      const returnArriveTick = arriveTick + TRANSIT_TICKS;
+      // package there (so it does NOT skew spoke utilization/SLA). A fresh
+      // per-departure transit draw (the return leg is its own departure).
+      const returnArriveTick = arriveTick + drawTransitTicks();
       const overCarriedId = heldBack;
       schedule(returnArriveTick, () =>
         arriveOverCarriedAtCenter(trailerId, overCarriedId, returnTripId),
@@ -427,7 +450,11 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     }
 
     // Loop: after dwell, the trailer returns toward the center and re-dispatches.
-    const nextDepart = arriveTick + DWELL_TICKS;
+    // The only dwell-then-redispatch site in the modeled cycle is the SPOKE (the
+    // over-carried return arrival at the center is a terminal unload, not a
+    // re-dispatch), so this is the spoke-role dwell draw. `dwellCenter` is wired
+    // into the config for when a distinct center re-dispatch is modeled.
+    const nextDepart = arriveTick + drawDwellTicks("spoke");
     if (nextDepart <= durationTicks) {
       schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
     }
