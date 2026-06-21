@@ -46,3 +46,6 @@ pgdata/
 playwright-report/
 test-results/
 .playwright/
+
+# Local demo screenshot artifacts
+.demo/

@@ -40,14 +40,28 @@ async function main(): Promise<void> {
     // scenarioEpochMs beyond any already-memoized baseline epoch.
     baselineTicks: durationTicks,
   });
-  app.addHook("onClose", async () => {
-    await db.destroy();
-  });
-
   // FIX E: listen FIRST so connected clients can receive live ticks.
   const port = Number(process.env.PORT ?? 3001);
   await app.listen({ port, host: "0.0.0.0" });
   app.log.info(`API listening on :${port}`);
+
+  // buildServer() already called app.ready(), so by the time we get here the
+  // instance is started — addHook("onClose", ...) would throw
+  // FST_ERR_INSTANCE_ALREADY_LISTENING. Tear the DB down on process termination
+  // (SIGINT/SIGTERM) instead, closing the server first so in-flight requests drain.
+  const shutdown = async (signal: string): Promise<void> => {
+    app.log.info(`${signal} received — shutting down`);
+    try {
+      await app.close();
+      await db.destroy();
+    } catch (err: unknown) {
+      app.log.error(err, "error during shutdown");
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
   // Wall-clock ms between each sim-tick broadcast (presentation pacing only —
   // the sim engine is deterministic; only the delivery interval is wall-clock).
