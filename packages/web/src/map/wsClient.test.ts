@@ -22,7 +22,16 @@ import type {
   TrailerKeyframe,
   HubState,
   RouteState,
+  SimSpeedState,
 } from "@mm/api";
+
+/** Default speed state stamped on every envelope (1× / 120 sim-ms per wall-ms). */
+const DEFAULT_SPEED: SimSpeedState = {
+  multiplier: 1,
+  tickIntervalMs: 500,
+  simSpeed: 120,
+  paused: false,
+};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -79,9 +88,9 @@ function makeEnvelope(
   simMs = 0,
 ): WsEnvelope {
   if (type === "snapshot") {
-    return { v: 1, type, seq, simMs, payload: payload as SnapshotPayload };
+    return { v: 1, type, seq, simMs, speed: DEFAULT_SPEED, payload: payload as SnapshotPayload };
   }
-  return { v: 1, type, seq, simMs, payload };
+  return { v: 1, type, seq, simMs, speed: DEFAULT_SPEED, payload };
 }
 
 const TRAILER_A: TrailerKeyframe = {
@@ -154,6 +163,31 @@ describe("parseEnvelope", () => {
 
   it("returns null for missing simMs field", () => {
     expect(parseEnvelope({ v: 1, type: "snapshot", seq: 1, payload: {} })).toBeNull();
+  });
+
+  it("returns null when the envelope-level speed field is missing or malformed", () => {
+    // No speed at all.
+    expect(
+      parseEnvelope({ v: 1, type: "snapshot", seq: 1, simMs: 0, payload: {} }),
+    ).toBeNull();
+    // speed present but incomplete (no `paused`).
+    expect(
+      parseEnvelope({
+        v: 1,
+        type: "tick",
+        seq: 1,
+        simMs: 0,
+        speed: { multiplier: 1, tickIntervalMs: 500, simSpeed: 120 },
+        payload: {},
+      }),
+    ).toBeNull();
+  });
+
+  it("exposes the envelope-level speed (simSpeed drives the local clock)", () => {
+    const env = parseEnvelope(makeEnvelope("tick", 5, { trailers: [TRAILER_A] }, 60_000));
+    expect(env).not.toBeNull();
+    expect(env?.speed.simSpeed).toBe(120);
+    expect(env?.speed.paused).toBe(false);
   });
 });
 

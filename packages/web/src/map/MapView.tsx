@@ -84,8 +84,14 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
   /** Per-trailer animation targets (mutated in place by envelope handler). */
   const trailerAnimsRef = useRef<Map<string, TrailerAnim>>(new Map());
 
-  /** Sim clock — resynced on each envelope's simMs. */
-  const simClockRef = useRef(makeSimClock({ simSpeed: 1 }));
+  /**
+   * Sim clock — resynced on each envelope's simMs AND retuned to the envelope's
+   * `speed.simSpeed` so the local tween advances at the server's effective rate.
+   * Seeded at 120 (= the default 500ms-tick cadence, MS_PER_TICK/tickIntervalMs)
+   * so trailers move at the right pace from the very first frame; the first
+   * envelope corrects it to the server-authoritative value.
+   */
+  const simClockRef = useRef(makeSimClock({ simSpeed: 120 }));
 
   /** Animation handle — removed on teardown. */
   const animationHandleRef = useRef<TrailerAnimationHandle | null>(null);
@@ -247,6 +253,13 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
       const hubSource = hubSourceRef.current;
       const routeSource = routeSourceRef.current;
       if (trailerSource === null) return;
+
+      // Drive the local clock's PLAYBACK RATE from the server's effective speed
+      // (= MS_PER_TICK / tickIntervalMs, or 0 while paused) BEFORE resyncing, so
+      // the tween advances at the same rate the server jumps simMs per tick. This
+      // is the fix that makes trailers track the server pace (and freeze on pause)
+      // — it only mutates a closure number, so it never re-renders the map.
+      simClockRef.current.setSpeed(envelope.speed.simSpeed);
 
       // Resync the sim clock to the envelope's authoritative simMs.
       // FIX D: use Date.now() — OL's frameState.time is also Date.now()-based

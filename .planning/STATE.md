@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 Phase: Milestone v1.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-06-20 — Milestone v1.0 completed and archived
+Last activity: 2026-06-21 — Completed quick task 260621-0fy: UI speed-of-time gauge (live sim-speed control + clock fix)
 
 ## Performance Metrics
 
@@ -68,11 +68,17 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [tech-debt] `*.test.tsx` panel tests (KpiDashboard, AlertFeed, the SpeedControl shell, …) are NEVER run — the root vitest `unit` project includes only `*.test.ts` (`vitest.config.ts`) and jsdom/@testing-library are not installed. Pre-existing; surfaced during the speed-gauge quick task (component logic is covered by a `.ts` test, but DOM render is not unit-asserted). Fix = add jsdom + @testing-library/react, include `*.test.tsx` in the unit project, repair any rotted DOM tests. Separate `/gsd-quick`.
 
 ### Blockers/Concerns
 
 None — all v1.0 phase blockers resolved at ship. (Phase 4 settled on custom SSP min-cost-flow + VRPTW with a glpk.js correctness oracle; Phase 5 OpenLayers perf resolved via flat-heap postrender animation, soak-proven.) Carried technical debt is tracked in PROJECT.md and `milestones/v1.0-MILESTONE-AUDIT.md`.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260621-0fy | UI speed-of-time gauge (live sim-speed control + clock fix) | 2026-06-21 | 1154ddd | Verified | [260621-0fy-sim-speed-gauge](./quick/260621-0fy-sim-speed-gauge/) |
 
 ## Deferred Items
 
@@ -84,8 +90,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-20 — v1.0 published (develop @ 00743db, in sync) + post-ship hardening (main.ts boot fix, emoji markers, int-test stability)
-Stopped at: Session resumed at clean between-milestones boundary; awaiting /gsd-new-milestone to scope v1.1
+Last session: 2026-06-21 — quick task 260621-0fy: UI speed-of-time gauge (live backend tick-interval control + GET/POST /api/sim/speed + envelope speed echo) and fixed the latent simClock simSpeed=1 bug (now driven from envelope.speed.simSpeed). Full gate green: 928 tests / 102 files.
+Stopped at: speed-gauge feature merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1
 Resume file: .continue-here.md (root)
 
 ## Operator Next Steps

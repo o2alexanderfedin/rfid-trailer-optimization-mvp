@@ -57,6 +57,7 @@ export type {
   ExceptionItem,
   PlanDelta,
   KpiSnapshot,
+  SimSpeedState,
 } from "./ws/envelope.js";
 export { diffTick } from "./ws/envelope.js";
 export { driveSimulation, driveSimulationPaced } from "./sim/driver.js";
@@ -64,6 +65,13 @@ export type {
   DriveSimulationOptions,
   DriveSimulationPacedOptions,
 } from "./sim/driver.js";
+export { makeSpeedController } from "./sim/speed-controller.js";
+export type {
+  SpeedController,
+  SpeedControllerOptions,
+} from "./sim/speed-controller.js";
+export { registerSimSpeedRoutes } from "./routes/sim-speed.js";
+export type { SimSpeedControllerPort } from "./routes/sim-speed.js";
 
 // --- Walking-skeleton spine (Plan 01) — kept green; GET /hubs preserved ------
 export { buildApp } from "./app.js";

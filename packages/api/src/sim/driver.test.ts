@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DomainEvent } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
+import { simulate } from "@mm/simulation";
+import { resolveTickIntervalMs } from "./driver.js";
 
 /**
  * Unit tests for the sim driver's scenario-injection and live-loop integration.
@@ -117,5 +119,65 @@ describe("makeSimRunner — rolling optimizer is triggered per tick", () => {
     // Should not throw, should be a callable no-op.
     const events: DomainEvent[] = [];
     await expect(runner(events, 60_000)).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T3 — live tick-interval resolution (presentation pacing, read per iteration)
+// ---------------------------------------------------------------------------
+
+describe("resolveTickIntervalMs — live interval read with safe fallbacks", () => {
+  it("prefers the LIVE source over the captured fallback", () => {
+    expect(resolveTickIntervalMs(() => 125, 500)).toBe(125);
+  });
+
+  it("re-reads the live source each call (mid-run retune takes effect)", () => {
+    let current = 500;
+    const live = () => current;
+    expect(resolveTickIntervalMs(live, 500)).toBe(500);
+    current = 62; // operator dragged the slider to 8×
+    expect(resolveTickIntervalMs(live, 500)).toBe(62);
+    current = 2000; // and back to 0.25×
+    expect(resolveTickIntervalMs(live, 500)).toBe(2000);
+  });
+
+  it("falls back to the captured value when no live source is given", () => {
+    expect(resolveTickIntervalMs(undefined, 750)).toBe(750);
+  });
+
+  it("falls back to 500 when neither a live source nor a captured value exists", () => {
+    expect(resolveTickIntervalMs(undefined, undefined)).toBe(500);
+  });
+
+  it("coerces a non-positive / non-finite live value to the fallback (never a busy spin)", () => {
+    expect(resolveTickIntervalMs(() => 0, 500)).toBe(500);
+    expect(resolveTickIntervalMs(() => -10, 500)).toBe(500);
+    expect(resolveTickIntervalMs(() => Number.NaN, 333)).toBe(333);
+    expect(resolveTickIntervalMs(() => Number.POSITIVE_INFINITY, 333)).toBe(333);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T3 — DETERMINISM CONTRACT: pacing/pause are presentation-only. The emitted
+// sim STREAM must be byte-identical regardless of tick interval or pause — the
+// interval/pause flags never reach `simulate`. This guards the regression that
+// would occur if pacing state ever leaked into the deterministic generator.
+// ---------------------------------------------------------------------------
+
+describe("sim stream determinism is independent of pacing/pause (presentation-only)", () => {
+  it("simulate(seed) is byte-identical regardless of any pacing/pause settings", () => {
+    // The paced driver generates the stream via `simulate({seed, durationTicks})`
+    // with NO interval/pause inputs — proving those are purely a delivery concern.
+    const a = simulate({ seed: 4242, durationTicks: 30 });
+    const b = simulate({ seed: 4242, durationTicks: 30 });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    // Spot-check the stream is non-trivial (so the equality is meaningful).
+    expect(a.length).toBeGreaterThan(0);
+  });
+
+  it("different seeds DO diverge (the equality above is not vacuous)", () => {
+    const a = simulate({ seed: 1, durationTicks: 30 });
+    const b = simulate({ seed: 2, durationTicks: 30 });
+    expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
   });
 });

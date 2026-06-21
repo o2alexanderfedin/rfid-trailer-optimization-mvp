@@ -20,6 +20,7 @@ import { TrailerDetail } from "./TrailerDetail.js";
 import { AuditTimeline } from "./AuditTimeline.js";
 import { KpiDashboard } from "./KpiDashboard.js";
 import { MoneySlide } from "./MoneySlide.js";
+import { SpeedControl } from "./SpeedControl.js";
 import type { FeedEntry } from "./AlertFeed.js";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,9 @@ export function RightRail({
 
   return (
     <aside className="right-rail" data-testid="right-rail" aria-label="Operator panels">
+      {/* --- Speed of Time gauge (fixed-height, decoupled from the map) ---- */}
+      <SpeedControl />
+
       {/* --- Alert Feed (UI-01) ------------------------------------------- */}
       <section className="right-rail__section right-rail__section--feed">
         <header className="right-rail__section-header">

@@ -62,12 +62,22 @@ export function parseEnvelope(raw: unknown): WsEnvelope | null {
   if (r["type"] !== "snapshot" && r["type"] !== "tick") return null;
   if (typeof r["seq"] !== "number") return null;
   if (typeof r["simMs"] !== "number") return null;
+  if (!isSimSpeedState(r["speed"])) return null;
   if (typeof r["payload"] !== "object" || r["payload"] === null) return null;
 
-  if (r["type"] === "snapshot") {
-    return raw as WsEnvelope;
-  }
   return raw as WsEnvelope;
+}
+
+/** Validate the envelope-level `speed` field (the SimSpeedState wire contract). */
+function isSimSpeedState(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  return (
+    typeof s["multiplier"] === "number" &&
+    typeof s["tickIntervalMs"] === "number" &&
+    typeof s["simSpeed"] === "number" &&
+    typeof s["paused"] === "boolean"
+  );
 }
 
 /**

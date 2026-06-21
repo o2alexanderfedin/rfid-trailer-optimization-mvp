@@ -16,6 +16,30 @@
  */
 
 // ---------------------------------------------------------------------------
+// Sim-speed contract (shared by the backend SpeedController, the ws envelope,
+// and the POST /api/sim/speed route)
+// ---------------------------------------------------------------------------
+
+/**
+ * The effective "speed of time" state echoed on every ws envelope and returned
+ * by `GET/POST /api/sim/speed`.
+ *
+ *  - `multiplier`     — speed relative to the default 1× (= 500 / tickIntervalMs).
+ *  - `tickIntervalMs` — wall-clock ms the paced driver waits between sim ticks
+ *                       (presentation pacing only — NEVER fed to the sim engine).
+ *  - `simSpeed`       — the frontend clock's playback rate in sim-ms per wall-ms
+ *                       (= MS_PER_TICK / tickIntervalMs), or **0 while paused** so
+ *                       the trailer tween freezes.
+ *  - `paused`         — whether the driver holds before advancing the next tick.
+ */
+export interface SimSpeedState {
+  readonly multiplier: number;
+  readonly tickIntervalMs: number;
+  readonly simSpeed: number;
+  readonly paused: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Entity shapes
 // ---------------------------------------------------------------------------
 
@@ -139,10 +163,16 @@ export interface TickPayload {
 // Versioned envelope union
 // ---------------------------------------------------------------------------
 
-/** Wire envelope. `v` = protocol version for evolution-safe narrowing. */
+/**
+ * Wire envelope. `v` = protocol version for evolution-safe narrowing.
+ *
+ * `speed` is an envelope-level field (beside `simMs`, NOT inside `payload`), so
+ * the client can drive its local tween clock at the server's effective rate and
+ * `diffTick` (which only operates on payloads) is untouched.
+ */
 export type WsEnvelope =
-  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly payload: SnapshotPayload }
-  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly payload: TickPayload };
+  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly speed: SimSpeedState; readonly payload: SnapshotPayload }
+  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly speed: SimSpeedState; readonly payload: TickPayload };
 
 // ---------------------------------------------------------------------------
 // diffTick: pure delta builder (data-in / data-out, no I/O, unit-testable)
