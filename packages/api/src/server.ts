@@ -9,6 +9,7 @@ import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
 import { registerScenarioRoutes } from "./routes/scenario.js";
+import { registerSimSpeedRoutes } from "./routes/sim-speed.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
 import { RollingLoop } from "./optimizer/live-loop.js";
 import { buildTwinSnapshot } from "./optimizer/twin-snapshot.js";
@@ -79,6 +80,13 @@ export interface BuiltServer {
    * can call `loop.tick()` per tick and produce live recommendations.
    */
   readonly simController: SimController;
+  /**
+   * The "speed of time" controller (GET/POST /sim/speed). `main.ts` passes its
+   * `getTickIntervalMs`/`isPaused` to `driveSimulationPaced` so the live demo's
+   * pacing is tunable mid-run. The snapshot builder stamps its `snapshot()` on
+   * every ws envelope.
+   */
+  readonly speedController: SpeedController;
 }
 
 /** Build the Fastify server (REST query routes + optional ws snapshots). */
@@ -158,6 +166,10 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   });
   registerScenarioRoutes(app, simController);
 
+  // The "speed of time" surface: GET/POST /sim/speed mutate the ONE controller
+  // the paced driver + snapshot builder read. Live-tunable, server-authoritative.
+  registerSimSpeedRoutes(app, speedController);
+
   await app.ready();
-  return { app, broadcast, optimizer, loop, simController };
+  return { app, broadcast, optimizer, loop, simController, speedController };
 }

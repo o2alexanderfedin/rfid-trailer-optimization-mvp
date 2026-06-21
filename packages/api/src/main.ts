@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   await sql.raw(PROJECTIONS_SCHEMA_SQL).execute(db);
 
   const durationTicks = Number(process.env.SIM_TICKS ?? 120);
-  const { app, broadcast, loop } = await buildServer({
+  const { app, broadcast, loop, speedController } = await buildServer({
     db,
     simSeed: seed,
     // FIX F: pass the full baseline tick count so scenario injection computes
@@ -65,6 +65,9 @@ async function main(): Promise<void> {
 
   // Wall-clock ms between each sim-tick broadcast (presentation pacing only —
   // the sim engine is deterministic; only the delivery interval is wall-clock).
+  // The interval/pause are now LIVE-tunable via the SpeedController (GET/POST
+  // /sim/speed): the paced driver reads `getTickIntervalMs()`/`isPaused()` fresh
+  // each iteration. `tickIntervalMs` is kept as the back-compat fallback.
   const tickIntervalMs = Number(process.env.SIM_TICK_INTERVAL_MS ?? 500);
 
   // Drive the sim AFTER listen so every connected client receives live ticks.
@@ -81,6 +84,8 @@ async function main(): Promise<void> {
     broadcast,
     loop,
     tickIntervalMs,
+    getTickIntervalMs: () => speedController.getTickIntervalMs(),
+    isPaused: () => speedController.isPaused(),
   }).catch((err: unknown) => {
     app.log.error(err, "paced sim driver error");
   });

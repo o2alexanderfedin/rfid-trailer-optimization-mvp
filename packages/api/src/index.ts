@@ -70,6 +70,8 @@ export type {
   SpeedController,
   SpeedControllerOptions,
 } from "./sim/speed-controller.js";
+export { registerSimSpeedRoutes } from "./routes/sim-speed.js";
+export type { SimSpeedControllerPort } from "./routes/sim-speed.js";
 
 // --- Walking-skeleton spine (Plan 01) — kept green; GET /hubs preserved ------
 export { buildApp } from "./app.js";
