@@ -16,8 +16,25 @@
  *
  * Exported for the Legend component (same arrays → single source of truth).
  */
-import { Style, Fill, Stroke, Circle as CircleStyle } from "ol/style.js";
+import { Style, Fill, Stroke, Circle as CircleStyle, Text } from "ol/style.js";
 import type { FeatureLike } from "ol/Feature.js";
+
+// ---------------------------------------------------------------------------
+// Emoji glyph markers — drawn ON the colored disc. The disc keeps the
+// volume/state color encoding + the click hit-area + the leak-tested feature
+// discipline; the emoji adds at-a-glance identity. Single source of truth.
+// ---------------------------------------------------------------------------
+
+/** Glyph drawn on every hub marker. */
+export const HUB_EMOJI = "🏭";
+/** Glyph drawn on every trailer marker. */
+export const TRAILER_EMOJI = "🚛";
+
+/** Disc radius (px) for hub + trailer markers. */
+const MARKER_RADIUS = 16;
+/** Emoji font — sized comparably to the size-16 (32px) disc. */
+const EMOJI_FONT =
+  '24px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
 
 // ---------------------------------------------------------------------------
 // Hub color ramp (green → red, 5 buckets)
@@ -49,20 +66,22 @@ const HUB_STYLE_CACHE: readonly Style[] = HUB_COLORS.map(
   (color) =>
     new Style({
       image: new CircleStyle({
-        radius: 8,
+        radius: MARKER_RADIUS,
         fill: new Fill({ color }),
         stroke: new Stroke({ color: "#ffffff", width: 2 }),
       }),
+      text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
     }),
 );
 
 /** Default hub style when the bucket is missing or out of range. */
 const HUB_STYLE_DEFAULT = new Style({
   image: new CircleStyle({
-    radius: 8,
+    radius: MARKER_RADIUS,
     fill: new Fill({ color: "#9aa0a6" }),
     stroke: new Stroke({ color: "#ffffff", width: 2 }),
   }),
+  text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
 });
 
 /**
@@ -186,10 +205,11 @@ export const TRAILER_STATE_COLORS: Readonly<Record<string, string>> = {
 function makeTrailerStyle(color: string): Style {
   return new Style({
     image: new CircleStyle({
-      radius: 5,
+      radius: MARKER_RADIUS,
       fill: new Fill({ color }),
       stroke: new Stroke({ color: "#ffffff", width: 1.5 }),
     }),
+    text: new Text({ text: TRAILER_EMOJI, font: EMOJI_FONT }),
   });
 }
 
