@@ -13,12 +13,17 @@
     "typecheck": "tsc -p tsconfig.eslint.json --noEmit",
     "check": "pnpm lint && pnpm typecheck && pnpm test:all",
     "test": "turbo run build && vitest run --project unit",
-    "test:all": "turbo run build && vitest run --no-file-parallelism",
+    "test:all": "turbo run build && vitest run --no-file-parallelism --project unit --project integration --project ui",
+    "test:ui": "vitest run --project ui",
+    "test:browser": "vitest run --project browser",
+    "coverage": "vitest run --config vitest.coverage.config.ts --no-file-parallelism",
     "test:e2e:real": "turbo run build --filter @mm/api --filter @mm/web && pnpm --filter @mm/web test:e2e:real"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
     "@types/node": "22.12.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "@vitest/browser-playwright": "4.1.9",
     "@vitest/coverage-v8": "4.1.9",
     "eslint": "9.39.4",
     "jiti": "^2.7.0",

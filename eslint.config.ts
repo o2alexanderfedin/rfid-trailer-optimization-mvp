@@ -15,6 +15,9 @@ export default tseslint.config(
       "**/playwright-report/**",
       "**/test-results/**",
       "packages/web/dist/**",
+      // MSW-generated service worker (vendored by `npx msw init public`) — not
+      // part of the typed program; the browser test harness serves it as-is.
+      "packages/web/public/mockServiceWorker.js",
       // Local, untracked tooling/agent caches (mirrors .gitignore) — never
       // part of the typed project, so the typed linter must not pick them up.
       "**/.remember/**",
@@ -47,6 +50,29 @@ export default tseslint.config(
   {
     // Config & test-tooling files run outside the typed program.
     files: ["**/*.config.ts", "**/*.config.js", "**/playwright.config.ts"],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Fully detach the config files from the typed project AND keep ESM parsing
+    // so `import.meta` (used in vitest.coverage.config.ts) parses as a module,
+    // not a script. Separate block so it merges over disableTypeChecked above.
+    files: ["**/*.config.ts", "**/*.config.js", "**/playwright.config.ts"],
+    languageOptions: {
+      parserOptions: {
+        project: false,
+        projectService: false,
+        sourceType: "module",
+      },
+    },
+  },
+  {
+    // Vitest Browser Mode tests (`*.browser.test.tsx`) execute in a real browser
+    // type universe — their `vitest-browser-react` `render()` result and the
+    // `@vitest/browser` `expect.element`/locator augmentations are not part of
+    // the node-typed flat program (`tsconfig.eslint.json` uses `types:["node"]`).
+    // Run them un-type-checked (same treatment as config files) so the locator
+    // chains don't trip the unsafe-`any` family — NO `any` enters product code.
+    files: ["**/*.browser.test.tsx"],
     ...tseslint.configs.disableTypeChecked,
   },
 );

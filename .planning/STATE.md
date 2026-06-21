@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 Phase: Milestone v1.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-06-21 — Completed quick task 260621-0fy: UI speed-of-time gauge (live sim-speed control + clock fix)
+Last activity: 2026-06-21 — Test coverage 78%→95.2% lines (jsdom+Browser-Mode+MSW web harness; honest cross-package measurement fix)
 
 ## Performance Metrics
 
@@ -68,7 +68,8 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- [tech-debt] `*.test.tsx` panel tests (KpiDashboard, AlertFeed, the SpeedControl shell, …) are NEVER run — the root vitest `unit` project includes only `*.test.ts` (`vitest.config.ts`) and jsdom/@testing-library are not installed. Pre-existing; surfaced during the speed-gauge quick task (component logic is covered by a `.ts` test, but DOM render is not unit-asserted). Fix = add jsdom + @testing-library/react, include `*.test.tsx` in the unit project, repair any rotted DOM tests. Separate `/gsd-quick`.
+- [RESOLVED 2026-06-21] The `*.test.tsx`-never-run gap is FIXED (branch feature/test-coverage-90): added a jsdom (`ui`) + Browser-Mode (`browser`, Playwright/Chromium) Vitest project + RTL + MSW; `test:all` now runs the jsdom lane, `test:browser` runs the map. Plus the honest cross-package coverage fix (`pnpm coverage` + `vitest.coverage.config.ts` aliasing `@mm/*`→src). Result: 78%→**95.2% lines / 94.0% stmts / 95.5% fn**, every package ≥91.7%, web 19%→93.3%.
+- [optional follow-up] `wsClient.ts` raw-socket connect path still 56% (the WsProvider render test drives a test context, not a live socket), and overall **branch** coverage is 82% (lines/stmts/fn are 94–95%). A focused top-up would close both if a 90% *branch* bar is wanted.
 
 ### Blockers/Concerns
 
@@ -90,8 +91,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-21 — quick task 260621-0fy: UI speed-of-time gauge (live backend tick-interval control + GET/POST /api/sim/speed + envelope speed echo) and fixed the latent simClock simSpeed=1 bug (now driven from envelope.speed.simSpeed). Full gate green: 928 tests / 102 files.
-Stopped at: speed-gauge feature merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1
+Last session: 2026-06-21 — (1) UI speed-of-time gauge (quick task 260621-0fy, merged); (2) test coverage 78%→95.2% lines: fixed a v8 cross-package attribution artifact (`@mm/*`→src alias in a dedicated `pnpm coverage` config) AND added a jsdom+Browser-Mode+MSW web test harness with 14 component/hook/layer tests. Dist gate green: 1138 tests / 115 files.
+Stopped at: coverage work merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1
 Resume file: .continue-here.md (root)
 
 ## Operator Next Steps

@@ -11,7 +11,11 @@
  * The component itself is a thin shell over these helpers.
  */
 import { describe, expect, it } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
+import { server } from "../../test/msw/server.js";
 import {
+  KpiDashboard,
   applyKpiPartial,
   formatKpiValue,
   shouldAnimate,
@@ -20,6 +24,7 @@ import {
   type KpiState,
   type KpiCardDef,
 } from "./KpiDashboard.js";
+import { WsProvider } from "../map/WsProvider.js";
 import type { KpiSnapshot, WsEnvelope } from "@mm/api";
 
 // ---------------------------------------------------------------------------
@@ -283,5 +288,185 @@ describe("KpiState", () => {
     expect(state.current).toBeDefined();
     expect(state.animatingFields).toBeDefined();
     expect(state.animatingFields instanceof Set).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// <KpiDashboard /> — jsdom render (ui lane)
+//
+// Renders the real component against the MSW `/api/kpis` boundary. Covers:
+//  - the zero / loading state before the initial fetch resolves ("—")
+//  - the populated 8-card grid after `GET /api/kpis` (formatted values)
+//  - the honest null branches (onTimeDeparture / onTimeArrival null → "—")
+//  - a fetch-error path that leaves the honest zero state in place
+//  - the ws-driven refetch + animation flash class (mergeLiveKpis path) under
+//    a real WsProvider whose MSW ws channel auto-sends snapshot+tick on connect
+//
+// All overrides are per-test via `server.use(...)` so the shared handler file is
+// never edited (the jsdom setup resets handlers between tests).
+// ---------------------------------------------------------------------------
+
+/** The KPI snapshot the default shared handler returns (handlers.ts `KPIS`). */
+const DEFAULT_KPIS: KpiSnapshot = {
+  utilization: 0.82,
+  rehandleCount: 7,
+  rehandleMinutes: 35,
+  wrongTrailerCount: 2,
+  missedUnloadCount: 1,
+  slaViolationRate: 0.04,
+  onTimeDeparture: 0.93,
+  onTimeArrival: 0.9,
+  baseline: {
+    utilization: 0.71,
+    rehandleCount: 19,
+    rehandleMinutes: 95,
+    wrongTrailerCount: 6,
+    missedUnloadCount: 4,
+    slaViolationRate: 0.12,
+    onTimeDeparture: 0.81,
+    onTimeArrival: 0.78,
+  },
+};
+
+/** Read the rendered value text for a card field (via its stable test id). */
+function valueOf(field: string): string {
+  return screen.getByTestId(`kpi-value-${field}`).textContent ?? "";
+}
+
+describe("<KpiDashboard /> (jsdom ui lane)", () => {
+  it("renders the zero / loading state with '—' on-time before the fetch resolves", () => {
+    // Hold the fetch open (never resolves) so we observe the pre-fetch state.
+    server.use(
+      http.get("/api/kpis", () => new Promise<never>(() => {})),
+    );
+
+    render(<KpiDashboard />);
+
+    // The dashboard shell mounts immediately with all 8 cards.
+    expect(screen.getByTestId("kpi-dashboard")).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^kpi-card-/)).toHaveLength(8);
+
+    // ZERO_SNAPSHOT defaults: counts/rates are 0, on-time fields are honest null.
+    expect(valueOf("utilization")).toBe("0.0%");
+    expect(valueOf("rehandleCount")).toBe("0");
+    expect(valueOf("rehandleMinutes")).toBe("0.0 min");
+    // F-03: never a fabricated 100% — the no-data on-time fields render an em-dash.
+    expect(valueOf("onTimeDeparture")).toBe("—");
+    expect(valueOf("onTimeArrival")).toBe("—");
+  });
+
+  it("renders all 8 populated metrics with formatted values from GET /api/kpis", async () => {
+    // The default shared handler already serves `KPIS`; assert each card formats.
+    render(<KpiDashboard />);
+
+    await waitFor(() => {
+      expect(valueOf("utilization")).toBe("82.0%");
+    });
+
+    // Percent / fraction fields.
+    expect(valueOf("slaViolationRate")).toBe("4.0%");
+    expect(valueOf("onTimeDeparture")).toBe("93.0%");
+    expect(valueOf("onTimeArrival")).toBe("90.0%");
+    // Count fields.
+    expect(valueOf("rehandleCount")).toBe("7");
+    expect(valueOf("wrongTrailerCount")).toBe("2");
+    expect(valueOf("missedUnloadCount")).toBe("1");
+    // Minutes field.
+    expect(valueOf("rehandleMinutes")).toBe("35.0 min");
+
+    // Every card carries its label (single source of truth: kpiCards()).
+    for (const card of kpiCards()) {
+      const el = screen.getByTestId(`kpi-card-${card.field}`);
+      expect(within(el).getByText(card.label)).toBeInTheDocument();
+    }
+  });
+
+  it("renders '—' for the null on-time branches (F-03 honest no-data)", async () => {
+    // Override the boundary to report on-time metrics as unavailable (null).
+    const nullOnTime: KpiSnapshot = {
+      ...DEFAULT_KPIS,
+      onTimeDeparture: null,
+      onTimeArrival: null,
+    };
+    server.use(http.get("/api/kpis", () => HttpResponse.json(nullOnTime)));
+
+    render(<KpiDashboard />);
+
+    // Wait for the populated (non-on-time) value to confirm the fetch landed.
+    await waitFor(() => {
+      expect(valueOf("utilization")).toBe("82.0%");
+    });
+
+    // The null on-time fields render an em-dash, never a fabricated percentage.
+    expect(valueOf("onTimeDeparture")).toBe("—");
+    expect(valueOf("onTimeArrival")).toBe("—");
+  });
+
+  it("keeps the honest zero state when the initial fetch errors (no crash)", async () => {
+    server.use(
+      http.get("/api/kpis", () => new HttpResponse(null, { status: 500 })),
+    );
+
+    render(<KpiDashboard />);
+
+    // The component swallows the error and leaves the zero-state snapshot.
+    // Give the rejected fetch a microtask to settle, then assert the em-dash.
+    await waitFor(() => {
+      expect(valueOf("rehandleCount")).toBe("0");
+    });
+    expect(valueOf("onTimeDeparture")).toBe("—");
+    expect(valueOf("onTimeArrival")).toBe("—");
+    // No animation should have fired on an errored load.
+    expect(screen.getByTestId("kpi-value-rehandleCount")).toHaveAttribute(
+      "data-animating",
+      "false",
+    );
+  });
+
+  it("refetches on a ws tick and flashes the changed field (mergeLiveKpis path)", async () => {
+    // First GET → initial values; subsequent GETs (driven by the ws snapshot +
+    // tick the MSW ws channel auto-sends) → a CHANGED rehandleCount so the
+    // animation branch fires and the `--animating` class is applied.
+    let call = 0;
+    server.use(
+      http.get("/api/kpis", () => {
+        call += 1;
+        const value: KpiSnapshot =
+          call === 1
+            ? DEFAULT_KPIS
+            : { ...DEFAULT_KPIS, rehandleCount: 11 };
+        return HttpResponse.json(value);
+      }),
+    );
+
+    render(
+      <WsProvider>
+        <KpiDashboard />
+      </WsProvider>,
+    );
+
+    // The ws snapshot+tick trigger refetches; the new value (11) is merged via
+    // mergeLiveKpis and the changed field flashes (kpi-card--animating +
+    // data-animating="true"). The initial "7" REST value may be superseded
+    // before the first assertion runs, so we assert the post-refetch value.
+    await waitFor(() => {
+      expect(valueOf("rehandleCount")).toBe("11");
+    });
+    // At least two GETs occurred: the initial mount fetch + ws-driven refetch.
+    expect(call).toBeGreaterThanOrEqual(2);
+    await waitFor(() => {
+      expect(screen.getByTestId("kpi-card-rehandleCount")).toHaveClass(
+        "kpi-card--animating",
+      );
+    });
+    expect(screen.getByTestId("kpi-value-rehandleCount")).toHaveAttribute(
+      "data-animating",
+      "true",
+    );
+
+    // An unchanged field must NOT be flagged as animating.
+    expect(screen.getByTestId("kpi-card-utilization")).not.toHaveClass(
+      "kpi-card--animating",
+    );
   });
 });
