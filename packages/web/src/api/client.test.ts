@@ -145,6 +145,66 @@ describe("client.ts (MSW fetch lane)", () => {
     await expect(fetchHubs()).rejects.toThrow(/GET \/api\/hubs failed: 500/);
   });
 
+  it("throws when GET /api/routes fails", async () => {
+    server.use(
+      http.get("/api/routes", () => new HttpResponse(null, { status: 503 })),
+    );
+    await expect(fetchRoutes()).rejects.toThrow(
+      /GET \/api\/routes failed: 503/,
+    );
+  });
+
+  it("throws when GET /api/kpis fails", async () => {
+    server.use(
+      http.get("/api/kpis", () => new HttpResponse(null, { status: 500 })),
+    );
+    await expect(fetchKpis()).rejects.toThrow(/GET \/api\/kpis failed: 500/);
+  });
+
+  it("throws when GET /api/kpis/comparison fails", async () => {
+    server.use(
+      http.get("/api/kpis/comparison", () =>
+        new HttpResponse(null, { status: 500 }),
+      ),
+    );
+    await expect(fetchKpiComparison()).rejects.toThrow(
+      /GET \/api\/kpis\/comparison failed: 500/,
+    );
+  });
+
+  it("fetchTrailerPlan throws on a non-404 error response", async () => {
+    server.use(
+      http.get("/api/trailers/:id/plan", () =>
+        new HttpResponse(null, { status: 500 }),
+      ),
+    );
+    await expect(fetchTrailerPlan("T-err")).rejects.toThrow(
+      /GET \/api\/trailers\/T-err\/plan failed: 500/,
+    );
+  });
+
+  it("fetchTrailerHistory throws when the history endpoint fails", async () => {
+    server.use(
+      http.get("/api/trailers/:id/history", () =>
+        new HttpResponse(null, { status: 500 }),
+      ),
+    );
+    await expect(fetchTrailerHistory("T-err")).rejects.toThrow(
+      /GET \/api\/trailers\/T-err\/history failed: 500/,
+    );
+  });
+
+  it("fetchPackageHistory throws when the history endpoint fails", async () => {
+    server.use(
+      http.get("/api/packages/:id/history", () =>
+        new HttpResponse(null, { status: 500 }),
+      ),
+    );
+    await expect(fetchPackageHistory("P-err")).rejects.toThrow(
+      /GET \/api\/packages\/P-err\/history failed: 500/,
+    );
+  });
+
   it("throws when POST /api/sim/speed fails", async () => {
     server.use(
       http.post("/api/sim/speed", () => new HttpResponse(null, { status: 400 })),
@@ -158,5 +218,41 @@ describe("client.ts (MSW fetch lane)", () => {
     const ac = new AbortController();
     const hubs = await fetchHubs(ac.signal);
     expect(hubs).toEqual(HUBS);
+  });
+
+  it("forwards an AbortSignal through every signal-aware helper", async () => {
+    const ac = new AbortController();
+    const entries = [
+      {
+        globalSeq: "1",
+        eventType: "TrailerDeparted",
+        occurredAt: "2026-06-21T00:00:00.000Z",
+        hubId: "LAX",
+        scanType: null,
+        recommendation: null,
+      },
+    ];
+    server.use(
+      http.get("/api/kpis/comparison", () =>
+        HttpResponse.json({
+          baseline: { rehandleScore: 10, utilizationScore: 70 },
+          optimizer: { rehandleScore: 3, utilizationScore: 82 },
+          deltas: { rehandleScore: -7, utilizationScore: 12 },
+        }),
+      ),
+      http.get("/api/trailers/:id/plan", () =>
+        new HttpResponse(null, { status: 404 }),
+      ),
+      http.get("/api/trailers/:id/history", () => HttpResponse.json(entries)),
+      http.get("/api/packages/:id/history", () => HttpResponse.json(entries)),
+    );
+
+    expect(await fetchRoutes(ac.signal)).toEqual(ROUTES);
+    expect(await fetchKpis(ac.signal)).toEqual(KPIS);
+    expect(await fetchKpiComparison(ac.signal)).toBeDefined();
+    expect(await fetchTrailerPlan("T-1", ac.signal)).toBeNull();
+    expect(await fetchTrailerHistory("T-1", ac.signal)).toEqual(entries);
+    expect(await fetchPackageHistory("P-1", ac.signal)).toEqual(entries);
+    expect(await setSimSpeed({ multiplier: 2 }, ac.signal)).toBeDefined();
   });
 });
