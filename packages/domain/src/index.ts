@@ -106,6 +106,10 @@ export {
   slaClassSchema,
 } from "./planning/index.js";
 
+// --- Shared timing contract (v1.1 — sim draws + optimizer estimate, DRY) -----
+export type { LogNormalParams, TimingConfig } from "./timing.js";
+export { DEFAULT_TIMING_CONFIG, expectedMinutes } from "./timing.js";
+
 // --- Ingestion boundary (FND-03) --------------------------------------------
 export { validateEvent, ValidationError } from "./ingestion/validate.js";
 
