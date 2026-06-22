@@ -12,7 +12,10 @@ import { simulate } from "../src/engine.js";
  */
 
 const RFID = { missRate: 0.25, rssiNoise: 5, wrongZoneRate: 0.05, wrongTagRate: 0.02 } as const;
-const OPTS = { seed: 1234, durationTicks: 240, rfid: RFID } as const;
+// TIME-01: per-leg transit medians are now ≈400–2250 min (real great-circle
+// distance / 80 km/h), so the horizon must span real round-trips for antenna
+// reads (fired on arrival/dwell) and enough departures to survive the miss-rate.
+const OPTS = { seed: 1234, durationTicks: 6000, rfid: RFID } as const;
 
 const types = (s: ReturnType<typeof simulate>) => s.map((e) => e.event.type);
 const rfidCount = (s: ReturnType<typeof simulate>) =>
@@ -54,7 +57,8 @@ describe("RFID determinism (SIM-03)", () => {
   });
 
   it("the rfidTagId addition does not change non-RFID event ORDER vs the legacy stream", () => {
-    const legacy = simulate({ seed: 1234, durationTicks: 240 });
+    // Same horizon as OPTS so the non-RFID order is compared like-for-like.
+    const legacy = simulate({ seed: 1234, durationTicks: OPTS.durationTicks });
     const withRfid = simulate(OPTS);
     const legacyOrder = types(legacy);
     const observedOrder = types(withRfid).filter((t) => t !== "RfidObserved");

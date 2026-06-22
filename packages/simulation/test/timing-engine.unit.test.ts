@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { simulate, type SimulatedEvent } from "../src/engine.js";
 import { DEFAULT_TIMING_CONFIG } from "../src/timing.js";
+import { USA_HUBS } from "../src/network/hubs.js";
+import { buildTransitParamsByLeg, routeId } from "../src/network/routes.js";
 
 /**
  * SIM-02 timing in the engine — the variance + determinism contract.
@@ -13,7 +15,10 @@ import { DEFAULT_TIMING_CONFIG } from "../src/timing.js";
  */
 
 const SEED = 4242;
-const TICKS = 480; // long enough for many round-trips ⇒ many dwell + transit draws.
+// TIME-01: per-leg transit medians are now ≈400–2250 min (real great-circle
+// distance / 80 km/h), so the horizon must be long enough for many round-trips
+// across SHORT and LONG legs alike ⇒ many dwell + transit draws.
+const TICKS = 8000;
 const EPOCH = Date.parse("2026-04-01T00:00:00.000Z");
 const MS_PER_TICK = 60_000;
 const tick = (iso: string): number => Math.round((Date.parse(iso) - EPOCH) / MS_PER_TICK);
@@ -22,22 +27,34 @@ interface Departure {
   readonly trailerId: string;
   readonly tripId: string;
   readonly tick: number;
+  readonly fromHubId: string;
+  readonly toHubId: string;
+}
+
+/** One realized transit: its directed routeId + the elapsed ticks. */
+interface LegTransit {
+  readonly routeKey: string;
+  readonly ticks: number;
 }
 
 /** Recover per-leg transit ticks (arrival tick − its departure tick, by tripId). */
-function transitTicks(stream: readonly SimulatedEvent[]): number[] {
+function transitLegs(stream: readonly SimulatedEvent[]): LegTransit[] {
   const departByTrip = new Map<string, Departure>();
-  const out: number[] = [];
+  const out: LegTransit[] = [];
   for (const s of stream) {
     if (s.event.type === "TrailerDeparted") {
       departByTrip.set(s.event.payload.tripId, {
         trailerId: s.event.payload.trailerId,
         tripId: s.event.payload.tripId,
         tick: tick(s.occurredAt),
+        fromHubId: s.event.payload.fromHubId,
+        toHubId: s.event.payload.toHubId,
       });
     } else if (s.event.type === "TrailerArrivedAtHub") {
       const dep = departByTrip.get(s.event.payload.tripId);
-      if (dep !== undefined) out.push(tick(s.occurredAt) - dep.tick);
+      if (dep !== undefined) {
+        out.push({ routeKey: routeId(dep.fromHubId, dep.toHubId), ticks: tick(s.occurredAt) - dep.tick });
+      }
     }
   }
   return out;
@@ -69,16 +86,23 @@ function dwellTicks(stream: readonly SimulatedEvent[]): number[] {
 }
 
 describe("engine log-normal timing (SIM-02)", () => {
-  it("transit ticks VARY across legs and stay within [min,max]", () => {
+  it("transit ticks VARY across legs and stay within EACH leg's per-leg [min,max] (TIME-01)", () => {
     const stream = simulate({ seed: SEED, durationTicks: TICKS });
-    const t = transitTicks(stream);
+    const legs = transitLegs(stream);
+    const t = legs.map((l) => l.ticks);
     expect(t.length).toBeGreaterThan(10);
-    // Real variance — not all equal (the old fixed 30).
+    // Real variance — not all equal (the old fixed 30), and now ALSO varying by
+    // leg (short regional vs long coast medians differ ~5×).
     expect(new Set(t).size).toBeGreaterThan(1);
-    const { min, max } = DEFAULT_TIMING_CONFIG.transit;
-    for (const v of t) {
-      expect(v).toBeGreaterThanOrEqual(min);
-      expect(v).toBeLessThanOrEqual(max);
+    // TIME-01: each realized transit sits within ITS OWN geography-derived band
+    // (the per-leg medians are derived from real great-circle distance), not the
+    // old single global transit band.
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, DEFAULT_TIMING_CONFIG.transit.sigma);
+    for (const { routeKey, ticks } of legs) {
+      const p = byLeg.get(routeKey);
+      expect(p, `expected per-leg params for ${routeKey}`).toBeDefined();
+      expect(ticks).toBeGreaterThanOrEqual(Math.max(1, p!.min));
+      expect(ticks).toBeLessThanOrEqual(p!.max);
     }
   });
 

@@ -28,7 +28,11 @@ import { simulate } from "../src/engine.js";
 
 const CENTER = "MEM";
 const SEED = 4242;
-const TICKS = 240;
+// TIME-01: over-carry fires on a SPOKE ARRIVAL, then emits a spoke→center return
+// leg. With per-leg transit medians now derived from real great-circle distance
+// (≈400+ min even for the shortest spoke), the horizon must span a full round
+// trip plus the return leg — a 240-tick run never reaches a spoke.
+const TICKS = 6000;
 
 type Created = PackageCreated["payload"];
 type Departed = TrailerDeparted["payload"];

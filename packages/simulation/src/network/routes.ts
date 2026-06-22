@@ -1,4 +1,4 @@
-import type { Hub, LonLat, Route } from "@mm/domain";
+import type { Hub, LogNormalParams, LonLat, Route } from "@mm/domain";
 
 /**
  * SIM-01: great-circle linehaul routes over the USA hub network.
@@ -78,8 +78,78 @@ export function greatCircle(a: LonLat, b: LonLat, n: number): LonLat[] {
 const ROUTE_POINTS = 24;
 
 /** Deterministic, stable route id for a directed leg. */
-function routeId(fromHubId: string, toHubId: string): string {
+export function routeId(fromHubId: string, toHubId: string): string {
   return `route-${fromHubId}-${toHubId}`;
+}
+
+// --- TIME-01: distance-derived per-leg transit ------------------------------
+
+/** Mean Earth radius (km), WGS84 — the haversine sphere radius. */
+const EARTH_RADIUS_KM = 6371.0088;
+/** Average highway HGV cruise speed (km/h) used to turn distance → minutes. */
+const HGV_AVG_KMH = 80;
+
+/**
+ * Great-circle (haversine) distance in KM between two hubs, from their WGS84
+ * lon/lat. Pure: no clock, no RNG; identical inputs ⇒ identical output. The
+ * formula is symmetric and returns 0 for coincident points.
+ */
+export function haversineKm(a: Hub, b: Hub): number {
+  const dLat = (b.lat - a.lat) * DEG;
+  const dLon = (b.lon - a.lon) * DEG;
+  const lat1 = a.lat * DEG;
+  const lat2 = b.lat * DEG;
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/**
+ * TIME-01 — derive a directed leg's transit {@link LogNormalParams} from REAL
+ * geography. The transit MEDIAN is the great-circle drive time at an 80 km/h
+ * average HGV speed (`haversineKm(from, to) / 80 · 60` minutes), so a long coast
+ * leg has a far larger typical transit than a short regional leg — replacing the
+ * old single flat ~30-min median. `sigma` (log-space spread) is carried in from
+ * the active timing config; the clamp band scales off the per-leg median
+ * (`min = max(5, round(median·0.4))`, `max = round(median·3)`) so long legs are
+ * not clipped by the old global `[10, 120]` band.
+ *
+ * NO-ORS-KEY PATH: this environment has no OpenRouteService key, so the median
+ * source is the haversine distance. Once VIZ-06's `road-geometry.generated.json`
+ * exists, swap the median to that leg's ORS `summary.duration` (seconds → minutes)
+ * — the only line to change is the `median` below; sigma/clamp stay as-is.
+ *
+ * Pure: a function of the two hubs' coordinates (+ sigma) only.
+ */
+export function transitParamsForLeg(from: Hub, to: Hub, sigma: number): LogNormalParams {
+  const median = (haversineKm(from, to) / HGV_AVG_KMH) * 60;
+  return {
+    median,
+    sigma,
+    min: Math.max(5, Math.round(median * 0.4)),
+    max: Math.round(median * 3),
+  };
+}
+
+/**
+ * Build the per-directed-leg transit params for a hub-and-spoke network, keyed
+ * by the directed {@link routeId} (`route-<from>-<to>`). Mirrors
+ * {@link buildRoutes}: the first hub is the center; every spoke gets a directed
+ * pair (center→spoke and spoke→center). Pure + deterministic (geometry only).
+ */
+export function buildTransitParamsByLeg(
+  hubs: readonly Hub[],
+  sigma: number,
+): Map<string, LogNormalParams> {
+  const byLeg = new Map<string, LogNormalParams>();
+  if (hubs.length < 2) return byLeg;
+  const center = hubs[0]!;
+  for (let i = 1; i < hubs.length; i += 1) {
+    const spoke = hubs[i]!;
+    byLeg.set(routeId(center.hubId, spoke.hubId), transitParamsForLeg(center, spoke, sigma));
+    byLeg.set(routeId(spoke.hubId, center.hubId), transitParamsForLeg(spoke, center, sigma));
+  }
+  return byLeg;
 }
 
 /**

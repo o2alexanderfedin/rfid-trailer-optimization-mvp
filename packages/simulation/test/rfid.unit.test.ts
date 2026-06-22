@@ -150,7 +150,10 @@ describe("RFID emission wired into the engine (SIM-03)", () => {
   });
 
   it("portal reads occur on load (TrailerDeparted) and antenna reads during dwell (arrival)", () => {
-    const stream = simulate({ seed: 7, durationTicks: 240, rfid: { missRate: 0 } });
+    // TIME-01: antenna reads fire on ARRIVAL/dwell, and the per-leg transit
+    // medians are now ≈400+ min, so the horizon must cover a real round-trip
+    // arrival (a 240-tick run never reaches a spoke under realistic geography).
+    const stream = simulate({ seed: 7, durationTicks: 6000, rfid: { missRate: 0 } });
     const reads = rfidEvents(stream);
     const readerIds = new Set(reads.map((r) => r.payload.readerId));
     expect([...readerIds].some((id) => id.endsWith("-PORTAL"))).toBe(true);
