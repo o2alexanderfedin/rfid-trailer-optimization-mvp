@@ -108,6 +108,8 @@ export function trailerStateReducer(
     // scan-driven trailer read model independent of RFID fusion (anti-P6).
     // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) are
     // optimizer concerns with no physical trailer-state change, so they no-op.
+    // Phase-9 (v1.2) driver-lifecycle + load/unload phase events likewise no-op
+    // for trailer-state in this phase (driver↔trailer stamping is a later phase).
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -118,6 +120,13 @@ export function trailerStateReducer(
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return state;
     default:
       return assertNeverEvent(event);

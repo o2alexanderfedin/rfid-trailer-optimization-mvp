@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  dutyStatusSchema,
+  hosClockSchema,
   hubSchema,
   lonLatSchema,
   sizeClassSchema,
@@ -235,6 +237,104 @@ export const planAcceptedSchema = eventSchema(
   }),
 );
 
+// --- Phase-9 (v1.2) driver-lifecycle events (EVT-01) ------------------------
+
+/**
+ * `DriverRegistered` — a driver joined a hub's pool (the renewable-resource
+ * roster). Carries identity, an optional human `name`/`licenseClass` (additive),
+ * the `homeHubId` the driver is rostered at, and the virtual-clock `occurredAt`.
+ * No RNG payload (determinism keystone): identifiers + clock only.
+ */
+export const driverRegisteredSchema = eventSchema(
+  "DriverRegistered",
+  z.object({
+    driverId: id,
+    name: z.string().min(1).optional(),
+    licenseClass: z.string().min(1).optional(),
+    homeHubId: id,
+    occurredAt,
+  }),
+);
+
+/**
+ * `DriverAssignedToTrip` — a free driver was bound to a trip (on dispatch). The
+ * single mutation that ties the renewable driver resource to a concrete trailer
+ * movement; carries identifiers + clock only.
+ */
+export const driverAssignedToTripSchema = eventSchema(
+  "DriverAssignedToTrip",
+  z.object({
+    driverId: id,
+    tripId: id,
+    trailerId: id,
+    occurredAt,
+  }),
+);
+
+/**
+ * `DriverDutyStateChanged` — the driver moved between duty states (the panel
+ * state machine). Carries the new `dutyStatus`, a human-meaningful `reason`
+ * (e.g. "trip-dispatched", "30-min-break-due", "10h-reset"), and a SNAPSHOT of
+ * the driver's {@link HosClock} at the transition (so the projection folds the
+ * authoritative clock without recomputing it). All times are virtual-clock —
+ * the clock fields and `occurredAt` come from the sim/epoch clock, no RNG.
+ */
+export const driverDutyStateChangedSchema = eventSchema(
+  "DriverDutyStateChanged",
+  z.object({
+    driverId: id,
+    dutyStatus: dutyStatusSchema,
+    reason: z.string().min(1),
+    clock: hosClockSchema,
+    occurredAt,
+  }),
+);
+
+/**
+ * `DriverSwappedAtHub` — a relay handoff: a trip's trailer was reassigned from a
+ * depleted `outgoingDriverId` to a fresh `incomingDriverId` from the hub pool
+ * (the "fresh-driver swap" moment). Carries both driver ids, the hub, the trip,
+ * the trailer, and the clock. Identifiers + clock only — no RNG.
+ */
+export const driverSwappedAtHubSchema = eventSchema(
+  "DriverSwappedAtHub",
+  z.object({
+    outgoingDriverId: id,
+    incomingDriverId: id,
+    hubId: id,
+    tripId: id,
+    trailerId: id,
+    occurredAt,
+  }),
+);
+
+// --- Phase-9 (v1.2) authoritative load/unload phase events (EVT-02) ---------
+
+/**
+ * The shared payload for the three load/unload PHASE events: exactly
+ * `{ trailerId, hubId, tripId, occurredAt }` — identifiers + virtual clock,
+ * NOTHING else. This is the determinism keystone: phase events carry no RNG
+ * value, so adding them never perturbs the seeded golden stream.
+ */
+const phaseEventPayload = z.object({
+  trailerId: id,
+  hubId: id,
+  tripId: id,
+  occurredAt,
+});
+
+/** `UnloadStarted` — unloading began at a hub (after `TrailerDocked`). */
+export const unloadStartedSchema = eventSchema("UnloadStarted", phaseEventPayload);
+
+/** `LoadStarted` — loading began at a hub (before `TrailerDeparted`). */
+export const loadStartedSchema = eventSchema("LoadStarted", phaseEventPayload);
+
+/** `UnloadCompleted` — unloading finished (after the last unload scan). */
+export const unloadCompletedSchema = eventSchema(
+  "UnloadCompleted",
+  phaseEventPayload,
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -254,4 +354,13 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   missedUnloadDetectedSchema,
   planGeneratedSchema,
   planAcceptedSchema,
+  // Phase-9 (v1.2) driver-lifecycle events (EVT-01).
+  driverRegisteredSchema,
+  driverAssignedToTripSchema,
+  driverDutyStateChangedSchema,
+  driverSwappedAtHubSchema,
+  // Phase-9 (v1.2) load/unload phase events (EVT-02).
+  unloadStartedSchema,
+  loadStartedSchema,
+  unloadCompletedSchema,
 ]);

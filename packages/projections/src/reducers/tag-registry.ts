@@ -68,7 +68,8 @@ export function tagRegistryReducer(
     // is a READER of this registry, not a writer — keeping the registry the sole
     // authority for tag identity (anti-P6: observation never mutates identity).
     // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) carry
-    // no tag identity, so they no-op here too.
+    // no tag identity, so they no-op here too. Phase-9 (v1.2) driver-lifecycle +
+    // load/unload phase events bind no RFID tag either, so they no-op as well.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageScanned":
@@ -81,6 +82,13 @@ export function tagRegistryReducer(
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return state;
     default:
       return assertNeverEvent(event);

@@ -16,6 +16,13 @@ export type {
   MissedUnloadDetected,
   PlanGenerated,
   PlanAccepted,
+  DriverRegistered,
+  DriverAssignedToTrip,
+  DriverDutyStateChanged,
+  DriverSwappedAtHub,
+  UnloadStarted,
+  LoadStarted,
+  UnloadCompleted,
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
@@ -35,4 +42,11 @@ export {
   missedUnloadDetectedSchema,
   planGeneratedSchema,
   planAcceptedSchema,
+  driverRegisteredSchema,
+  driverAssignedToTripSchema,
+  driverDutyStateChangedSchema,
+  driverSwappedAtHubSchema,
+  unloadStartedSchema,
+  loadStartedSchema,
+  unloadCompletedSchema,
 } from "./schemas.js";
