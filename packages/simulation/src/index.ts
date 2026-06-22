@@ -18,6 +18,7 @@ export {
   routeId,
   haversineKm,
   transitParamsForLeg,
+  transitParamsFromDuration,
   buildTransitParamsByLeg,
   loadStaticRoadGeometry,
   applyRoadGeometry,

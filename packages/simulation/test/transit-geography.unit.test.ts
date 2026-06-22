@@ -10,8 +10,11 @@ import { USA_HUBS } from "../src/network/hubs.js";
 import {
   buildTransitParamsByLeg,
   haversineKm,
+  loadStaticRoadGeometry,
   routeId,
   transitParamsForLeg,
+  transitParamsFromDuration,
+  type RoadGeometryFile,
 } from "../src/network/routes.js";
 import { simulate, type SimulatedEvent } from "../src/engine.js";
 
@@ -100,18 +103,76 @@ describe("transitParamsForLeg (geography-derived LogNormalParams)", () => {
 });
 
 describe("buildTransitParamsByLeg (per directed leg)", () => {
+  const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+  /** A file with NO legs forces the deterministic haversine fallback. */
+  const EMPTY_FILE: RoadGeometryFile = { hubChecksum: "x", legs: {} };
+
   it("produces a directed entry per hub-and-spoke leg, keyed by routeId", () => {
-    const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
     const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma);
     // 9 spokes × 2 directions = 18 directed legs.
     expect(byLeg.size).toBe((USA_HUBS.length - 1) * 2);
-    const out = byLeg.get(routeId("MEM", "SEA"));
-    const back = byLeg.get(routeId("SEA", "MEM"));
-    expect(out).toBeDefined();
-    expect(back).toBeDefined();
-    // Directed legs over the same pair share the (symmetric) median.
-    expect(out!.median).toBeCloseTo(back!.median, 6);
-    expect(out!.median).toBeCloseTo((haversineKm(MEM, SEA) / 80) * 60, 6);
+    expect(byLeg.get(routeId("MEM", "SEA"))).toBeDefined();
+    expect(byLeg.get(routeId("SEA", "MEM"))).toBeDefined();
+  });
+
+  it("uses the haversine median for every leg when NO road file carries it (fallback)", () => {
+    // RE-BASELINE (VIZ-06 upgrade): with an empty file injected (no ORS leg
+    // durations) the median falls back to the pure haversine estimate, exactly as
+    // before. Directed legs over the same pair share the (symmetric) median.
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma, EMPTY_FILE);
+    const out = byLeg.get(routeId("MEM", "SEA"))!;
+    const back = byLeg.get(routeId("SEA", "MEM"))!;
+    expect(out.median).toBeCloseTo(back.median, 6);
+    expect(out.median).toBeCloseTo((haversineKm(MEM, SEA) / 80) * 60, 6);
+  });
+});
+
+describe("buildTransitParamsByLeg PREFERS ORS road duration (VIZ-06 / TIME-01 upgrade)", () => {
+  const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+
+  it("uses duration_s/60 as the median when the road file carries the leg", () => {
+    // An injected file with a deliberately LONG ORS duration for MEM→SEA (longer
+    // than the haversine estimate) — the median must come from duration_s, not
+    // the great-circle distance.
+    const durationS = 200_000; // 3333.3 min — longer than the ~2249-min haversine median
+    const fixture: RoadGeometryFile = {
+      hubChecksum: "x",
+      legs: { [routeId("MEM", "SEA")]: { geometry: [], duration_s: durationS } },
+    };
+    const byLeg = buildTransitParamsByLeg([MEM, SEA], sigma, fixture);
+    const leg = byLeg.get(routeId("MEM", "SEA"))!;
+    // Median is the ORS drive time in minutes; clamp band scales off it (shared).
+    expect(leg).toEqual(transitParamsFromDuration(durationS, sigma));
+    expect(leg.median).toBeCloseTo(durationS / 60, 6);
+    // ORS duration here is strictly LONGER than the haversine estimate for the leg.
+    expect(leg.median).toBeGreaterThan((haversineKm(MEM, SEA) / 80) * 60);
+  });
+
+  it("falls back to the haversine median for a leg ABSENT from the road file", () => {
+    // The file has MEM→SEA but NOT SEA→MEM → the reverse leg falls back to
+    // haversine (the deterministic great-circle estimate), unchanged.
+    const fixture: RoadGeometryFile = {
+      hubChecksum: "x",
+      legs: { [routeId("MEM", "SEA")]: { geometry: [], duration_s: 200_000 } },
+    };
+    const byLeg = buildTransitParamsByLeg([MEM, SEA], sigma, fixture);
+    const back = byLeg.get(routeId("SEA", "MEM"))!;
+    expect(back).toEqual(transitParamsForLeg(SEA, MEM, sigma));
+    expect(back.median).toBeCloseTo((haversineKm(SEA, MEM) / 80) * 60, 6);
+  });
+
+  it("the DEFAULT (committed file) median for MEM→ORD equals the file's duration_s/60", () => {
+    // End-to-end: with no injected file, the committed road-geometry.generated.json
+    // is the source. MEM→ORD's median is its ORS duration in minutes — the SAME
+    // drive time the displayed road polyline is based on.
+    const file = loadStaticRoadGeometry();
+    const orsDurationS = file?.legs[routeId("MEM", "ORD")]?.duration_s;
+    expect(orsDurationS).toBeDefined();
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma);
+    const leg = byLeg.get(routeId("MEM", "ORD"))!;
+    expect(leg.median).toBeCloseTo(orsDurationS! / 60, 6);
+    // ORS drive time exceeds the great-circle-at-80km/h estimate for this leg.
+    expect(leg.median).toBeGreaterThan((haversineKm(MEM, hub("ORD")) / 80) * 60);
   });
 });
 

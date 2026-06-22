@@ -102,22 +102,63 @@ export function routeId(fromHubId: string, toHubId: string): string {
 // behavior is byte-identical to v1.0.
 
 /**
+ * VIZ-06 / TIME-01 upgrade — derive a leg's transit {@link LogNormalParams} from
+ * the ORS road `duration_s` (the SAME drive time the displayed real-road polyline
+ * is based on). The MEDIAN is `duration_s / 60` minutes; `sigma` + the clamp band
+ * scaling are IDENTICAL to {@link transitParamsForLeg} (`min = max(5, round(
+ * median·0.4))`, `max = round(median·3)`), so only the median source differs.
+ * Pure: a function of `(durationSeconds, sigma)` only.
+ */
+export function transitParamsFromDuration(
+  durationSeconds: number,
+  sigma: number,
+): LogNormalParams {
+  const median = durationSeconds / 60;
+  return {
+    median,
+    sigma,
+    min: Math.max(5, Math.round(median * 0.4)),
+    max: Math.round(median * 3),
+  };
+}
+
+/**
  * Build the per-directed-leg transit params for a hub-and-spoke network, keyed
  * by the directed {@link routeId} (`route-<from>-<to>`). Mirrors
  * {@link buildRoutes}: the first hub is the center; every spoke gets a directed
- * pair (center→spoke and spoke→center). Pure + deterministic (geometry only).
+ * pair (center→spoke and spoke→center).
+ *
+ * VIZ-06 / TIME-01 upgrade — each leg's transit MEDIAN now PREFERS the loaded
+ * road file's ORS `duration_s` (`duration_s / 60` min, via
+ * {@link transitParamsFromDuration}) so the drawn transit matches the displayed
+ * real-road polyline. When the file is absent, the leg is missing, or it carries
+ * no `duration_s`, the leg FALLS BACK to {@link transitParamsForLeg} (the pure
+ * haversine estimate). `sigma` (config) and the median-scaled clamp are shared
+ * across both paths. The road source defaults to the committed static file via
+ * {@link loadStaticRoadGeometry} (injectable for tests). Pure + deterministic:
+ * the static file is committed (no clock, no RNG, no network).
  */
 export function buildTransitParamsByLeg(
   hubs: readonly Hub[],
   sigma: number,
+  geometry?: RoadGeometryFile,
 ): Map<string, LogNormalParams> {
   const byLeg = new Map<string, LogNormalParams>();
   if (hubs.length < 2) return byLeg;
+  const file = geometry ?? loadStaticRoadGeometry();
+  // For one directed leg: ORS `duration_s` median if the file carries it, else
+  // the haversine-derived params (deterministic fallback).
+  const paramsForLeg = (from: Hub, to: Hub): LogNormalParams => {
+    const ors = file?.legs[routeId(from.hubId, to.hubId)]?.duration_s;
+    return ors !== undefined
+      ? transitParamsFromDuration(ors, sigma)
+      : transitParamsForLeg(from, to, sigma);
+  };
   const center = hubs[0]!;
   for (let i = 1; i < hubs.length; i += 1) {
     const spoke = hubs[i]!;
-    byLeg.set(routeId(center.hubId, spoke.hubId), transitParamsForLeg(center, spoke, sigma));
-    byLeg.set(routeId(spoke.hubId, center.hubId), transitParamsForLeg(spoke, center, sigma));
+    byLeg.set(routeId(center.hubId, spoke.hubId), paramsForLeg(center, spoke));
+    byLeg.set(routeId(spoke.hubId, center.hubId), paramsForLeg(spoke, center));
   }
   return byLeg;
 }

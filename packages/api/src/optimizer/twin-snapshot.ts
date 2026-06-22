@@ -3,6 +3,8 @@ import type { Database } from "@mm/event-store";
 import type { ProjectionDb } from "@mm/projections";
 import type { Hub, LonLat, TimingConfig } from "@mm/domain";
 import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes } from "@mm/domain";
+import type { RoadGeometryFile } from "@mm/simulation";
+import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import type {
   TwinBlock,
   TwinRoute,
@@ -17,9 +19,10 @@ import type {
  *
  * Design discipline:
  *  - PURE read mapping — no event-store writes, no side effects.
- *  - Deterministic: every collection is sorted by id; `travelMin` comes from
- *    the sim's `TRANSIT_MIN` constant (30 min); `departureMin` comes from
- *    sim/event time — `Date.now()` is NEVER called (anti-P3).
+ *  - Deterministic: every collection is sorted by id; `travelMin` prefers the
+ *    committed ORS road `duration_s` (haversine expected-transit fallback);
+ *    `departureMin` comes from sim/event time — `Date.now()` is NEVER called
+ *    (anti-P3).
  *  - Integer capacities + volumes (P12): no floats enter the optimizer.
  *  - `nextUnloadHubId` for each block references hubs in the route network.
  */
@@ -79,20 +82,29 @@ function coordHub(point: LonLat): Hub {
 /**
  * Parse a `RouteRegistered` JSONB payload into a `TwinRoute`.
  *
- * OPT-09 / OPT-10 — the leg's `travelMin` is the deterministic per-leg expected
- * transit MEAN, `round(expectedTransitMinutes(fromHub, toHub, timing))`, derived
- * from the route's GEOMETRY endpoints (the recorded `[lon,lat]` LineString starts
- * at the from-hub and ends at the to-hub — `buildRoutes` snaps both endpoints to
- * the hub coordinates). This replaces the old flat `TRANSIT_MIN` so a long coast
- * leg plans against a far larger transit than a short regional leg — the SAME
- * `TimingConfig` the simulator draws its random transit from (DRY). Rounded to a
- * whole minute here so `TwinRoute.travelMin` keeps its integer contract (the
- * optimizer also rounds defensively at the graph boundary, anti-P12).
+ * VIZ-06 / TIME-01 upgrade — the leg's `travelMin` PREFERS the ORS road
+ * `duration_s` from the committed `road-geometry.generated.json` (`road`), keyed
+ * by the leg's directed `routeId`: `round(duration_s / 60)` minutes. This is the
+ * SAME real drive time the displayed road polyline is based on, so the optimizer
+ * plans against the geometry the operator sees. The integer rounding keeps
+ * `TwinRoute.travelMin`'s whole-minute contract at the boundary (anti-P12).
+ *
+ * FALLBACK (no ORS duration for this leg — file absent, leg missing, or no
+ * `duration_s`): the deterministic per-leg expected-transit MEAN
+ * `round(expectedTransitMinutes(fromHub, toHub, timing))`, derived from the
+ * route's GEOMETRY endpoints (the recorded `[lon,lat]` LineString starts at the
+ * from-hub and ends at the to-hub — `buildRoutes` snaps both endpoints to the
+ * hub coordinates), the SAME `TimingConfig` the simulator draws from (DRY).
  *
  * Fail-soft: a route whose geometry has fewer than 2 points (cannot derive a
- * leg distance) falls back to `TRANSIT_MIN` so the snapshot never throws.
+ * leg distance) AND has no ORS duration falls back to `TRANSIT_MIN` so the
+ * snapshot never throws.
  */
-function parseRouteRow(data: unknown, timing: TimingConfig): TwinRoute {
+function parseRouteRow(
+  data: unknown,
+  timing: TimingConfig,
+  road: RoadGeometryFile | undefined,
+): TwinRoute {
   const p = data as {
     routeId: string;
     fromHubId: string;
@@ -100,16 +112,19 @@ function parseRouteRow(data: unknown, timing: TimingConfig): TwinRoute {
     geometry?: readonly LonLat[];
   };
   const geometry = p.geometry ?? [];
+  const orsDurationS = road?.legs[routeId(p.fromHubId, p.toHubId)]?.duration_s;
   const travelMin =
-    geometry.length >= 2
-      ? Math.round(
-          expectedTransitMinutes(
-            coordHub(geometry[0]!),
-            coordHub(geometry[geometry.length - 1]!),
-            timing,
-          ),
-        )
-      : TRANSIT_MIN;
+    orsDurationS !== undefined
+      ? Math.round(orsDurationS / 60) // ORS road drive time (matches the polyline)
+      : geometry.length >= 2
+        ? Math.round(
+            expectedTransitMinutes(
+              coordHub(geometry[0]!),
+              coordHub(geometry[geometry.length - 1]!),
+              timing,
+            ),
+          )
+        : TRANSIT_MIN;
   return {
     routeId: p.routeId,
     fromHubId: p.fromHubId,
@@ -259,10 +274,16 @@ export async function buildTwinSnapshot(
     .orderBy("global_seq", "asc")
     .execute();
 
+  // VIZ-06 / TIME-01: load the committed ORS road geometry ONCE (deterministic
+  // static file; `undefined` when absent → haversine fallback). Each route's
+  // `travelMin` prefers the leg's ORS `duration_s` so the plan matches the drawn
+  // road polyline.
+  const road = loadStaticRoadGeometry();
+
   // Latest route per routeId wins (idempotent upsert semantics)
   const routeById = new Map<string, TwinRoute>();
   for (const row of routeEventRows) {
-    const r = parseRouteRow(row.data, timing);
+    const r = parseRouteRow(row.data, timing, road);
     routeById.set(r.routeId, r);
   }
   const routes: readonly TwinRoute[] = [...routeById.values()].sort((a, b) =>

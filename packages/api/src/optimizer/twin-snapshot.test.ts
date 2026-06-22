@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import type { ProjectionDb } from "@mm/projections";
+import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import { buildTwinSnapshot, TRANSIT_MIN } from "./twin-snapshot.js";
 
 // ---------------------------------------------------------------------------
@@ -228,6 +229,39 @@ describe("buildTwinSnapshot", () => {
     // Both are whole minutes (TwinRoute.travelMin integer contract, anti-P12).
     expect(Number.isInteger(snapshot.routes[0]!.travelMin)).toBe(true);
     expect(Number.isInteger(snapshot.routes[1]!.travelMin)).toBe(true);
+  });
+
+  it("travelMin PREFERS the committed ORS road duration_s for a real USA-hub leg (VIZ-06)", async () => {
+    // A route whose directed id matches a leg in the committed road geometry
+    // (`route-MEM-ORD`). Its `travelMin` must be `round(duration_s / 60)` — the
+    // ORS drive time the displayed road polyline is based on — NOT the haversine
+    // estimate over the (here arbitrary) geometry endpoints.
+    const road = loadStaticRoadGeometry();
+    const orsDurationS = road?.legs[routeId("MEM", "ORD")]?.duration_s;
+    expect(orsDurationS).toBeDefined();
+    const expectedTravelMin = Math.round(orsDurationS! / 60);
+
+    const db = makeDb({
+      routeEventRows: [
+        {
+          data: {
+            // Deliberately give endpoints that would yield a DIFFERENT haversine
+            // estimate, to prove the ORS duration wins for the present leg.
+            routeId: "route-MEM-ORD",
+            fromHubId: "MEM",
+            toHubId: "ORD",
+            geometry: [
+              [-90.049, 35.1495],
+              [-87.6298, 41.8781],
+            ],
+          },
+        },
+      ],
+    });
+    const snapshot = await buildTwinSnapshot(db);
+    const leg = snapshot.routes.find((r) => r.routeId === "route-MEM-ORD")!;
+    expect(leg.travelMin).toBe(expectedTravelMin);
+    expect(Number.isInteger(leg.travelMin)).toBe(true);
   });
 
   it("capacity is a positive integer", async () => {

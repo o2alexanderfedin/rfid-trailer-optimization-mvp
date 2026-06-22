@@ -55,6 +55,51 @@ function isOrsResponse(value: unknown): value is OrsDirectionsGeoJson {
   return Array.isArray(v.features) && v.features.length > 0;
 }
 
+/**
+ * RDP simplification tolerance in DEGREES (~0.02° ≈ 2 km). Bounds the committed
+ * geometry to a few dozen points per leg (raw ORS is ~3k pts/leg ⇒ multi-MB) so
+ * the static file + the ws snapshot stay small while the national-map road shape
+ * is preserved. Endpoints are always kept (the loader re-snaps them to hub coords).
+ */
+const SIMPLIFY_EPSILON_DEG = 0.02;
+
+/** Perpendicular distance from point `p` to segment `a–b` (degree space — fine for simplification). */
+function perpDistance(p: LonLat, a: LonLat, b: LonLat): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+/**
+ * Ramer–Douglas–Peucker polyline simplification. Pure + deterministic; always
+ * preserves the first and last vertices. Reduces ~3k ORS points/leg to a few
+ * dozen while keeping the highway's shape.
+ */
+function simplifyRDP(points: readonly LonLat[], epsilon: number): LonLat[] {
+  if (points.length < 3) return points.map((p) => [p[0], p[1]]);
+  const first = points[0]!;
+  const last = points[points.length - 1]!;
+  let maxDist = 0;
+  let index = 0;
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const d = perpDistance(points[i]!, first, last);
+    if (d > maxDist) {
+      maxDist = d;
+      index = i;
+    }
+  }
+  if (maxDist > epsilon) {
+    const left = simplifyRDP(points.slice(0, index + 1), epsilon);
+    const right = simplifyRDP(points.slice(index), epsilon);
+    return left.slice(0, -1).concat(right);
+  }
+  return [[first[0], first[1]], [last[0], last[1]]];
+}
+
 /** Call ORS for a single directed leg; throw on any non-OK / malformed reply. */
 async function fetchLeg(apiKey: string, from: Hub, to: Hub): Promise<RoadLeg> {
   const res = await fetch(ORS_URL, {
@@ -80,7 +125,10 @@ async function fetchLeg(apiKey: string, from: Hub, to: Hub): Promise<RoadLeg> {
     throw new Error(`ORS returned no features for ${from.hubId}->${to.hubId}`);
   }
   const feature = json.features[0]!;
-  const geometry: LonLat[] = feature.geometry.coordinates.map((c) => [c[0], c[1]]);
+  const rawGeometry: LonLat[] = feature.geometry.coordinates.map((c) => [c[0], c[1]]);
+  // Bound the committed/streamed geometry (raw ORS is ~3k pts/leg) while keeping
+  // the road shape (RDP, endpoints preserved → loader re-snaps to hub coords).
+  const geometry: LonLat[] = simplifyRDP(rawGeometry, SIMPLIFY_EPSILON_DEG);
   const summary = feature.properties.summary;
   const leg: RoadLeg = {
     geometry,

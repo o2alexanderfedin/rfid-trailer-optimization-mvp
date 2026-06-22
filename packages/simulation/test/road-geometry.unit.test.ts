@@ -14,46 +14,88 @@ import { USA_HUBS } from "../src/network/hubs.js";
 /**
  * VIZ-06 — LOADABLE road-following route geometry with a great-circle FALLBACK.
  *
- * A committed static GeoJSON file (`road-geometry.generated.json`) may carry a
+ * A committed static GeoJSON file (`road-geometry.generated.json`) carries a
  * road-snapped LineString per directed leg (precomputed OFFLINE from ORS — never
- * at sim/plan runtime). When the file (or a given leg) is ABSENT the deterministic
- * `greatCircle` arc is used, so geometry stays byte-identical to v1.0 and every
- * downstream consumer (ws protocol, OpenLayers animation) is untouched.
+ * at sim/plan runtime). This file is now COMMITTED, so it is the DEFAULT source
+ * of truth: `buildRoutes(USA_HUBS)` returns the real-road polylines. When the
+ * file (or a given leg) is ABSENT the deterministic `greatCircle` arc is used
+ * (back-compat fallback), so every downstream consumer (ws protocol, OpenLayers
+ * animation) is shape-agnostic.
  *
- * These tests use an INJECTED in-memory geometry source (a fixture stub) — no
- * file read, no network — so the loader's PREFER-static behaviour is provable in
- * isolation from the (intentionally absent) generated file.
+ * The great-circle FALLBACK is proven here via the INJECTED in-memory geometry
+ * source (a fixture stub) and the absent-file path of `applyRoadGeometry` — no
+ * file read, no network — so both the prefer-static DEFAULT and the fallback are
+ * provable in isolation.
  */
 
 const ROUTE_POINTS = 24; // mirrors routes.ts ROUTE_POINTS (smooth map arcs)
 
-describe("loadStaticRoadGeometry (the committed file is ABSENT here)", () => {
-  it("returns undefined when no generated file exists (fallback path active)", () => {
-    // No `road-geometry.generated.json` is committed in this environment, so the
-    // static loader resolves to `undefined` and callers fall back to greatCircle.
-    expect(loadStaticRoadGeometry()).toBeUndefined();
+describe("loadStaticRoadGeometry (the committed file is the DEFAULT source)", () => {
+  it("loads the committed road-geometry file with USA-hub legs and a checksum", () => {
+    // RE-BASELINE (VIZ-06): the real ORS `road-geometry.generated.json` is now
+    // COMMITTED, so the static loader resolves to the file (not `undefined`). It
+    // carries a `hubChecksum` string and the directed USA-hub legs.
+    const file = loadStaticRoadGeometry();
+    expect(file).toBeDefined();
+    expect(typeof file!.hubChecksum).toBe("string");
+    expect(file!.hubChecksum.length).toBeGreaterThan(0);
+    // A known directed leg (Memphis center → a spoke) is present with geometry.
+    const leg = file!.legs[routeId("MEM", "ORD")];
+    expect(leg).toBeDefined();
+    expect(leg!.geometry.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("is deterministic — same file object shape across reads (static, no I/O drift)", () => {
+    expect(loadStaticRoadGeometry()).toEqual(loadStaticRoadGeometry());
+  });
+
+  it("the committed file's hubChecksum matches the current USA_HUBS (no stale geometry)", () => {
+    // Drift guard: the committed road geometry was precomputed against USA_HUBS.
+    // If a hub coordinate moves, this fails — signalling the geometry must be
+    // regenerated (else trailers would animate along roads for the OLD hub set).
+    expect(loadStaticRoadGeometry()!.hubChecksum).toBe(hubCoordsChecksum(USA_HUBS));
   });
 });
 
-describe("buildRoutes back-compat (generated file ABSENT)", () => {
-  it("falls back to great-circle geometry identical to the pure arc (determinism)", () => {
+describe("buildRoutes DEFAULT uses the committed ORS road geometry (VIZ-06)", () => {
+  it("returns the static road line (NOT the great-circle arc) for the present legs", () => {
+    // RE-BASELINE (VIZ-06): the committed file is now the default source, so the
+    // DEFAULT `buildRoutes(USA_HUBS)` returns real-road polylines for legs that
+    // are in the file — distinct from the pure great-circle arc.
+    const file = loadStaticRoadGeometry()!;
     const routes = buildRoutes(USA_HUBS);
     const center = USA_HUBS[0]!;
     for (let i = 1; i < USA_HUBS.length; i += 1) {
       const spoke = USA_HUBS[i]!;
       const out = routes.find((r) => r.routeId === routeId(center.hubId, spoke.hubId))!;
-      const back = routes.find((r) => r.routeId === routeId(spoke.hubId, center.hubId))!;
-      expect(out.geometry).toEqual(
-        greatCircle([center.lon, center.lat], [spoke.lon, spoke.lat], ROUTE_POINTS),
-      );
-      expect(back.geometry).toEqual(
-        greatCircle([spoke.lon, spoke.lat], [center.lon, center.lat], ROUTE_POINTS),
-      );
+      // Endpoints are always snapped EXACTLY to the hub coordinates (seam anchor).
+      expect(out.geometry[0]).toEqual([center.lon, center.lat]);
+      expect(out.geometry[out.geometry.length - 1]).toEqual([spoke.lon, spoke.lat]);
+      // When the leg is in the committed file, the drawn geometry is the road
+      // polyline, NOT the great-circle arc the absent-file fallback would yield.
+      const fileLeg = file.legs[routeId(center.hubId, spoke.hubId)];
+      if (fileLeg !== undefined && fileLeg.geometry.length >= 2) {
+        expect(out.geometry).not.toEqual(
+          greatCircle([center.lon, center.lat], [spoke.lon, spoke.lat], ROUTE_POINTS),
+        );
+      }
     }
   });
 
-  it("is deterministic — identical routes across calls", () => {
+  it("is deterministic — identical routes across calls (static committed file)", () => {
     expect(buildRoutes(USA_HUBS)).toEqual(buildRoutes(USA_HUBS));
+  });
+
+  it("falls back to the great-circle arc when NO file is injected and none on disk", () => {
+    // The great-circle FALLBACK (back-compat) is exercised via the pure
+    // `applyRoadGeometry` absent-file path: passing `undefined` yields the exact
+    // great-circle arc, byte-identical to v1.0. (The DEFAULT `buildRoutes` reads
+    // the committed file; the fallback is what runs when that file is absent.)
+    const center = USA_HUBS[0]!;
+    const spoke = USA_HUBS[1]!;
+    expect(applyRoadGeometry(undefined, center, spoke, ROUTE_POINTS)).toEqual(
+      greatCircle([center.lon, center.lat], [spoke.lon, spoke.lat], ROUTE_POINTS),
+    );
   });
 });
 

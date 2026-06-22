@@ -52,10 +52,12 @@ export function haversineKm(a: Hub, b: Hub): number {
  * (`min = max(5, round(median·0.4))`, `max = round(median·3)`) so long legs are
  * not clipped by the old global `[10, 120]` band.
  *
- * NO-ORS-KEY PATH: this environment has no OpenRouteService key, so the median
- * source is the haversine distance. Once VIZ-06's `road-geometry.generated.json`
- * exists, swap the median to that leg's ORS `summary.duration` (seconds → minutes)
- * — the only line to change is the `median` below; sigma/clamp stay as-is.
+ * FALLBACK PATH (VIZ-06 upgrade): this is the deterministic great-circle estimate
+ * used when no ORS road `duration_s` is available for a leg. When VIZ-06's
+ * `road-geometry.generated.json` carries a leg's ORS `summary.duration`, the
+ * sim's `buildTransitParamsByLeg` and the optimizer's `twin-snapshot` prefer that
+ * real drive time (seconds → minutes) over this haversine estimate; this pure
+ * function stays UNCHANGED and remains the byte-identical fallback.
  *
  * Pure: a function of the two hubs' coordinates (+ sigma) only.
  */
