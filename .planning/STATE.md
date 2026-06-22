@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 6 of 8 — Realistic Geography & Time Model (ready to plan)
+Phase: 6 of 8 — Realistic Geography & Time Model (substantially complete; VIZ-06 road data deferred → needs ORS_API_KEY)
 Plan: —
-Status: Roadmap complete — ready to plan Phase 6
-Last activity: 2026-06-21 — v1.1 roadmap created (Phases 6–8); research + requirements committed
+Status: Phase 6 verified (gate green: build/typecheck/lint 0 · 918 unit · 82 integration). Next = Phase 7 Time-Aware Optimizer (OPT-09/10).
+Last activity: 2026-06-21 — Phase 6 built (foundation inline; TIME-02/TIME-01/VIZ-06 via ultracode workflow); integration regression caught + fixed (3bf463f); fully re-verified
 
 ## Performance Metrics
 
