@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { simulate } from "@mm/simulation";
+import { simulate, DEFAULT_TIMING_CONFIG } from "@mm/simulation";
 import {
   buildServer,
   driveSimulation,
@@ -45,10 +45,15 @@ async function driveNoisy(): Promise<{ fx: PgFixture; built: BuiltServer }> {
   const fx = await startPgFixture();
   const db: ApiDb = fx.db;
   const built = await buildServer({ db, enableWs: false });
+  // Pin flat DEFAULT_TIMING_CONFIG (transit median ~30 min) so trailers dock
+  // within the short DURATION horizon and RFID reads accumulate at spoke antennas.
+  // Transit realism (TIME-01) is covered by transit-geography.unit.test.ts, not
+  // this lifecycle test.
   await driveSimulation({
     db,
     seed: SEED,
     durationTicks: DURATION,
+    timing: DEFAULT_TIMING_CONFIG,
     rfid: RFID,
     broadcast: undefined,
   });
@@ -155,7 +160,7 @@ describe("exception feed + KPI + zone queries over a seeded noisy sim (SNS-04/05
     const flagged = new Set(feed.map((e) => e.packageId));
 
     // Find a planned (created) package that received NO observation at all.
-    const stream = simulate({ seed: SEED, durationTicks: DURATION, rfid: RFID });
+    const stream = simulate({ seed: SEED, durationTicks: DURATION, timing: DEFAULT_TIMING_CONFIG, rfid: RFID });
     const created = new Set<string>();
     for (const e of stream) {
       if (e.event.type === "PackageCreated") created.add(e.event.payload.packageId);

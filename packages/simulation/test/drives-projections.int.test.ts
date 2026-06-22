@@ -8,6 +8,7 @@ import {
   type ProjectionDb,
 } from "@mm/projections";
 import { runSimulation, simulate, type SimulatedEvent } from "../src/engine.js";
+import { DEFAULT_TIMING_CONFIG } from "../src/timing.js";
 import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js";
 
 /**
@@ -36,6 +37,12 @@ const SEED = 4242;
 // dock + package arrivals) so EVERY operational event type is exercised, while
 // keeping the stream small (the inline applier reloads each projection table
 // per event). The larger byte-identical stream is covered by the unit test.
+//
+// TIME-01 context: realistic geography-derived per-leg transit (400-2000+
+// min/leg at 80 km/h) makes 31 ticks far too short for any trailer to dock.
+// We pin flat DEFAULT_TIMING_CONFIG (transit median ~30 min) so the trailer
+// lifecycle completes in the short horizon. Transit realism is proven by the
+// transit-geography unit tests, not this lifecycle integration test.
 const DURATION = 31;
 
 describe("simulator drives operational projections (SIM-02)", () => {
@@ -58,6 +65,9 @@ describe("simulator drives operational projections (SIM-02)", () => {
     await runSimulation({
       seed: SEED,
       durationTicks: DURATION,
+      // Pin flat log-normal transit so trailers dock in this short horizon.
+      // Transit realism (TIME-01) is covered by transit-geography.unit.test.ts.
+      timing: DEFAULT_TIMING_CONFIG,
       sink: (item: SimulatedEvent) => {
         let buf = buffers.get(item.streamId);
         if (buf === undefined) {
@@ -94,8 +104,9 @@ describe("simulator drives operational projections (SIM-02)", () => {
       for (const stored of log) await applyInline(proj, stored);
     });
 
-    // The pure generator (same seed) is the oracle for what was persisted.
-    const expectedStream = simulate({ seed: SEED, durationTicks: DURATION });
+    // The pure generator (same seed + same timing override) is the oracle for
+    // what was persisted. Must match the runSimulation call above exactly.
+    const expectedStream = simulate({ seed: SEED, durationTicks: DURATION, timing: DEFAULT_TIMING_CONFIG });
     expect(log.length).toBe(expectedStream.length);
 
     // The operational twin populated without error and is non-empty on ALL three

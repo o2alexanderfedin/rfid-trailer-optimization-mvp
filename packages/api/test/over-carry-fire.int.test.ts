@@ -10,6 +10,7 @@ import { readOpenExceptions } from "@mm/projections";
 import type { ProjectionDb } from "@mm/projections";
 import type { Kysely } from "kysely";
 import { startPgFixture, type PgFixture } from "./pg-fixture.js";
+import { DEFAULT_TIMING_CONFIG } from "@mm/simulation";
 
 /**
  * F-07 / SNS-05 — the LIVE missed-unload FIRE proof (real Postgres, real path).
@@ -92,10 +93,14 @@ describe("F-07 / SNS-05 — over-carry makes the missed-unload detector fire LIV
     overCarry: number,
   ): Promise<{ missedUnloadCount: number; packageIds: string[]; confidences: number[]; hubIds: (string | null)[] }> {
     await resetDb(fx.db);
+    // Pin flat DEFAULT_TIMING_CONFIG (transit median ~30 min) so trailers dock
+    // within 120 ticks and over-carry events are actually generated. Transit
+    // realism (TIME-01) is covered by transit-geography.unit.test.ts.
     await driveSimulation({
       db: fx.db,
       seed: SEED,
       durationTicks: DURATION,
+      timing: DEFAULT_TIMING_CONFIG,
       rfid: DEMO_RFID_CONFIG,
       overCarry,
       broadcast: undefined,

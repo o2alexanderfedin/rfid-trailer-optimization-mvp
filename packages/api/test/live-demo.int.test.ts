@@ -10,6 +10,7 @@ import {
 import type { BuiltServer } from "../src/server.js";
 import { startPgFixture, type PgFixture } from "./pg-fixture.js";
 import type { OptimizerRecommendationsDto } from "../src/index.js";
+import { DEFAULT_TIMING_CONFIG } from "@mm/simulation";
 
 /**
  * FIX SMOKE — End-to-end LIVE-DEMO integration test (the missing keystone).
@@ -118,15 +119,21 @@ describe("FIX SMOKE — end-to-end live-demo integration test", () => {
       simSeed: SEED,
       scenarioReoptTicks: 10,
       baselineTicks: DURATION,
+      // Pin flat timing so scenario re-opt base stream matches the stored stream.
+      timing: DEFAULT_TIMING_CONFIG,
     });
 
     // Drive the REAL demo path: rfid = DEMO_RFID_CONFIG, loop = live optimizer.
     // This is the exact same path as `main.ts` (FIX A assertion). 120 ticks
     // gives enough history for all four gates to produce non-stub values.
+    // Pin flat DEFAULT_TIMING_CONFIG (transit median ~30 min) so trailers dock
+    // within the 120-tick horizon and the optimizer/detector/KPI gates fire.
+    // Transit realism (TIME-01) is covered by transit-geography.unit.test.ts.
     await driveSimulation({
       db,
       seed: SEED,
       durationTicks: DURATION,
+      timing: DEFAULT_TIMING_CONFIG,
       rfid: DEMO_RFID_CONFIG,
       broadcast: built.broadcast,
       loop: built.loop,

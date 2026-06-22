@@ -14,12 +14,11 @@
  *  - Tests inject mocks and never need a Postgres container.
  */
 
-import type { ScenarioKnobs } from "@mm/simulation";
+import type { ScenarioKnobs, RfidSimConfig, TimingConfig } from "@mm/simulation";
 import type { ApiDb } from "../routes/queries.js";
 import type { Broadcast } from "../ws/snapshots.js";
 import type { LoopLike } from "./driver.js";
 import { driveSimulationWithScenario } from "./driver.js";
-import type { RfidSimConfig } from "@mm/simulation";
 import type { DetectionConfig } from "@mm/projections";
 
 /** Options for {@link SimController}. */
@@ -52,6 +51,14 @@ export interface SimControllerOptions {
   readonly rfid?: Partial<RfidSimConfig>;
   /** Detection config (passed through to the sim). */
   readonly detection?: DetectionConfig;
+  /**
+   * DIP: timing config passed to `driveSimulationWithScenario`. When absent, the
+   * engine uses realistic geography-derived per-leg transit (TIME-01 default).
+   * Must match the timing config used by the initial `driveSimulation` call so the
+   * base stream generated for `applyScenario` produces the same docking events as
+   * the stored stream (e.g. pass DEFAULT_TIMING_CONFIG for flat-transit tests).
+   */
+  readonly timing?: TimingConfig;
   /** The rolling optimizer loop (fired per tick during re-opt). `undefined` = no opt. */
   readonly loop: LoopLike | undefined;
   /** The ws broadcast function (fires per tick). `undefined` = no push. */
@@ -108,6 +115,7 @@ export class SimController {
       ...(this.opts.rfid !== undefined ? { rfid: this.opts.rfid } : {}),
       ...(this.opts.detection !== undefined ? { detection: this.opts.detection } : {}),
       ...(this.opts.loop !== undefined ? { loop: this.opts.loop } : {}),
+      ...(this.opts.timing !== undefined ? { timing: this.opts.timing } : {}),
     });
   }
 }
