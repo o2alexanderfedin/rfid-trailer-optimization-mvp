@@ -19,6 +19,9 @@ import { validateEvent } from "./ingestion/validate.js";
 export type {
   BlockKey,
   DockDoor,
+  Driver,
+  DutyStatus,
+  HosClock,
   Hub,
   LoadBlock,
   LonLat,
@@ -32,6 +35,9 @@ export type {
 export {
   blockKeySchema,
   dockDoorSchema,
+  driverSchema,
+  dutyStatusSchema,
+  hosClockSchema,
   hubSchema,
   loadBlockSchema,
   lonLatSchema,
@@ -62,6 +68,13 @@ export type {
   RfidObserved,
   WrongTrailerDetected,
   MissedUnloadDetected,
+  DriverRegistered,
+  DriverAssignedToTrip,
+  DriverDutyStateChanged,
+  DriverSwappedAtHub,
+  UnloadStarted,
+  LoadStarted,
+  UnloadCompleted,
 } from "./events/index.js";
 export {
   assertNever,
@@ -81,6 +94,13 @@ export {
   rfidObservedSchema,
   wrongTrailerDetectedSchema,
   missedUnloadDetectedSchema,
+  driverRegisteredSchema,
+  driverAssignedToTripSchema,
+  driverDutyStateChangedSchema,
+  driverSwappedAtHubSchema,
+  unloadStartedSchema,
+  loadStartedSchema,
+  unloadCompletedSchema,
 } from "./events/index.js";
 
 // --- Phase-2 planning value types (the shared planner/aggregation contract) --
@@ -109,6 +129,10 @@ export {
 // --- Shared timing contract (v1.1 — sim draws + optimizer estimate, DRY) -----
 export type { LogNormalParams, TimingConfig } from "./timing.js";
 export { DEFAULT_TIMING_CONFIG, expectedMinutes } from "./timing.js";
+
+// --- Shared HOS contract (v1.2 HOS-01 — full-FMCSA limits, sim + optimizer) --
+export type { HosConfig } from "./hos.js";
+export { DEFAULT_HOS_CONFIG, hosConfigSchema } from "./hos.js";
 
 // --- Shared geography→transit derivation (v1.1 Phase-7 OPT-09/OPT-10) --------
 // Pure helpers the optimizer imports (it cannot import @mm/simulation) and the

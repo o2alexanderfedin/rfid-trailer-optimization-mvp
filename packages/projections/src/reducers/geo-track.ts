@@ -156,7 +156,8 @@ export function geoTrackReducer(
     // Phase-3 RFID/detection events do not move the map track — handled by the
     // dedicated zone-estimate/exception projections (later Phase-3 plans).
     // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) carry
-    // no position, so they produce no keyframe.
+    // no position, so they produce no keyframe. Phase-9 (v1.2) driver-lifecycle +
+    // load/unload phase events carry no map position either, so no keyframe.
     case "HubRegistered":
     case "PackageCreated":
     case "PackageScanned":
@@ -167,6 +168,13 @@ export function geoTrackReducer(
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return { state, keyframes: [] };
     default:
       return assertNeverGeo(event);

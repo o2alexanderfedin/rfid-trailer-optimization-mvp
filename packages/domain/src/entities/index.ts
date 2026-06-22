@@ -103,14 +103,93 @@ export type Route = z.infer<typeof routeSchema>;
 /**
  * A trip (tech spec §6.8): a concrete trailer movement along a route leg.
  * Phase-1 subset: identity, the trailer, and from/to hubs.
+ *
+ * v1.2 (DRV-03): a trip may optionally name the driver bound to it. The field is
+ * `.optional()` so every pre-v1.2 fixture/stream (no `driverId`) stays valid — a
+ * trip is either unassigned or bound to exactly one driver, never a break.
  */
 export const tripSchema = z.object({
   tripId: id,
   trailerId: id,
   fromHubId: id,
   toHubId: id,
+  /** v1.2: the driver assigned to this trip, when one is bound (DRV-03). */
+  driverId: id.optional(),
 });
 export type Trip = z.infer<typeof tripSchema>;
+
+/**
+ * Driver duty status (v1.2 DRV-01) — the closed four-state panel taxonomy from
+ * the FMCSA duty-state machine: `driving → on_break (30-min) → driving →
+ * resting (10h/34h) → off_duty`. The HOS engine (Phase 10) drives transitions;
+ * here it is just the closed vocabulary, single-sourced for event payloads.
+ */
+export const dutyStatusSchema = z.enum([
+  "driving",
+  "on_break",
+  "resting",
+  "off_duty",
+]);
+export type DutyStatus = z.infer<typeof dutyStatusSchema>;
+
+/**
+ * A driver (v1.2 DRV-01): a first-class, event-sourced renewable resource. The
+ * operational twin moved bare trailers before v1.2; a driver carries identity,
+ * an optional human `name`/`licenseClass`, and a current `dutyStatus`. The
+ * inferred type is the single source of truth (DRY with the driver event
+ * payloads). The per-driver HOS clock is the separate {@link HosClock}
+ * value-object (DRV-02), carried in event snapshots / projection rows.
+ */
+export const driverSchema = z.object({
+  driverId: id,
+  /** Optional human-readable name (additive — minimal drivers omit it). */
+  name: z.string().min(1).optional(),
+  /** Optional CDL license class (e.g. "A"); additive. */
+  licenseClass: z.string().min(1).optional(),
+  dutyStatus: dutyStatusSchema,
+});
+export type Driver = z.infer<typeof driverSchema>;
+
+/**
+ * A non-negative integer count of MINUTES (1 sim tick = 1 minute). HOS clocks
+ * are pure integer math (no RNG, no fractional time), so every counter rejects
+ * negatives and fractions at the validation boundary.
+ */
+const minuteCount = z.number().int().nonnegative();
+
+/**
+ * The per-driver Hours-of-Service clock (v1.2 DRV-02): the integer-minute state
+ * the forward-labeling HOS engine (Phase 10) advances. A value-object (no
+ * identity of its own) snapshotted into `DriverDutyStateChanged` and folded into
+ * the driver-status projection.
+ *
+ * **Modeling note (the keystone trap):** the 14-hour duty window is ELAPSED
+ * wall-clock — an ABSOLUTE deadline `dutyWindowStartAt + dutyWindowMin`, NOT a
+ * decrementing counter (a counter would silently pause during breaks/dwell and
+ * overstate legal drive time). Hence `dutyWindowStartAt`/`comeOnDutyAt` are ISO
+ * stamps, while the accumulators are pure minute counts.
+ *
+ * The two `sleeperBerth*` accumulators carry the in-progress 7/3 & 8/2 split
+ * provisions (`395.1(g)`) the Phase-10 engine consumes; they are 0 when no split
+ * is in progress.
+ */
+export const hosClockSchema = z.object({
+  /** 11h driving clock — minutes DRIVEN since the last 10h reset. */
+  driveTodayMin: minuteCount,
+  /** ISO stamp the 14h ABSOLUTE window deadline is measured from. */
+  dutyWindowStartAt: id,
+  /** 8h-break clock — minutes driven since the last ≥30-min break. */
+  sinceLastBreakMin: minuteCount,
+  /** 70h/8-day rolling ON-DUTY sum (driving + on-duty-not-driving), minutes. */
+  weeklyOnDutyMin: minuteCount,
+  /** ISO come-on-duty stamp for this duty cycle. */
+  comeOnDutyAt: id,
+  /** Sleeper-berth split: accrued minutes in the LONG period (≥7h qualifier). */
+  sleeperBerthLongMin: minuteCount,
+  /** Sleeper-berth split: accrued minutes in the SHORT period (the 2h/3h leg). */
+  sleeperBerthShortMin: minuteCount,
+});
+export type HosClock = z.infer<typeof hosClockSchema>;
 
 /**
  * The 7-part load-block key (AGG-01, tech spec §11.1): the tuple packages are

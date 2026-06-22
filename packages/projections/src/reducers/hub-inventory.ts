@@ -189,7 +189,8 @@ export function hubInventoryReducer(
     // evidence is projected separately (later Phase-3 plans), never folded into
     // the planned inventory read model (anti-P6). Phase-4 plan-lifecycle events
     // (PlanGenerated/PlanAccepted, OPT-04) don't move packages between hubs, so
-    // they no-op here too.
+    // they no-op here too. Phase-9 (v1.2) driver-lifecycle + load/unload phase
+    // events likewise move no package between hubs, so they no-op as well.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -200,6 +201,13 @@ export function hubInventoryReducer(
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return state;
     default:
       return assertNeverEvent(event);

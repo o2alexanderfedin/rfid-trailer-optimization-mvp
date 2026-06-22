@@ -188,6 +188,8 @@ export function exceptionsReducer(
     // planned-vs-observed disagreements, never absence (anti-P6 end-to-end).
     // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) are
     // optimizer concerns, not detection evidence, so they no-op here too.
+    // Phase-9 (v1.2) driver-lifecycle + load/unload phase events raise no
+    // exception in this phase, so they no-op as well.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -199,6 +201,13 @@ export function exceptionsReducer(
     case "RfidObserved":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return state;
     default:
       return assertNeverEvent(event);
