@@ -1,6 +1,6 @@
-import type { HubDto, RouteDto, KpiSnapshot } from "@mm/api";
+import type { HubDto, RouteDto, KpiSnapshot, SimSpeedState } from "@mm/api";
 
-export type { HubDto, RouteDto, KpiSnapshot };
+export type { HubDto, RouteDto, KpiSnapshot, SimSpeedState };
 
 // ---------------------------------------------------------------------------
 // KPI comparison types (mirrors packages/api/src/kpis/comparison.ts — kept
@@ -193,4 +193,28 @@ export async function fetchKpiComparison(
     throw new Error(`GET /api/kpis/comparison failed: ${res.status}`);
   }
   return (await res.json()) as KpiComparison;
+}
+
+/**
+ * `POST /api/sim/speed` — set the global server-authoritative "speed of time".
+ *
+ * Body `{ multiplier?, paused? }`: `multiplier` is relative to the default 1×
+ * (clamped server-side to [0.25, 8]); `paused` freezes the sim. Returns the
+ * effective `SimSpeedState` the server applied. The server also pushes an
+ * immediate ws envelope reflecting the change.
+ */
+export async function setSimSpeed(
+  input: { multiplier?: number; paused?: boolean },
+  signal?: AbortSignal,
+): Promise<SimSpeedState> {
+  const res = await fetch("/api/sim/speed", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) {
+    throw new Error(`POST /api/sim/speed failed: ${res.status}`);
+  }
+  return (await res.json()) as SimSpeedState;
 }

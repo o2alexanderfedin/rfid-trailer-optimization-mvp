@@ -17,7 +17,12 @@ export type {
   ExceptionKpiDto,
   ZoneEstimateDto,
 } from "./routes/exceptions.js";
-export { PRODUCTION_DETECTION_CONFIG, DEMO_RFID_CONFIG } from "./detection-config.js";
+export {
+  PRODUCTION_DETECTION_CONFIG,
+  DEMO_RFID_CONFIG,
+  DEMO_OVER_CARRY_CONFIG,
+} from "./detection-config.js";
+export type { OverCarryConfig } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
 export { registerOptimizerRoutes } from "./routes/optimizer.js";
@@ -52,6 +57,7 @@ export type {
   ExceptionItem,
   PlanDelta,
   KpiSnapshot,
+  SimSpeedState,
 } from "./ws/envelope.js";
 export { diffTick } from "./ws/envelope.js";
 export { driveSimulation, driveSimulationPaced } from "./sim/driver.js";
@@ -59,6 +65,13 @@ export type {
   DriveSimulationOptions,
   DriveSimulationPacedOptions,
 } from "./sim/driver.js";
+export { makeSpeedController } from "./sim/speed-controller.js";
+export type {
+  SpeedController,
+  SpeedControllerOptions,
+} from "./sim/speed-controller.js";
+export { registerSimSpeedRoutes } from "./routes/sim-speed.js";
+export type { SimSpeedControllerPort } from "./routes/sim-speed.js";
 
 // --- Walking-skeleton spine (Plan 01) — kept green; GET /hubs preserved ------
 export { buildApp } from "./app.js";

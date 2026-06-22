@@ -22,6 +22,7 @@ import {
   simulate,
   type ScenarioKnobs,
   type SimulatedEvent,
+  type TimingConfig,
 } from "@mm/simulation";
 import { makeRng } from "@mm/simulation";
 import type { DomainEvent } from "@mm/domain";
@@ -87,7 +88,7 @@ export type SimTickRunner = (
  */
 export function makeSimRunner(opts: SimRunnerOptions): SimTickRunner {
   if (opts.loop === undefined) {
-    return async (_events: readonly DomainEvent[], _simMs: number) => undefined;
+    return (): Promise<EpochResult | undefined> => Promise.resolve(undefined);
   }
   const { loop } = opts;
   return async (events: readonly DomainEvent[], simMs: number) => {
@@ -133,6 +134,23 @@ export interface DriveSimulationOptions {
    */
   readonly rfid?: Partial<RfidSimConfig>;
   /**
+   * F-07 / SNS-05: OPT-IN over-carry rate ∈ [0,1]. Threaded into `simulate` only
+   * when DEFINED — so the live demo can model a missed-unload (a package destined
+   * for a spoke still aboard a trailer that has departed the spoke), which the
+   * UNCHANGED detector then catches. The driver's existing `departedHubs` /
+   * `destHubIndex` plumbing carries the spoke-origin departure through the SNS-05
+   * gate with zero detector change. Absent ⇒ the golden stream is byte-identical.
+   */
+  readonly overCarry?: number;
+  /**
+   * DIP: override the seeded log-normal DWELL/TRANSIT distributions passed to
+   * `simulate`. When ABSENT the engine uses realistic geography-derived per-leg
+   * transit (TIME-01 default). Pass {@link DEFAULT_TIMING_CONFIG} to restore flat
+   * ~30-min transit — the right choice for lifecycle/projection integration tests
+   * that drive short horizons and must see trailers dock.
+   */
+  readonly timing?: TimingConfig;
+  /**
    * Detection calibration band; defaults to {@link PRODUCTION_DETECTION_CONFIG}
    * (the ONE production band). Injectable for tuning/tests (DIP).
    */
@@ -161,8 +179,49 @@ export interface DriveSimulationPacedOptions extends DriveSimulationOptions {
    * Wall-clock milliseconds to wait between consecutive tick broadcasts.
    * Default: 500ms (2 ticks/sec). Increase for a slower demo, decrease for speed.
    * Pure presentation pacing — NOT fed into the sim engine.
+   *
+   * Back-compat fallback: used only when {@link getTickIntervalMs} is absent.
    */
   readonly tickIntervalMs?: number;
+  /**
+   * LIVE tick interval source, read FRESH before each inter-tick pause so the
+   * speed can be retuned mid-run (via the SpeedController). When present it takes
+   * precedence over the once-captured {@link tickIntervalMs}. Returning <= 0 is
+   * coerced to the fallback so the loop never busy-spins. Presentation pacing
+   * only — never fed into the sim engine (DETERMINISM CONTRACT).
+   */
+  readonly getTickIntervalMs?: () => number;
+  /**
+   * LIVE pause source, polled before each tick. While it returns `true` the
+   * driver HOLDS (does not advance/broadcast the next tick) — freezing the demo
+   * without affecting the deterministic event stream. Presentation only.
+   */
+  readonly isPaused?: () => boolean;
+}
+
+/** Poll interval (ms) used while holding for an external pause flag. */
+const PAUSE_POLL_MS = 100;
+
+/** Promise-based sleep helper (presentation pacing only). */
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Resolve the effective inter-tick interval for the current iteration: prefer
+ * the LIVE source, fall back to the captured value, then to 500ms. A non-finite
+ * or non-positive live value falls back too (never 0 → never a busy spin).
+ *
+ * Pure + presentation-only — exported for hermetic unit testing.
+ */
+export function resolveTickIntervalMs(
+  live: (() => number) | undefined,
+  fallbackMs: number | undefined,
+): number {
+  const fallback = fallbackMs ?? 500;
+  if (live === undefined) return fallback;
+  const value = live();
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 /**
@@ -345,6 +404,8 @@ export async function driveSimulation(
     seed: opts.seed,
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -374,9 +435,10 @@ export async function driveSimulationPaced(
     seed: opts.seed,
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
   });
   const ticks = intoTicks(stream);
-  const intervalMs = opts.tickIntervalMs ?? 500;
 
   // Drive ticks one at a time with a wall-clock pause between each.
   // We inline the per-tick logic from `driveTickStream` here to preserve
@@ -396,6 +458,15 @@ export async function driveSimulationPaced(
 
   let driven = 0;
   for (const tick of ticks) {
+    // (0) Honor an external pause BEFORE advancing this tick. While paused the
+    //     driver holds — it does NOT append/project/broadcast — so both the
+    //     backend tick advance and (via simSpeed:0 on the envelope) the frontend
+    //     tween freeze. Polling is cheap and presentation-only; the deterministic
+    //     event STREAM is untouched (pausing only delays delivery).
+    while (opts.isPaused?.() === true) {
+      await sleep(PAUSE_POLL_MS);
+    }
+
     // (a) Append this tick's events (OCC-safe per stream).
     const perStream = new Map<string, SimulatedEvent[]>();
     for (const item of tick) {
@@ -468,9 +539,12 @@ export async function driveSimulationPaced(
 
     driven += 1;
 
-    // Wall-clock pause between ticks (presentation-layer only).
-    if (driven < ticks.length && intervalMs > 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+    // Wall-clock pause between ticks (presentation-layer only). The interval is
+    // read FRESH each iteration so a live speed change (SpeedController) takes
+    // effect on the very next gap — not captured once at start.
+    if (driven < ticks.length) {
+      const intervalMs = resolveTickIntervalMs(opts.getTickIntervalMs, opts.tickIntervalMs);
+      if (intervalMs > 0) await sleep(intervalMs);
     }
   }
   return { ticks: driven };
@@ -510,6 +584,7 @@ export async function driveSimulationWithScenario(
     seed: opts.seed,
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
   });
 
   // 2. Apply the scenario knobs (seeded, deterministic).

@@ -8,12 +8,15 @@
  * `applyTick`) rather than the hook, to keep these tests node-friendly
  * (no DOM / WebSocket constructor needed).
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   parseEnvelope,
   applySnapshot,
   applyTick,
   makeEntityMaps,
+  DEFAULT_SPEED,
+  __resetSpeedFallbackWarning,
 } from "./wsClient.js";
 import type {
   WsEnvelope,
@@ -79,9 +82,9 @@ function makeEnvelope(
   simMs = 0,
 ): WsEnvelope {
   if (type === "snapshot") {
-    return { v: 1, type, seq, simMs, payload: payload as SnapshotPayload };
+    return { v: 1, type, seq, simMs, speed: DEFAULT_SPEED, payload: payload as SnapshotPayload };
   }
-  return { v: 1, type, seq, simMs, payload: payload as TickPayload };
+  return { v: 1, type, seq, simMs, speed: DEFAULT_SPEED, payload };
 }
 
 const TRAILER_A: TrailerKeyframe = {
@@ -154,6 +157,185 @@ describe("parseEnvelope", () => {
 
   it("returns null for missing simMs field", () => {
     expect(parseEnvelope({ v: 1, type: "snapshot", seq: 1, payload: {} })).toBeNull();
+  });
+
+  it("exposes the envelope-level speed (simSpeed drives the local clock)", () => {
+    const env = parseEnvelope(makeEnvelope("tick", 5, { trailers: [TRAILER_A] }, 60_000));
+    expect(env).not.toBeNull();
+    expect(env?.speed.simSpeed).toBe(120);
+    expect(env?.speed.paused).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseEnvelope — malformed CORE field rejection (HRD-01: only `speed` is
+// tolerated; every other malformed field still hard-rejects → null so a real
+// protocol/version error is NEVER masked, PITFALLS P7).
+// ---------------------------------------------------------------------------
+
+describe("parseEnvelope — malformed core fields reject (speed fallback must not mask them)", () => {
+  /** A well-formed snapshot envelope as a plain record, for per-field mutation. */
+  function baseRecord(): Record<string, unknown> {
+    return {
+      v: 1,
+      type: "snapshot",
+      seq: 1,
+      simMs: 0,
+      speed: DEFAULT_SPEED,
+      payload: { trailers: [], hubs: [], routes: [] },
+    };
+  }
+
+  it("sanity: the base record parses (so each rejection below is the field under test)", () => {
+    expect(parseEnvelope(baseRecord())).not.toBeNull();
+  });
+
+  it("rejects a wrong protocol version (v !== 1)", () => {
+    expect(parseEnvelope({ ...baseRecord(), v: 2 })).toBeNull();
+    expect(parseEnvelope({ ...baseRecord(), v: 0 })).toBeNull();
+    expect(parseEnvelope({ ...baseRecord(), v: "1" })).toBeNull();
+  });
+
+  it("rejects an unknown type", () => {
+    expect(parseEnvelope({ ...baseRecord(), type: "resync" })).toBeNull();
+    expect(parseEnvelope({ ...baseRecord(), type: 123 })).toBeNull();
+  });
+
+  it("rejects a non-number seq", () => {
+    expect(parseEnvelope({ ...baseRecord(), seq: "1" })).toBeNull();
+    const { seq: _omit, ...noSeq } = baseRecord();
+    void _omit;
+    expect(parseEnvelope(noSeq)).toBeNull();
+  });
+
+  it("rejects a non-number simMs", () => {
+    expect(parseEnvelope({ ...baseRecord(), simMs: "0" })).toBeNull();
+    const { simMs: _omit, ...noSimMs } = baseRecord();
+    void _omit;
+    expect(parseEnvelope(noSimMs)).toBeNull();
+  });
+
+  it("rejects a missing or non-object payload", () => {
+    const { payload: _omit, ...noPayload } = baseRecord();
+    void _omit;
+    expect(parseEnvelope(noPayload)).toBeNull();
+    expect(parseEnvelope({ ...baseRecord(), payload: null })).toBeNull();
+    expect(parseEnvelope({ ...baseRecord(), payload: "x" })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseEnvelope — HRD-01 tolerant `speed` fallback.
+//
+// When `v/type/seq/simMs/payload` are ALL valid but `speed` is missing/invalid,
+// the envelope is ACCEPTED with `speed === DEFAULT_SPEED`, and a single
+// `console.warn` is emitted across the whole module lifetime (warn-once guard) —
+// so a stale/older server that omits `speed` no longer blanks the whole map.
+// ---------------------------------------------------------------------------
+
+describe("parseEnvelope — tolerant speed fallback (HRD-01)", () => {
+  let warnSpy: MockInstance<(...args: readonly unknown[]) => void>;
+
+  beforeEach(() => {
+    __resetSpeedFallbackWarning();
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("DEFAULT_SPEED matches the speed-controller 1× default (60000ms/tick ÷ 500ms = 120)", () => {
+    expect(DEFAULT_SPEED).toEqual({
+      multiplier: 1,
+      tickIntervalMs: 500,
+      simSpeed: 120,
+      paused: false,
+    });
+  });
+
+  it("accepts an otherwise-valid envelope with NO speed, substituting DEFAULT_SPEED", () => {
+    const env = parseEnvelope({
+      v: 1,
+      type: "tick",
+      seq: 7,
+      simMs: 1_000,
+      payload: { trailers: [TRAILER_A] },
+    });
+    expect(env).not.toBeNull();
+    expect(env?.type).toBe("tick");
+    expect(env?.seq).toBe(7);
+    // The synthesized speed is the canonical default (referential identity).
+    expect(env?.speed).toBe(DEFAULT_SPEED);
+    expect(env?.speed).toEqual(DEFAULT_SPEED);
+  });
+
+  it("accepts an envelope with a STRUCTURALLY INVALID speed (missing `paused`), substituting DEFAULT_SPEED", () => {
+    const env = parseEnvelope({
+      v: 1,
+      type: "snapshot",
+      seq: 1,
+      simMs: 0,
+      speed: { multiplier: 2, tickIntervalMs: 250, simSpeed: 240 }, // no `paused`
+      payload: { trailers: [], hubs: [], routes: [] },
+    });
+    expect(env).not.toBeNull();
+    expect(env?.speed).toEqual(DEFAULT_SPEED);
+  });
+
+  it("preserves a VALID speed unchanged (fallback only fires when speed is bad)", () => {
+    const customSpeed = {
+      multiplier: 2,
+      tickIntervalMs: 250,
+      simSpeed: 240,
+      paused: true,
+    };
+    const env = parseEnvelope({
+      v: 1,
+      type: "tick",
+      seq: 3,
+      simMs: 500,
+      speed: customSpeed,
+      payload: {},
+    });
+    expect(env).not.toBeNull();
+    expect(env?.speed).toEqual(customSpeed);
+    // No fallback → no warning.
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns EXACTLY ONCE even across many missing-speed envelopes (no per-tick spam)", () => {
+    for (let seq = 1; seq <= 5; seq += 1) {
+      const env = parseEnvelope({
+        v: 1,
+        type: "tick",
+        seq,
+        simMs: seq * 100,
+        payload: {},
+      });
+      expect(env?.speed).toBe(DEFAULT_SPEED);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("DEFAULT_SPEED"),
+    );
+  });
+
+  it("does NOT warn when speed is valid, and the warn-once guard is per-module not per-call", () => {
+    // A valid envelope first — must not arm the guard.
+    parseEnvelope({
+      v: 1,
+      type: "tick",
+      seq: 1,
+      simMs: 0,
+      speed: DEFAULT_SPEED,
+      payload: {},
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    // Then a missing-speed envelope warns once.
+    parseEnvelope({ v: 1, type: "tick", seq: 2, simMs: 0, payload: {} });
+    parseEnvelope({ v: 1, type: "tick", seq: 3, simMs: 0, payload: {} });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -10,10 +10,11 @@ import type {
   TrailerDocked,
 } from "@mm/domain";
 import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
-import { buildRoutes } from "./network/routes.js";
+import { buildRoutes, buildTransitParamsByLeg, routeId } from "./network/routes.js";
 import { makeRng } from "./rng.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
+import { DEFAULT_TIMING_CONFIG, sampleLogNormal, type TimingConfig } from "./timing.js";
 
 /**
  * SIM-02: the seeded, deterministic tick/event-queue engine.
@@ -57,6 +58,30 @@ export interface SimulateOptions {
    * byte-identical. Partial: unspecified knobs fall back to {@link DEFAULT_RFID_CONFIG}.
    */
   readonly rfid?: Partial<RfidSimConfig>;
+  /**
+   * F-07 / SNS-05: OPT-IN over-carry rate ∈ [0,1]. When present and > 0, at a
+   * spoke arrival the engine holds back AT MOST ONE carried package (a draw
+   * against this rate), unloads the rest, then emits a SPOKE-ORIGIN
+   * `TrailerDeparted` (fromHubId=spoke, toHubId=center) carrying the held-back
+   * package — so a package destined for the spoke is STILL aboard a trailer that
+   * has departed the spoke (the SNS-05 missed-unload gate). When RFID is on, a
+   * portal read positively observes the held-back package aboard the return leg
+   * so the fusion layer clears the calibrated detection gate. A return arrival at
+   * the center unloads it (no SLA/utilization skew at the spoke).
+   *
+   * OFF BY DEFAULT: absent (or 0) ⇒ the stream is byte-identical to the golden.
+   * ALL randomness flows through a SEPARATE seeded substream (seed XOR a salt
+   * DISTINCT from the RFID salt) so enabling it never perturbs `rng`/`rfidRng`.
+   */
+  readonly overCarry?: number;
+  /**
+   * DIP: override the seeded log-normal DWELL/TRANSIT distributions. When absent
+   * the engine uses {@link DEFAULT_TIMING_CONFIG}. ALL timing draws flow through a
+   * DEDICATED seeded substream (seed XOR a salt distinct from RFID/over-carry) so
+   * timing variance never perturbs those streams; the result is still fully
+   * reproducible per seed (same seed + same config ⇒ byte-identical timestamps).
+   */
+  readonly timing?: TimingConfig;
 }
 
 /** Options for the store-driven run. */
@@ -72,10 +97,6 @@ const MS_PER_TICK = 60_000;
 /** The seeded domain epoch — the clock starts here; no wall-clock read. */
 const EPOCH_ISO = "2026-04-01T00:00:00.000Z";
 
-/** Ticks a trailer spends in transit on a linehaul leg. */
-const TRANSIT_TICKS = 30;
-/** Ticks between a trailer docking and its next departure (dwell + reload). */
-const DWELL_TICKS = 10;
 /** Ticks between successive package-creation batches at the center hub. */
 const PACKAGE_INTERVAL_TICKS = 15;
 /** Max packages created per batch (1..MAX). */
@@ -134,7 +155,7 @@ class EventQueue {
  * the SINGLE source of truth shared by `simulate` and `runSimulation`.
  */
 function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid } = opts;
+  const { seed, durationTicks, rfid, overCarry, timing } = opts;
   if (!Number.isInteger(durationTicks) || durationTicks < 0) {
     throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
   }
@@ -144,12 +165,60 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   const rfidEnabled = rfid !== undefined;
   const rfidConfig: RfidSimConfig = resolveRfidConfig(rfid);
 
+  // F-07 / SNS-05: over-carry is OPT-IN. Enabled only when a finite, positive
+  // rate is supplied — absent or 0 ⇒ the over-carry substream is NEVER drawn and
+  // NO spoke-origin departure is emitted, so the golden stays byte-identical.
+  const overCarryRate =
+    typeof overCarry === "number" && Number.isFinite(overCarry) ? overCarry : 0;
+  const overCarryEnabled = overCarryRate > 0;
+
   const rng = makeRng(seed);
   // SIM-03: RFID draws from a SEPARATE seeded substream (seed ^ a fixed salt) so
   // enabling RFID never perturbs the operational rng — the non-RFID event order
   // is byte-identical with or without the rfid option, while the RFID stream is
   // still fully reproducible per seed.
   const rfidRng = makeRng((seed ^ 0x5f_1d_a7_c3) >>> 0);
+  // F-07: over-carry draws from its OWN seeded substream — a salt DISTINCT from
+  // the RFID salt (0x5f1da7c3) so it never collides with / perturbs `rfidRng` or
+  // `rng`. Same seed + same rate ⇒ byte-identical over-carry decisions.
+  const overCarryRng = makeRng((seed ^ 0x3c_a7_1d_5f) >>> 0);
+  // Timing (dwell/transit) draws from its OWN seeded substream — a salt DISTINCT
+  // from the RFID (0x5f1da7c3) and over-carry (0x3ca71d5f) salts — so the
+  // log-normal timing variance is fully reproducible per seed yet NEVER perturbs
+  // the operational `rng`, `rfidRng`, or `overCarryRng` draws. The draws happen
+  // in deterministic event-queue order, so the timestamps are byte-identical for
+  // a fixed seed + timing config.
+  const timingRng = makeRng((seed ^ 0x00_00_77_17) >>> 0);
+  const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
+  // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
+  // the real great-circle (haversine) distance between its two hubs at an 80 km/h
+  // average HGV speed — replacing the single flat ~30-min global transit median.
+  // The leg's log-space spread (sigma) is carried in from the timing config's
+  // `transit.sigma`. The map is keyed by directed routeId (`route-<from>-<to>`)
+  // and is a pure function of hub coordinates + sigma (deterministic).
+  //
+  // DIP OVERRIDE: per-leg geography drives the DEFAULT path. When a caller passes
+  // an EXPLICIT `timing` config, its flat `transit` params win for every leg —
+  // so a test that pins transit to a small constant (to make round-trips complete
+  // in a short horizon) keeps full control. The default config (no override) uses
+  // the realistic geography-derived per-leg medians.
+  //
+  // NO-ORS-KEY PATH: see `transitParamsForLeg` in routes.ts — swap each leg's
+  // median to its ORS `summary.duration` once VIZ-06's road-geometry exists.
+  const useGeographyTransit = timing === undefined;
+  const transitByLeg = buildTransitParamsByLeg(USA_HUBS, timingConfig.transit.sigma);
+  /** Draw a whole-tick transit duration (≥1) for one departure on a directed leg. */
+  const drawTransitTicks = (fromHubId: string, toHubId: string): number => {
+    const params = useGeographyTransit
+      ? transitByLeg.get(routeId(fromHubId, toHubId)) ?? timingConfig.transit
+      : timingConfig.transit;
+    return Math.max(1, Math.round(sampleLogNormal(timingRng, params)));
+  };
+  /** Draw a whole-tick dwell duration (≥1) for one arrival, chosen by hub role. */
+  const drawDwellTicks = (role: "spoke" | "center"): number => {
+    const params = role === "center" ? timingConfig.dwellCenter : timingConfig.dwellSpoke;
+    return Math.max(1, Math.round(sampleLogNormal(timingRng, params)));
+  };
   const clock = new VirtualClock(EPOCH_ISO, MS_PER_TICK);
   const queue = new EventQueue();
   const out: SimulatedEvent[] = [];
@@ -293,7 +362,10 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emitRfid("portal", trailerId, center.hubId, loaded);
     }
 
-    const arriveTick = departTick + TRANSIT_TICKS;
+    // Per-departure seeded log-normal transit (right-skewed; same seed ⇒ same).
+    // TIME-01: the outbound leg is center→spoke, so transit is drawn from THAT
+    // leg's geography-derived per-leg params (a long coast leg dwarfs a short one).
+    const arriveTick = departTick + drawTransitTicks(center.hubId, spoke.hubId);
     schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
   };
 
@@ -325,9 +397,25 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emitRfid("antenna", trailerId, spoke.hubId, carried);
     }
 
-    // Unload each carried package at the destination spoke: unload scan then
-    // arrival (the package has reached its destination hub).
+    // F-07 / SNS-05: OPT-IN over-carry. Before unloading, decide (against the
+    // seeded over-carry substream) whether to HOLD BACK at most ONE carried
+    // package — modelling an operator that fails to pull one block at the spoke.
+    // The held-back package is destined for THIS spoke yet rides on, so once the
+    // spoke records a departure the SNS-05 detector (UNCHANGED) can catch it.
+    // The draw is gated on `overCarryEnabled`, so the over-carry substream is
+    // NEVER consumed when the knob is off ⇒ the golden stream is byte-identical.
+    let heldBack: string | undefined;
+    if (overCarryEnabled && carried.length > 0) {
+      if (overCarryRng.next() < overCarryRate) {
+        // Deterministic choice: the LAST carried package (stable, id-free pick).
+        heldBack = carried[carried.length - 1];
+      }
+    }
+
+    // Unload each carried package at the destination spoke EXCEPT the held-back
+    // one: unload scan then arrival (the package has reached its destination hub).
     for (const packageId of carried) {
+      if (packageId === heldBack) continue;
       const unload: PackageScanned = {
         type: "PackageScanned",
         schemaVersion: 1,
@@ -343,11 +431,106 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emit(`package-${packageId}`, atHub);
     }
 
-    // Loop: after dwell, the trailer returns toward the center and re-dispatches.
-    const nextDepart = arriveTick + DWELL_TICKS;
+    // F-07: emit the SPOKE-ORIGIN return departure carrying the held-back
+    // package, then schedule its unload back at the center. This is the ONLY
+    // place a `TrailerDeparted.fromHubId != center` is produced — and only when
+    // over-carry actually fires — so the missed-unload gate becomes satisfiable
+    // WITHOUT changing the detector or perturbing the golden.
+    if (heldBack !== undefined) {
+      tripCounter += 1;
+      const returnTripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+      const overCarried = [heldBack];
+
+      const returnDeparted: TrailerDeparted = {
+        type: "TrailerDeparted",
+        schemaVersion: 1,
+        payload: {
+          trailerId,
+          fromHubId: spoke.hubId,
+          toHubId: center.hubId,
+          tripId: returnTripId,
+          packageIds: overCarried,
+        },
+      };
+      emit(`trailer-${trailerId}`, returnDeparted);
+
+      // SIM-03: a DOCK-PORTAL read positively observes the over-carried package
+      // aboard the trailer AFTER the spoke is recorded departed — the corroborated
+      // strong-RSSI read the fusion layer needs to clear the calibrated detection
+      // gate (a single antenna read alone sits near the uniform floor).
+      if (rfidEnabled) {
+        emitRfid("portal", trailerId, spoke.hubId, overCarried);
+      }
+
+      // Schedule the return arrival at the center, which unloads the over-carried
+      // package there (so it does NOT skew spoke utilization/SLA). A fresh
+      // per-departure transit draw (the return leg is its own departure).
+      // TIME-01: the return leg is spoke→center, so it draws from that directed
+      // leg's geography-derived params.
+      const returnArriveTick = arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
+      const overCarriedId = heldBack;
+      schedule(returnArriveTick, () =>
+        arriveOverCarriedAtCenter(trailerId, overCarriedId, returnTripId),
+      );
+    }
+
+    // TIME-02: model the trailer's full turnaround as TWO role-keyed dwells, each
+    // applied EXACTLY ONCE (PITFALLS P4 — no double-count). The trailer first
+    // turns around at the SPOKE (`dwellSpoke`), then returns to the center where
+    // the cross-dock re-dispatch incurs the distinct, longer `dwellCenter`. The
+    // next outbound departure is `arriveTick + dwellSpoke + dwellCenter`. Both
+    // draws come from the seeded timing substream in deterministic queue order,
+    // so a fixed seed + config stays byte-identical. (The over-carried return
+    // arrival at the center is a terminal unload, not a re-dispatch, so it does
+    // NOT draw a center dwell — the center dwell is owned by this re-dispatch site
+    // alone.)
+    const spokeDwell = drawDwellTicks("spoke");
+    const centerDwell = drawDwellTicks("center");
+    const nextDepart = arriveTick + spokeDwell + centerDwell;
     if (nextDepart <= durationTicks) {
       schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
     }
+  };
+
+  /**
+   * F-07: the return-leg arrival at the center for an over-carried package. It
+   * mirrors the normal arrival (TrailerArrivedAtHub + TrailerDocked) and unloads
+   * the single over-carried package at the center, so the package finally leaves
+   * the trailer and the demo stays utilization/SLA-clean. Time + ids are all
+   * deterministic (no draw against any rng here).
+   */
+  const arriveOverCarriedAtCenter = (
+    trailerId: string,
+    packageId: string,
+    tripId: string,
+  ): void => {
+    const arrived: TrailerArrivedAtHub = {
+      type: "TrailerArrivedAtHub",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, tripId },
+    };
+    emit(`trailer-${trailerId}`, arrived);
+
+    const docked: TrailerDocked = {
+      type: "TrailerDocked",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, dockDoorId: `${center.hubId}-DOCK1` },
+    };
+    emit(`trailer-${trailerId}`, docked);
+
+    const unload: PackageScanned = {
+      type: "PackageScanned",
+      schemaVersion: 1,
+      payload: { packageId, hubId: center.hubId, scanType: "unload" },
+    };
+    emit(`package-${packageId}`, unload);
+
+    const atHub: PackageArrivedAtHub = {
+      type: "PackageArrivedAtHub",
+      schemaVersion: 1,
+      payload: { packageId, hubId: center.hubId },
+    };
+    emit(`package-${packageId}`, atHub);
   };
 
   /** Schedule an action at `fireTick` with a stable insertion-order tie-break. */

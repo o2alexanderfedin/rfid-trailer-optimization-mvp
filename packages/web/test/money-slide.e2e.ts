@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { WebSocketRoute } from "@playwright/test";
+import type { Page, WebSocketRoute } from "@playwright/test";
 
 /**
  * KEYSTONE (b) — Rendered money slide: seed-deterministic optimizer-beats-baseline.
@@ -83,7 +83,7 @@ const SNAPSHOT_PAYLOAD = {
 // Stub setup helper — isolates the three API boundaries
 // ---------------------------------------------------------------------------
 
-async function stubApis(page: import("@playwright/test").Page): Promise<void> {
+async function stubApis(page: Page): Promise<void> {
   // Stub GET /api/kpis (KpiDashboard initial fetch)
   await page.route("/api/kpis", (route) => {
     void route.fulfill({

@@ -19,8 +19,9 @@ async function buildTestApp(onInject?: (knobs: ScenarioKnobs) => void) {
   const app = Fastify({ logger: false });
 
   const controller = {
-    injectScenario: vi.fn(async (knobs: ScenarioKnobs) => {
+    injectScenario: vi.fn((knobs: ScenarioKnobs): Promise<void> => {
       onInject?.(knobs);
+      return Promise.resolve();
     }),
   };
 

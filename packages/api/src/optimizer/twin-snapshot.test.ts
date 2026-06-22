@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import type { ProjectionDb } from "@mm/projections";
+import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import { buildTwinSnapshot, TRANSIT_MIN } from "./twin-snapshot.js";
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,6 @@ function makeDb(opts: {
         // Two calls: RouteRegistered events + TrailerDeparted events (in order)
         // We track which events call we're on
         const evenCalls = [routeChain, departedChain];
-        const idx = Math.floor((callCount - 1) / 1) % 2;
         // crude approach: use call order
         return evenCalls[callCount <= 2 ? 0 : 1] ?? routeChain;
       }
@@ -205,7 +205,7 @@ describe("buildTwinSnapshot", () => {
     expect(snapshot.trailers).toEqual([]);
   });
 
-  it("assembles routes from RouteRegistered events with TRANSIT_MIN as travelMin", async () => {
+  it("assembles routes from RouteRegistered events with geography-derived expected-transit travelMin (OPT-09)", async () => {
     const db = makeDb({
       routeEventRows: [ROUTE_A, ROUTE_B],
     });
@@ -216,9 +216,52 @@ describe("buildTwinSnapshot", () => {
     expect(snapshot.routes[0]!.routeId).toBe("route-atl-chi");
     expect(snapshot.routes[0]!.fromHubId).toBe("ATL");
     expect(snapshot.routes[0]!.toHubId).toBe("CHI");
-    expect(snapshot.routes[0]!.travelMin).toBe(TRANSIT_MIN);
+    // RE-BASELINE (OPT-09/OPT-10): `travelMin` is no longer the flat TRANSIT_MIN
+    // (30). It is now the deterministic per-leg expected-transit MEAN
+    // `round(expectedTransitMinutes(geometry endpoints, DEFAULT_TIMING_CONFIG))`.
+    //  - ATL→CHI (≈743 km great-circle @ 80 km/h, ×exp(σ²/2)) ⇒ 743 min.
+    //  - CHI→DET (a much shorter regional leg) ⇒ 299 min.
+    // Long coast legs now plan against far larger transit than short ones (the
+    // whole point of TIME-01/OPT-09) — verified against the @mm/domain estimator.
+    expect(snapshot.routes[0]!.travelMin).toBe(743);
     expect(snapshot.routes[1]!.routeId).toBe("route-chi-det");
-    expect(snapshot.routes[1]!.travelMin).toBe(TRANSIT_MIN);
+    expect(snapshot.routes[1]!.travelMin).toBe(299);
+    // Both are whole minutes (TwinRoute.travelMin integer contract, anti-P12).
+    expect(Number.isInteger(snapshot.routes[0]!.travelMin)).toBe(true);
+    expect(Number.isInteger(snapshot.routes[1]!.travelMin)).toBe(true);
+  });
+
+  it("travelMin PREFERS the committed ORS road duration_s for a real USA-hub leg (VIZ-06)", async () => {
+    // A route whose directed id matches a leg in the committed road geometry
+    // (`route-MEM-ORD`). Its `travelMin` must be `round(duration_s / 60)` — the
+    // ORS drive time the displayed road polyline is based on — NOT the haversine
+    // estimate over the (here arbitrary) geometry endpoints.
+    const road = loadStaticRoadGeometry();
+    const orsDurationS = road?.legs[routeId("MEM", "ORD")]?.duration_s;
+    expect(orsDurationS).toBeDefined();
+    const expectedTravelMin = Math.round(orsDurationS! / 60);
+
+    const db = makeDb({
+      routeEventRows: [
+        {
+          data: {
+            // Deliberately give endpoints that would yield a DIFFERENT haversine
+            // estimate, to prove the ORS duration wins for the present leg.
+            routeId: "route-MEM-ORD",
+            fromHubId: "MEM",
+            toHubId: "ORD",
+            geometry: [
+              [-90.049, 35.1495],
+              [-87.6298, 41.8781],
+            ],
+          },
+        },
+      ],
+    });
+    const snapshot = await buildTwinSnapshot(db);
+    const leg = snapshot.routes.find((r) => r.routeId === "route-MEM-ORD")!;
+    expect(leg.travelMin).toBe(expectedTravelMin);
+    expect(Number.isInteger(leg.travelMin)).toBe(true);
   });
 
   it("capacity is a positive integer", async () => {
@@ -227,6 +270,33 @@ describe("buildTwinSnapshot", () => {
     const cap = snapshot.routes[0]!.capacity;
     expect(Number.isInteger(cap)).toBe(true);
     expect(cap).toBeGreaterThan(0);
+  });
+
+  it("OPT-09: a longer leg gets a strictly larger expected-transit travelMin", async () => {
+    // The geography-derived estimate must order legs by distance: ATL→CHI (a long
+    // leg) > CHI→DET (a short regional leg). This is the OPT-09 invariant — the
+    // optimizer plans against REAL per-leg durations, not a flat constant.
+    const db = makeDb({ routeEventRows: [ROUTE_A, ROUTE_B] });
+    const snapshot = await buildTwinSnapshot(db);
+    const atlChi = snapshot.routes.find((r) => r.routeId === "route-atl-chi")!;
+    const chiDet = snapshot.routes.find((r) => r.routeId === "route-chi-det")!;
+    expect(atlChi.travelMin).toBeGreaterThan(chiDet.travelMin);
+  });
+
+  it("falls back to TRANSIT_MIN when a route's geometry has fewer than 2 points (fail-soft)", async () => {
+    const degenerate = {
+      data: { routeId: "route-x", fromHubId: "X1", toHubId: "X2", geometry: [] },
+    };
+    const db = makeDb({ routeEventRows: [degenerate] });
+    const snapshot = await buildTwinSnapshot(db);
+    expect(snapshot.routes[0]!.travelMin).toBe(TRANSIT_MIN);
+  });
+
+  it("derives centerHubId as the hub on the most route legs (hub-and-spoke center)", async () => {
+    // A star: CHI is the center (on both legs), ATL + DET are spokes (one leg each).
+    const db = makeDb({ routeEventRows: [ROUTE_A, ROUTE_B] });
+    const snapshot = await buildTwinSnapshot(db);
+    expect(snapshot.centerHubId).toBe("CHI");
   });
 
   it("assembles hubs sorted by id from trailer_state rows and route events", async () => {

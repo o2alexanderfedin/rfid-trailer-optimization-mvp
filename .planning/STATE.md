@@ -1,16 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: milestone-complete-pending
-stopped_at: ""
-last_updated: "2026-06-19 (Phase 5 built + review-fixed; ready to merge + run milestone lifecycle)"
-last_activity: "2026-06-19 — Phase 5 (8 plans) built; adversarial review found 12 live-integration blockers (synthetic tests missed the live path) → 3-subagent fix burst (localRepair-in-epoch, real rehandle, real VIZ-03 buckets, live paced ticks, scenario-delta injection, single-clock animation, single ws) + new live-demo.int.test.ts end-to-end keystone. Gate green (827 tests + e2e). Next: merge feature/phase-5 → develop → milestone v1.0 lifecycle (audit→complete→cleanup)."
+milestone: v1.1
+milestone_name: Realistic Time Model + Hardening
+status: complete
+last_updated: "2026-06-22T00:00:00.000Z"
+last_activity: 2026-06-22
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 34
-  completed_plans: 34
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 0
+  completed_plans: 0
   percent: 100
 ---
 
@@ -18,19 +17,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-18)
+See: .planning/PROJECT.md (updated 2026-06-22)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** Milestone v1.0 lifecycle (all 5 phases built) — merge Phase 5 → develop, then audit → complete → cleanup
+**Current focus:** v1.1 shipped (2026-06-22). Awaiting next milestone — run /gsd-new-milestone to define v1.2.
 
 ## Current Position
 
-Phase: 5 of 5 ✅ built + review-fixed on feature/phase-5-simulation-visualization-wrapper — pending merge to develop.
-Plan: Phases 1–4 merged to develop; Phase 5 (8 plans + 3 fix rounds) done, gate green (827 tests + e2e).
-Status: Phase 5 ✅ COMPLETE — all 9 reqs (SIM-04, VIZ-02..05, UI-01..04) + OPT-02/05/06/07 live-wiring. Adversarial review caught 12 live-integration blockers (the synthetic suite missed the live path); 3-subagent fix burst closed them; new live-demo.int.test.ts pins the live path end-to-end. UI-04 = calibrated money-slide (MVP). See 05-REVIEW.md.
-Last activity: 2026-06-19 — Phase 5 built + live-integration fixed. Next: merge feature/phase-5 → develop (clean — develop unchanged since branch) → re-gate → push → milestone lifecycle (gsd-audit-milestone → gsd-complete-milestone v1.0 → gsd-cleanup).
-
-Progress: [██████████] 100% (5 of 5 phases built; pending merge + milestone close)
+Phase: —
+Plan: —
+Status: v1.1 milestone archived (2026-06-22). Awaiting next milestone.
+Last activity: 2026-06-22 — v1.1 milestone bookkeeping complete; archives created; REQUIREMENTS.md deleted; feature branch ready for git-flow merge by orchestrator.
 
 ## Performance Metrics
 
@@ -70,12 +67,20 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [RESOLVED 2026-06-21] The `*.test.tsx`-never-run gap is FIXED (branch feature/test-coverage-90): added a jsdom (`ui`) + Browser-Mode (`browser`, Playwright/Chromium) Vitest project + RTL + MSW; `test:all` now runs the jsdom lane, `test:browser` runs the map. Plus the honest cross-package coverage fix (`pnpm coverage` + `vitest.coverage.config.ts` aliasing `@mm/*`→src). Result: 78%→**95.2% lines / 94.0% stmts / 95.5% fn**, every package ≥91.7%, web 19%→93.3%.
+- [optional follow-up] `wsClient.ts` raw-socket connect path still 56% (the WsProvider render test drives a test context, not a live socket), and overall **branch** coverage is 82% (lines/stmts/fn are 94–95%). A focused top-up would close both if a 90% *branch* bar is wanted.
+- [v1.1 candidate — "realistic time model"] Dwell + transit are now seeded **log-normal** (260621-j57), but: (a) the optimizer still does NOT consume dwell/transit (time-expanded graph uses 15-min steps; populate `serviceMin`/wait-edge weights from the timing draws); (b) no distinct CENTER-hub dwell site exists in the modeled cycle (center arrival is a terminal unload) — `dwellCenter` is wired but unused until a center re-dispatch is modeled; (c) transit is randomized around a median, not yet **distance-derived** (pairs with the ORS road-directions idea).
 
 ### Blockers/Concerns
 
-- [Phase 4]: Open question — which JS/TS approach for min-cost flow + VRPTW (pure-TS SSP vs glpk.js LP vs OR-Tools-WASM/child-process bridge). MEDIUM confidence; gate with glpk.js correctness tests. Run /gsd-research-phase before planning.
-- [Phase 5]: OpenLayers high-trailer-count rendering + smooth interpolation cadence needs a focused spike (documented leak/perf risk). Run /gsd-research-phase before planning.
+None — all v1.0 phase blockers resolved at ship. (Phase 4 settled on custom SSP min-cost-flow + VRPTW with a glpk.js correctness oracle; Phase 5 OpenLayers perf resolved via flat-heap postrender animation, soak-proven.) Carried technical debt is tracked in PROJECT.md and `milestones/v1.0-MILESTONE-AUDIT.md`.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260621-0fy | UI speed-of-time gauge (live sim-speed control + clock fix) | 2026-06-21 | 1154ddd | Verified | [260621-0fy-sim-speed-gauge](./quick/260621-0fy-sim-speed-gauge/) |
+| 260621-j57 | Seeded log-normal dwell + transit timing (realistic right-skew, deterministic) | 2026-06-21 | b52d762 | Done | [260621-lognormal-timing](./quick/260621-lognormal-timing/) |
 
 ## Deferred Items
 
@@ -87,6 +92,12 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-19T19:46:34.938Z
-Stopped at: context exhaustion at 75% (2026-06-19)
-Resume file: None
+Last session: 2026-06-21 — three merges to develop: (1) UI speed-of-time gauge (quick task 260621-0fy); (2) test coverage 78%→95.2% lines (v8 attribution fix + jsdom/Browser-Mode/MSW web harness, 14 tests); (3) seeded log-normal dwell+transit timing (260621-j57) replacing fixed 10/30-tick constants — dedicated timing RNG keeps it orthogonal to RFID/over-carry; deterministic; scenario-reopt keystone re-baselined + strengthened. Gate green: 1149 tests / 117 files.
+Stopped at: log-normal timing merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1 (realistic-time-model items queued in Pending Todos)
+Resumed: 2026-06-21 — /gsd-resume-work; verified clean between-milestones state (gate green, no incomplete work); presenting v1.1 scoping path.
+Resume file: .continue-here.md (root)
+
+## Operator Next Steps
+
+- Orchestrator: merge feature/v1.1-realistic-time-model → develop via git-flow, tag v1.1.0
+- Then: /gsd-new-milestone to define v1.2

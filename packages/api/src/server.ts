@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import fastifyWebsocket from "@fastify/websocket";
+import type { TimingConfig } from "@mm/simulation";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
@@ -9,11 +10,13 @@ import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
 import { registerScenarioRoutes } from "./routes/scenario.js";
+import { registerSimSpeedRoutes } from "./routes/sim-speed.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
 import { RollingLoop } from "./optimizer/live-loop.js";
 import { buildTwinSnapshot } from "./optimizer/twin-snapshot.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
 import { SimController } from "./sim/sim-controller.js";
+import { makeSpeedController, type SpeedController } from "./sim/speed-controller.js";
 import type { SnapshotDb } from "./optimizer/twin-snapshot.js";
 
 /**
@@ -58,6 +61,13 @@ export interface ServerDeps {
    * Must match `SIM_TICKS` / `durationTicks` used in `main.ts`. Default: 120.
    */
   readonly baselineTicks?: number;
+  /**
+   * DIP: timing config forwarded to `SimController` for scenario re-opt. When
+   * absent, the engine uses realistic geography-derived per-leg transit (TIME-01
+   * default). Pass `DEFAULT_TIMING_CONFIG` from `@mm/simulation` in tests that
+   * drive short horizons so the base-stream docking events match the stored state.
+   */
+  readonly timing?: TimingConfig;
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -78,6 +88,13 @@ export interface BuiltServer {
    * can call `loop.tick()` per tick and produce live recommendations.
    */
   readonly simController: SimController;
+  /**
+   * The "speed of time" controller (GET/POST /sim/speed). `main.ts` passes its
+   * `getTickIntervalMs`/`isPaused` to `driveSimulationPaced` so the live demo's
+   * pacing is tunable mid-run. The snapshot builder stamps its `snapshot()` on
+   * every ws envelope.
+   */
+  readonly speedController: SpeedController;
 }
 
 /** Build the Fastify server (REST query routes + optional ws snapshots). */
@@ -115,17 +132,29 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // SIM-04 / OPT-02: The live rolling-optimizer loop (Plan 05-02).
   // `buildSnapshot` reads the current live projections to assemble the TwinSnapshot.
   // The sim driver calls `loop.tick(...)` per tick so the optimizer runs live.
-  const snapshotDb = deps.db as unknown as SnapshotDb;
+  const snapshotDb: SnapshotDb = deps.db;
   const loop = new RollingLoop({
     service: optimizer,
     buildSnapshot: () => buildTwinSnapshot(snapshotDb),
     freezeWindowMin: 15,
   });
 
+  // ONE SpeedController seeded from the env default tick interval (1× by
+  // default). `onChange` pushes an immediate envelope so a pause/speed POST
+  // reflects without waiting for a (possibly paused) next tick — simSpeed:0 on
+  // pause. `broadcast` is assigned just below; the closure reads it lazily.
   let broadcast: Broadcast | undefined;
+  const defaultIntervalMs = Number(process.env.SIM_TICK_INTERVAL_MS ?? 500);
+  const speedController: SpeedController = makeSpeedController({
+    defaultIntervalMs,
+    onChange: () => {
+      void broadcast?.(speedController.getLastSimMs());
+    },
+  });
+
   if (deps.enableWs ?? true) {
     await app.register(fastifyWebsocket);
-    broadcast = attachSnapshotSocket(app, deps.db);
+    broadcast = attachSnapshotSocket(app, deps.db, speedController);
   }
 
   // SIM-04: The scenario controller — wires `POST /scenario` to a short
@@ -142,9 +171,14 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
     baselineTicks,
     loop,
     broadcast,
+    ...(deps.timing !== undefined ? { timing: deps.timing } : {}),
   });
   registerScenarioRoutes(app, simController);
 
+  // The "speed of time" surface: GET/POST /sim/speed mutate the ONE controller
+  // the paced driver + snapshot builder read. Live-tunable, server-authoritative.
+  registerSimSpeedRoutes(app, speedController);
+
   await app.ready();
-  return { app, broadcast, optimizer, loop, simController };
+  return { app, broadcast, optimizer, loop, simController, speedController };
 }

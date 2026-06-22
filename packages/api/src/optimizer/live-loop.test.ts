@@ -33,83 +33,16 @@ function constSnapshot(snap: TwinSnapshot) {
   return vi.fn().mockResolvedValue(snap);
 }
 
-/** A mock DB that handles the appendWithRetry path (streams + events queries). */
-function makeMockDb(): RollingOptimizerDeps["db"] {
-  const chain = {
-    selectFrom: vi.fn().mockReturnThis(),
-    select: vi.fn().mockReturnThis(),
-    selectAll: vi.fn().mockReturnThis(),
-    where: vi.fn().mockReturnThis(),
-    executeTakeFirst: vi.fn().mockResolvedValue({ version: 0 }),
-    execute: vi.fn().mockResolvedValue([]),
-    insertInto: vi.fn().mockReturnThis(),
-    values: vi.fn().mockReturnThis(),
-    onConflict: vi.fn().mockReturnThis(),
-    doUpdateSet: vi.fn().mockReturnThis(),
-    updateTable: vi.fn().mockReturnThis(),
-    set: vi.fn().mockReturnThis(),
-    transaction: vi.fn().mockImplementation(() => ({
-      execute: vi.fn().mockImplementation(
-        async (fn: (trx: unknown) => Promise<unknown>) => {
-          // Provide a minimal trx that satisfies appendToStream
-          const trx = makeTrxMock();
-          return fn(trx);
-        },
-      ),
-    })),
-  };
-  return chain as unknown as RollingOptimizerDeps["db"];
-}
-
-/** Minimal transaction mock for appendToStream (selectFrom streams, insertInto events/streams). */
-function makeTrxMock(): unknown {
-  const trx: Record<string, unknown> = {};
-  const sql = { execute: vi.fn().mockResolvedValue({}) };
-  trx["selectFrom"] = vi.fn().mockReturnValue({
-    select: vi.fn().mockReturnThis(),
-    where: vi.fn().mockReturnThis(),
-    executeTakeFirst: vi.fn().mockResolvedValue({ version: 0 }),
-  });
-  trx["insertInto"] = vi.fn().mockReturnValue({
-    values: vi.fn().mockReturnThis(),
-    onConflict: vi.fn().mockReturnThis(),
-    doNothing: vi.fn().mockReturnThis(),
-    execute: vi.fn().mockResolvedValue({}),
-  });
-  trx["updateTable"] = vi.fn().mockReturnValue({
-    set: vi.fn().mockReturnThis(),
-    where: vi.fn().mockReturnThis(),
-    executeTakeFirst: vi.fn().mockResolvedValue({ numUpdatedRows: 1n }),
-  });
-  // pg_advisory_xact_lock
-  trx["executeRaw"] = vi.fn().mockResolvedValue({});
-  // Kysely's `sql` tagged template calls `.execute(trx)` on the trx object
-  // The lockGlobalOrder function uses sql`...`.execute(trx) — we need the trx
-  // to accept that call via a proxy or by just catching it.
-  return new Proxy(trx, {
-    get(target, prop) {
-      if (prop in target) return target[prop as string];
-      // Catch-all: return a function that returns a chainable mock
-      return vi.fn().mockReturnValue({
-        execute: vi.fn().mockResolvedValue({}),
-        executeTakeFirst: vi.fn().mockResolvedValue({ numUpdatedRows: 1n }),
-      });
-    },
-  });
-}
-
 /** Minimal deps: no real DB — appendPlan path is never triggered in unit tests. */
 function makeService(opts?: Partial<RollingOptimizerDeps>): RollingOptimizerService {
   return new RollingOptimizerService({
     db: opts?.db ?? ({} as RollingOptimizerDeps["db"]),
-    weights: opts?.weights,
+    // Omit `weights` when undefined: under exactOptionalPropertyTypes the optional
+    // `weights?: ObjectiveWeights` field cannot be assigned an explicit `undefined`.
+    ...(opts?.weights !== undefined ? { weights: opts.weights } : {}),
   });
 }
 
-/** Service with a mock DB that survives the appendPlan path. */
-function makeServiceWithDb(): RollingOptimizerService {
-  return new RollingOptimizerService({ db: makeMockDb() });
-}
 
 /** A TrailerDeparted event naming a trailer, for scope detection. */
 function makeTrailerEvent(trailerId: string): DomainEvent {
@@ -121,7 +54,7 @@ function makeTrailerEvent(trailerId: string): DomainEvent {
       tripId: "trip-01",
       fromHubId: "ATL",
       toHubId: "CHI",
-      departedAt: "2024-01-01T00:00:00.000Z",
+      packageIds: [],
     },
   };
 }
@@ -134,7 +67,6 @@ function makeHubEvent(hubId: string): DomainEvent {
       trailerId: "T001",
       tripId: "trip-01",
       hubId,
-      arrivedAt: "2024-01-01T01:00:00.000Z",
     },
   };
 }
@@ -167,7 +99,7 @@ describe("RollingLoop", () => {
 
       expect(runSpy).toHaveBeenCalledOnce();
       const [epoch] = runSpy.mock.calls[0]!;
-      expect(epoch!.nowMin).toBe(1); // Math.floor(90_000 / 60_000) = 1
+      expect(epoch.nowMin).toBe(1); // Math.floor(90_000 / 60_000) = 1
     });
 
     it("uses the configured freezeWindowMin", async () => {
@@ -180,7 +112,7 @@ describe("RollingLoop", () => {
       const runSpy = vi.spyOn(service, "runOnce");
       await loop.tick({ events: [], simMs: 0 });
       const [epoch] = runSpy.mock.calls[0]!;
-      expect(epoch!.freezeWindowMin).toBe(15);
+      expect(epoch.freezeWindowMin).toBe(15);
     });
 
     it("does NOT call Date.now for the epoch clock", async () => {
@@ -213,7 +145,7 @@ describe("RollingLoop", () => {
 
       expect(snapBuilder).toHaveBeenCalledOnce();
       const [, input] = runSpy.mock.calls[0]!;
-      expect(input!.twinSnapshot).toEqual(snap);
+      expect(input.twinSnapshot).toEqual(snap);
     });
 
     it("passes events to runOnce as input.events", async () => {
@@ -227,7 +159,7 @@ describe("RollingLoop", () => {
       const events: DomainEvent[] = [makeTrailerEvent("T001")];
       await loop.tick({ events, simMs: 0 });
       const [, input] = runSpy.mock.calls[0]!;
-      expect(input!.events).toEqual(events);
+      expect(input.events).toEqual(events);
     });
   });
 
@@ -277,20 +209,19 @@ describe("RollingLoop", () => {
             feasible: true,
             objectiveCost: 42,
             breakdown: {
+              miles: 0,
+              driverTime: 0,
+              fuel: 0,
+              dockWait: 0,
+              handling: 0,
+              rehandle: 0,
+              slaLateness: 0,
+              lowUtil: 0,
+              highUtil: 0,
+              overCarry: 0,
+              imbalance: 0,
+              churn: 0,
               total: 42,
-              terms: {
-                miles: 0,
-                driverTimeMin: 0,
-                fuelUnits: 0,
-                dockWaitMin: 0,
-                handlingOps: 0,
-                rehandleScore: 0,
-                slaLatenessMin: 0,
-                utilization: 0,
-                overCarryUnits: 0,
-                imbalance: 0,
-                churnVsPrevious: 0,
-              },
             },
             frozen: false,
           },
@@ -340,7 +271,7 @@ describe("RollingLoop", () => {
       const events: DomainEvent[] = [makeHubEvent("ATL")];
       await loop.tick({ events, simMs: 0 });
       const [, input] = runSpy.mock.calls[0]!;
-      expect(input!.events).toEqual(events);
+      expect(input.events).toEqual(events);
     });
   });
 
@@ -385,20 +316,19 @@ describe("RollingLoop", () => {
               feasible: true,
               objectiveCost: 30,
               breakdown: {
+                miles: 30,
+                driverTime: 30,
+                fuel: 30,
+                dockWait: 0,
+                handling: 1,
+                rehandle: 0,
+                slaLateness: 0,
+                lowUtil: 0,
+                highUtil: 0,
+                overCarry: 0,
+                imbalance: 0,
+                churn: 0,
                 total: 30,
-                terms: {
-                  miles: 30,
-                  driverTimeMin: 30,
-                  fuelUnits: 30,
-                  dockWaitMin: 0,
-                  handlingOps: 1,
-                  rehandleScore: 0,
-                  slaLatenessMin: 0,
-                  utilization: 0.02,
-                  overCarryUnits: 0,
-                  imbalance: 0,
-                  churnVsPrevious: 0,
-                },
               },
               frozen: false,
             },
@@ -431,8 +361,8 @@ describe("RollingLoop", () => {
 
       // The blocks are forwarded in the twinSnapshot to runOnce
       const [, input] = spy.mock.calls[0]!;
-      expect(input!.twinSnapshot.trailers[0]!.blocks).toHaveLength(1);
-      expect(input!.twinSnapshot.trailers[0]!.blocks[0]!.blockId).toBe("pkg-01");
+      expect(input.twinSnapshot.trailers[0]!.blocks).toHaveLength(1);
+      expect(input.twinSnapshot.trailers[0]!.blocks[0]!.blockId).toBe("pkg-01");
 
       // The canned recommendation is returned
       const t1rec = result.recommendations.find((r) => r.trailerId === "T001");

@@ -4,13 +4,18 @@ import {
   type DomainEvent,
   type DomainEventType,
   type HubRegistered,
+  type MissedUnloadDetected,
   type PackageArrivedAtHub,
   type PackageCreated,
   type PackageScanned,
+  type PlanAccepted,
+  type PlanGenerated,
+  type RfidObserved,
   type RouteRegistered,
   type TrailerArrivedAtHub,
   type TrailerDeparted,
   type TrailerDocked,
+  type WrongTrailerDetected,
 } from "../src/index.js";
 import type {
   DockDoor,
@@ -97,6 +102,76 @@ const trailerDocked: TrailerDocked = {
   payload: { trailerId: "T1", hubId: "ORD", dockDoorId: "DOCK-12" },
 };
 
+// --- Phase-3 RFID-assisted validation events (SNS-01/04/05) ----------------
+
+const rfidObserved: RfidObserved = {
+  type: "RfidObserved",
+  schemaVersion: 1,
+  payload: {
+    tagId: "TAG-1",
+    readerId: "READER-1",
+    antennaId: "ANT-1",
+    rssi: -55,
+    trailerId: "T1",
+    hubId: "ORD",
+    confidence: 0.8,
+  },
+};
+
+const wrongTrailerDetected: WrongTrailerDetected = {
+  type: "WrongTrailerDetected",
+  schemaVersion: 1,
+  payload: {
+    packageId: "P1",
+    observedTrailerId: "T2",
+    plannedTrailerId: "T1",
+    confidence: 0.7,
+    severity: "warning",
+    recommendedAction: "reroute",
+  },
+};
+
+const missedUnloadDetected: MissedUnloadDetected = {
+  type: "MissedUnloadDetected",
+  schemaVersion: 1,
+  payload: {
+    packageId: "P1",
+    trailerId: "T1",
+    hubId: "ORD",
+    confidence: 0.75,
+    severity: "critical",
+    recommendedAction: "hold",
+  },
+};
+
+// --- Phase-4 plan-lifecycle events (OPT-04) --------------------------------
+
+const planGenerated: PlanGenerated = {
+  type: "PlanGenerated",
+  schemaVersion: 1,
+  payload: {
+    epochId: "EPOCH-1",
+    scopeHash: "HASH-1",
+    planId: "PLAN-1",
+    trailerId: "T1",
+    objectiveCost: 120,
+    feasible: true,
+    occurredAt: "2024-01-01T00:00:00.000Z",
+  },
+};
+
+const planAccepted: PlanAccepted = {
+  type: "PlanAccepted",
+  schemaVersion: 1,
+  payload: {
+    epochId: "EPOCH-1",
+    scopeHash: "HASH-1",
+    planId: "PLAN-1",
+    trailerId: "T1",
+    occurredAt: "2024-01-01T00:00:00.000Z",
+  },
+};
+
 const ALL_EVENTS: readonly DomainEvent[] = [
   hubRegistered,
   routeRegistered,
@@ -106,6 +181,11 @@ const ALL_EVENTS: readonly DomainEvent[] = [
   trailerDeparted,
   trailerArrived,
   trailerDocked,
+  rfidObserved,
+  wrongTrailerDetected,
+  missedUnloadDetected,
+  planGenerated,
+  planAccepted,
 ];
 
 /**
@@ -132,13 +212,23 @@ function describeEvent(e: DomainEvent): string {
       return e.payload.trailerId;
     case "TrailerDocked":
       return e.payload.trailerId;
+    case "RfidObserved":
+      return e.payload.tagId;
+    case "WrongTrailerDetected":
+      return e.payload.packageId;
+    case "MissedUnloadDetected":
+      return e.payload.packageId;
+    case "PlanGenerated":
+      return e.payload.planId;
+    case "PlanAccepted":
+      return e.payload.planId;
     default:
       return assertNever(e);
   }
 }
 
 describe("DomainEvent closed discriminated union (FND-01)", () => {
-  it("covers exactly the 8 Phase-1 event types", () => {
+  it("covers exactly the 13 event types (8 Phase-1 + 3 Phase-3 RFID + 2 Phase-4 plan)", () => {
     const types = new Set<DomainEventType>(ALL_EVENTS.map((e) => e.type));
     expect(types).toEqual(
       new Set<DomainEventType>([
@@ -150,6 +240,11 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
         "TrailerDeparted",
         "TrailerArrivedAtHub",
         "TrailerDocked",
+        "RfidObserved",
+        "WrongTrailerDetected",
+        "MissedUnloadDetected",
+        "PlanGenerated",
+        "PlanAccepted",
       ]),
     );
   });
@@ -174,6 +269,11 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       "T1",
       "T1",
       "T1",
+      "TAG-1",
+      "P1",
+      "P1",
+      "PLAN-1",
+      "PLAN-1",
     ]);
   });
 
@@ -184,7 +284,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 8 literal discriminators", () => {
+  it("DomainEventType is the union of the 13 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -194,6 +294,11 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       | "TrailerDeparted"
       | "TrailerArrivedAtHub"
       | "TrailerDocked"
+      | "RfidObserved"
+      | "WrongTrailerDetected"
+      | "MissedUnloadDetected"
+      | "PlanGenerated"
+      | "PlanAccepted"
     >();
   });
 

@@ -139,13 +139,26 @@ describe("runEpoch (OPT-04/05/06 pure rolling core)", () => {
     // from the capacity demand, so a trailer could be loaded beyond capacity yet
     // still pass the gate. With the fix, EVERY assigned block contributes its
     // volume, so 6+8+10 = 24 > 20 ⇒ the candidate is flagged INFEASIBLE.
-    const snap = snapshot();
-    (snap.trailers[0] as { blocks: { blockId: string; nextUnloadHubId: string; volume: number }[] }).blocks = [
-      { blockId: "B1", nextUnloadHubId: "H2", volume: 6 },
-      { blockId: "B2", nextUnloadHubId: "H3", volume: 8 },
-      // Off-route block: H9 is not in the trailer's route — its volume must NOT vanish.
-      { blockId: "B3", nextUnloadHubId: "H9", volume: 10 },
-    ];
+    const base = snapshot();
+    const baseTrailer = base.trailers[0]!;
+    // Build a NEW, fully-typed snapshot (no unsound `as` cast over the readonly
+    // `blocks` array): the first trailer gets an extra OFF-ROUTE block (H9) whose
+    // volume must still count toward the capacity demand.
+    const snap: TwinSnapshot = {
+      ...base,
+      trailers: [
+        {
+          ...baseTrailer,
+          blocks: [
+            { blockId: "B1", nextUnloadHubId: "H2", volume: 6 },
+            { blockId: "B2", nextUnloadHubId: "H3", volume: 8 },
+            // Off-route block: H9 is not in the trailer's route — its volume must NOT vanish.
+            { blockId: "B3", nextUnloadHubId: "H9", volume: 10 },
+          ],
+        },
+        ...base.trailers.slice(1),
+      ],
+    };
     const overInput: EpochInput = { events: [departed("T1", "H1", "H2")], twinSnapshot: snap };
 
     const result = runEpoch(EPOCH, overInput, DEFAULT_OBJECTIVE_WEIGHTS);
@@ -199,45 +212,6 @@ function infeasibleSnapshot(): TwinSnapshot {
         blocks: [
           { blockId: "B1", nextUnloadHubId: "H2", volume: 6 },
           { blockId: "B2", nextUnloadHubId: "H3", volume: 8 },
-        ],
-      },
-    ],
-  };
-}
-
-/**
- * Build a snapshot where T1 has blocks in LIFO-WRONG order (B2 destined for
- * H3/stop-1 but volume is smaller, B1 for H2/stop-0). Total volume fits in
- * capacity=20 so the route is FEASIBLE. The rehandle scorer penalises the
- * load arrangement when we synthesise the LoadPlan in FIFO (wrong) order.
- *
- * The test verifies rehandleScore > 0 only when the blocks are in wrong order
- * relative to the route. This is the FIX 2 test.
- */
-function rehandleSnapshot(): TwinSnapshot {
-  return {
-    hubs: ["H1", "H2", "H3"],
-    routes: [
-      { routeId: "R1", fromHubId: "H1", toHubId: "H2", travelMin: 30, capacity: 50 },
-      { routeId: "R2", fromHubId: "H2", toHubId: "H3", travelMin: 40, capacity: 50 },
-    ],
-    trailers: [
-      {
-        trailerId: "T1",
-        currentHubId: "H1",
-        departureMin: 300,
-        capacity: 50,
-        route: [
-          { hubId: "H2", stopIndex: 0 }, // H2 unloads FIRST — must be at rear (low depth)
-          { hubId: "H3", stopIndex: 1 }, // H3 unloads SECOND — must be deeper (high depth)
-        ],
-        // B2 goes to H3 (stop 1, deeper/nose), B1 goes to H2 (stop 0, rear).
-        // In the twin's block list order they come as B1(H2) first then B2(H3).
-        // The epoch must detect that any block destined for a later stop placed
-        // in front of an earlier-stop block incurs rehandle cost.
-        blocks: [
-          { blockId: "B1", nextUnloadHubId: "H2", volume: 5 }, // unloads first → should be at depth 0 (rear)
-          { blockId: "B2", nextUnloadHubId: "H3", volume: 5 }, // unloads second → should be at depth 1 (nose)
         ],
       },
     ],
@@ -384,5 +358,68 @@ describe("runEpoch FIX 2 — real rehandleScore (not hardcoded 0) in epoch metri
     expect(rec).toBeDefined();
     expect(rec!.feasible).toBe(true);
     expect(rec!.breakdown.rehandle).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-06 / OPT-02 — wire min-cost-flow (assignFreight) into the live epoch.
+//
+// The pure `runEpoch` now runs an MCF freight-assignment stage AFTER buildTwin
+// (assign-then-sequence: MCF answers "which block flows over which leg at min
+// cost", orthogonal to VRPTW sequencing). It is observable on EpochResult via
+// the OPTIONAL `freightAssignment` field WITHOUT changing the selectPlan winner,
+// so every prior determinism/feasibility/selectPlan test stays green.
+// ---------------------------------------------------------------------------
+describe("runEpoch F-06/OPT-02 — min-cost-flow freight assignment wired into the live epoch", () => {
+  it("RED: freightAssignment is defined with a feasible, non-empty assignment for the routable T1 fixture", () => {
+    const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+
+    expect(result.freightAssignment).toBeDefined();
+    const freight = result.freightAssignment!;
+    expect(freight.feasible).toBe(true);
+    // The two routable blocks (B1→H2, B2→H3) each have a leg path + integer cost.
+    expect(freight.assignments.length).toBeGreaterThanOrEqual(1);
+    for (const a of freight.assignments) {
+      expect(typeof a.blockId).toBe("string");
+      expect(a.legEdgeIds.length).toBeGreaterThan(0);
+      expect(Number.isInteger(a.cost)).toBe(true);
+    }
+  });
+
+  it("RED: flowCost equals the sum of the per-assignment costs", () => {
+    const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    const freight = result.freightAssignment!;
+    const sum = freight.assignments.reduce((acc, a) => acc + a.cost, 0);
+    expect(freight.flowCost).toBe(sum);
+  });
+
+  it("RED: freightAssignment is part of the byte-identical idempotency keystone", () => {
+    const a = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    const b = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    // Deep-equal AND byte-identical INCLUDING the new freightAssignment field.
+    expect(a.freightAssignment).toEqual(b.freightAssignment);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("RED: wiring MCF does NOT change the deterministic selectPlan winner", () => {
+    // The accepted plan + generated payload are untouched by the freight stage:
+    // MCF runs + is observable WITHOUT perturbing the winner (preserves the
+    // selectPlan / feasibility / accept contract).
+    const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
+    expect(result.generated).not.toBeNull();
+    expect(result.generated!.feasible).toBe(true);
+    expect(result.accepted).not.toBeNull();
+    expect(result.accepted!.planId).toBe(result.generated!.planId);
+  });
+
+  it("RED: empty scope is still fail-soft — feasible, empty freightAssignment", () => {
+    const empty: EpochInput = { events: [], twinSnapshot: snapshot() };
+    const result = runEpoch(EPOCH, empty, DEFAULT_OBJECTIVE_WEIGHTS);
+    // Empty scope returns no plan, but the freight stage is still reported
+    // fail-soft (feasible, no assignments) so consumers never see undefined-vs-null drift.
+    expect(result.freightAssignment).toBeDefined();
+    expect(result.freightAssignment!.feasible).toBe(true);
+    expect(result.freightAssignment!.assignments).toEqual([]);
+    expect(result.freightAssignment!.flowCost).toBe(0);
   });
 });

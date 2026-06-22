@@ -26,6 +26,10 @@ export function buildTwin(
 
   const scoped: TwinSnapshot = {
     hubs: snapshot.hubs.filter((h) => hubSet.has(h)),
+    // The network CENTER is a global property, not a scoped node — carry it
+    // through verbatim so role-based dwell stays correct even when the center is
+    // out of the affected hub slice (OPT-09 / TIME-02 parity).
+    ...(snapshot.centerHubId !== undefined ? { centerHubId: snapshot.centerHubId } : {}),
     routes: snapshot.routes.filter(
       (r) => hubSet.has(r.fromHubId) && hubSet.has(r.toHubId),
     ),

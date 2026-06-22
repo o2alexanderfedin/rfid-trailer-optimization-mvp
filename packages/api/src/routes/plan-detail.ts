@@ -60,7 +60,9 @@ export interface TrailerPlanDto {
   readonly explanation: string;
 }
 
-/** One entry in the `GET /trailers/:id/history` response (UI-02). */
+/**
+ * One entry in the `GET /trailers/:id/history` (UI-02) response.
+ */
 export interface TrailerHistoryEntryDto {
   readonly globalSeq: string;
   readonly eventType: string;
@@ -180,6 +182,23 @@ function toRearToNose(plan: LoadPlan): RearToNoseSlice[] {
     );
 }
 
+/**
+ * Map an `AuditTimelineEntry[]` (from `@mm/projections`) to the stable wire DTO
+ * for the trailer-keyed history route.
+ */
+function toHistoryDto(
+  timeline: Awaited<ReturnType<typeof readTrailerAuditTimeline>>,
+): TrailerHistoryEntryDto[] {
+  return timeline.map((e) => ({
+    globalSeq: e.globalSeq.toString(),
+    eventType: e.eventType,
+    occurredAt: e.occurredAt,
+    hubId: e.hubId,
+    scanType: e.scanType,
+    recommendation: e.recommendation,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
@@ -280,14 +299,7 @@ export function registerPlanDetailRoutes(app: FastifyInstance, db: ApiDb): void 
     async (req: FastifyRequest<{ Params: IdParams }>): Promise<TrailerHistoryEntryDto[]> => {
       const trailerId = req.params.id;
       const timeline = await readTrailerAuditTimeline(catchupView(db), trailerId);
-      return timeline.map((e) => ({
-        globalSeq: e.globalSeq.toString(),
-        eventType: e.eventType,
-        occurredAt: e.occurredAt,
-        hubId: e.hubId,
-        scanType: e.scanType,
-        recommendation: e.recommendation,
-      }));
+      return toHistoryDto(timeline);
     },
   );
 }

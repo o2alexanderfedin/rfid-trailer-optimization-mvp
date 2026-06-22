@@ -1,3 +1,4 @@
 
-## 18:20 | feature/phase-5-simulation-visualization-wrapper
-Phase 5 A1 complete: localRepair wiring (OPT-07), real rehandle (OPT-05), VIZ-03 metric buckets, KPI baseline fix (811 tests +9, 2 commits); A2 smoke test dispatched.
+## 23:34 | develop
+
+v1.0 released to main (tag v1.0.0); milestone lifecycle (gsd-complete-milestone + gsd-cleanup); fixed main.ts boot crash (FST_ERR) + emoji 🏭🚛 on 16px discs; resolved int-test timeouts via serial files; develop in sync, 876 tests green.

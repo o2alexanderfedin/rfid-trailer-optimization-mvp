@@ -12,7 +12,11 @@ import { simulate } from "../src/engine.js";
  * `validateEvent` boundary, and timestamps must be non-decreasing.
  */
 
-const OPTS = { seed: 1234, durationTicks: 240 } as const;
+// TIME-01: transit medians are now per-leg, derived from real great-circle
+// distance (≈400 min for the shortest spoke leg, ≈2250 min for the longest), so
+// the horizon must be long enough for trailers to actually ARRIVE and re-dispatch
+// — a 240-tick (4-hour) run no longer completes even the shortest leg.
+const OPTS = { seed: 1234, durationTicks: 6000 } as const;
 
 describe("deterministic event stream (SIM-02)", () => {
   it("same seed -> byte-identical stream (deep-equal incl. order + occurredAt)", () => {

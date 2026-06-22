@@ -121,6 +121,42 @@ describe("FND query endpoints (FND-05/06/07/08) over a seeded sim", () => {
     }
     // Every entry carries eventType + occurredAt.
     expect(body.every((e) => e.eventType.length > 0 && e.occurredAt.length > 0)).toBe(true);
+    // UI-02: every entry carries the `recommendation` field on the wire (string
+    // for plan-lifecycle decision events, null otherwise). This is the coverage
+    // the (removed) plan-detail package-history route used to provide — the
+    // canonical FND-08 route now owns it. Package-keyed events are not plan-
+    // lifecycle, so they are null here, but the field MUST be present so a UI
+    // that renders captured recommendations never sees an `undefined`.
+    expect(
+      body.every((e) => e.recommendation === null || typeof e.recommendation === "string"),
+    ).toBe(true);
+    expect(body.every((e) => "recommendation" in e)).toBe(true);
+  });
+
+  it("UI-02: a trailer's plan-lifecycle history carries the captured recommendation", async () => {
+    // The recommendation text is captured on the TRAILER-keyed timeline at
+    // plan-lifecycle events (PlanGenerated/PlanAccepted). This is where the
+    // human-readable, anti-repudiation recommendation lives (T-05-09); the
+    // package-keyed FND-08 route shares the same DTO field (asserted above).
+    const { trailer } = seededIds();
+    const res = await built.app.inject({ method: "GET", url: `/trailers/${trailer}/history` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<AuditEntryDto[]>();
+    expect(body.length).toBeGreaterThan(0);
+    // Every entry exposes the recommendation field on the wire.
+    expect(body.every((e) => e.recommendation === null || typeof e.recommendation === "string")).toBe(
+      true,
+    );
+    const planRow = body.find(
+      (e) => e.eventType === "PlanGenerated" || e.eventType === "PlanAccepted",
+    );
+    if (planRow !== undefined) {
+      // When a plan-lifecycle event exists, its recommendation is a non-empty,
+      // attributable string referencing the plan.
+      expect(planRow.recommendation).not.toBeNull();
+      expect((planRow.recommendation ?? "").length).toBeGreaterThan(0);
+      expect(planRow.recommendation).toContain("Plan");
+    }
   });
 
   it("GET /hubs returns the geo hub list (supersedes the Plan 01 skeleton route)", async () => {

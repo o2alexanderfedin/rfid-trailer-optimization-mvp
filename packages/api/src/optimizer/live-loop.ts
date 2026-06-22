@@ -19,10 +19,15 @@ import type { RollingOptimizerService } from "./rolling-service.js";
  *    An empty-events tick ⇒ empty scope ⇒ empty result (no append, bounded work).
  *  - OPT-06 idempotency: `RollingOptimizerService` memoizes per `(epochId, scopeHash)`.
  *    Two ticks with the same `(simMs, events)` produce ONE plan append at most.
- *  - OPT-02 min-cost-flow: `runEpoch` already invokes `routeTrailers` (VRPTW) +
- *    the objective scoring; the freight-assignment path (`assignFreight`) is the
- *    time-expanded graph solver that routes through the twin's legs. This loop is
- *    the live trigger that calls that chain end-to-end on the live twin.
+ *  - OPT-02 min-cost-flow: `runEpoch` runs TWO orthogonal stages on the live
+ *    twin (assign-then-sequence). FIRST, the freight stage
+ *    (`assignFreightForEpoch` → `buildTimeExpandedGraph` + `assignFreight` /
+ *    `minCostFlow`) answers "which freight block flows over which route leg at
+ *    minimum total cost" — its result is surfaced on `EpochResult.freightAssignment`.
+ *    SECOND, `routeTrailers` (VRPTW) *sequences* each trailer's stops + the
+ *    objective scores the candidate. MCF is observational (it does NOT change the
+ *    deterministic selectPlan winner). This loop is the live trigger that drives
+ *    that full chain end-to-end on the live twin.
  *  - T-04-14 OCC: `RollingOptimizerService.appendPlan` uses `appendWithRetry`
  *    (reload + retry on `ConcurrencyError`). Two concurrent ticks for the same
  *    stream converge — neither loses a write, no duplicate accept.

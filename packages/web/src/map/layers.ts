@@ -4,11 +4,10 @@ import Feature from "ol/Feature.js";
 import Point from "ol/geom/Point.js";
 import LineString from "ol/geom/LineString.js";
 import { fromLonLat } from "ol/proj.js";
-import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style.js";
 import type { HubDto, RouteDto } from "../api/client.js";
 import type { TrailerSnapshot } from "./useTrailerSnapshots.js";
 import type { HubState, RouteState, TrailerKeyframe } from "@mm/api";
-import { hubStyle, routeStyle } from "./coloring.js";
+import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -22,15 +21,6 @@ import { hubStyle, routeStyle } from "./coloring.js";
  * Sources use `useSpatialIndex: true` (the default) for efficient extent
  * queries; we never clear/rebuild a source on update.
  */
-
-/** Shared trailer marker style (one instance for all live trailer points). */
-const TRAILER_STYLE = new Style({
-  image: new CircleStyle({
-    radius: 5,
-    fill: new Fill({ color: "#16a34a" }),
-    stroke: new Stroke({ color: "#ffffff", width: 1.5 }),
-  }),
-});
 
 /** A vector layer paired with the single source it owns. */
 export interface Layer {
@@ -87,10 +77,15 @@ export function createRouteLayer(routes: readonly RouteDto[]): Layer {
   return { layer, source };
 }
 
-/** Create the (initially empty) live-trailer layer + its single reused source. */
+/** Create the (initially empty) live-trailer layer + its single reused source.
+ *
+ * VIZ-03 / FIX 9: uses `trailerStyle` (zero-alloc StyleFunction) so a trailer's
+ * marker color tracks its `state` ("onTime" | "slaRisk" | "late" | "idle") in
+ * place via `feature.set("state", s)` — no source rebuild, no per-frame alloc.
+ */
 export function createTrailerLayer(): Layer {
   const source = new VectorSource({ useSpatialIndex: true });
-  const layer = new VectorLayer({ source, style: TRAILER_STYLE });
+  const layer = new VectorLayer({ source, style: trailerStyle });
   return { layer, source };
 }
 

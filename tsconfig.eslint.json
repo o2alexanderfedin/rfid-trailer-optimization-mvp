@@ -26,8 +26,10 @@
     "packages/*/src/**/*.tsx",
     "packages/*/test/**/*.ts",
     "packages/*/test/**/*.tsx",
-    "eslint.config.js",
+    "scripts/**/*.ts",
+    "eslint.config.ts",
     "vitest.config.ts",
+    "vitest.coverage.config.ts",
     "packages/web/vite.config.ts",
     "packages/web/playwright.config.ts"
   ],
