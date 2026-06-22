@@ -94,6 +94,42 @@
 
 ## Traceability
 
+35 requirements → 10 phases (9–18), each requirement mapped to exactly one phase. 100% coverage.
+
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| _(populated by roadmapper)_ | | |
+| DRV-01 | 9 | Planned |
+| DRV-02 | 9 | Planned |
+| DRV-03 | 9 | Planned |
+| HOS-01 | 9 | Planned |
+| EVT-01 | 9 | Planned |
+| EVT-02 | 9 | Planned |
+| HOS-02 | 10 | Planned |
+| HOS-03 | 10 | Planned |
+| SIM-HOS-01 | 11 | Planned |
+| SIM-HOS-02 | 11 | Planned |
+| SIM-HOS-03 | 11 | Planned |
+| SIM-HOS-05 | 11 | Planned |
+| SIM-HOS-06 | 11 | Planned |
+| DRV-04 | 12 | Planned |
+| SIM-HOS-04 | 12 | Planned |
+| PRJ-01 | 13 | Planned |
+| PRJ-02 | 13 | Planned |
+| HUBQ-01 | 14 | Planned |
+| HUBQ-02 | 14 | Planned |
+| HUBQ-03 | 14 | Planned |
+| HUBQ-04 | 14 | Planned |
+| HUBQ-05 | 14 | Planned |
+| HUBQ-06 | 14 | Planned |
+| HUBQ-07 | 14 | Planned |
+| HUBQ-08 | 14 | Planned |
+| OPT-HOS-01 | 15 | Planned |
+| OPT-HOS-02 | 16 | Planned |
+| OPT-HOS-03 | 16 | Planned |
+| VIZ-07 | 17 | Planned |
+| VIZ-08 | 17 | Planned |
+| VIZ-09 | 17 | Planned |
+| VIZ-10 | 17 | Planned |
+| VIZ-11 | 17 | Planned |
+| DOC-01 | 18 | Planned |
+| DOC-02 | 18 | Planned |
