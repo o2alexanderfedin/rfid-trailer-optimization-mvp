@@ -33,7 +33,7 @@
 > **Keystone constraint:** determinism. HOS-*off* stays byte-identical to the pre-v1.2 golden replay; HOS-*on* adds a new golden. All HOS RNG flows through one new isolated seeded substream. Grounding: `research/v1.2-DRIVER-HOS-GROUNDING.md`, `research/v1.2-HUB-DETAIL-GROUNDING.md`.
 
 - [x] **Phase 9: Driver model + HOS config + duty/phase events** — Driver entity, HosClock, full-FMCSA HosConfig, driver + load/unload events ✅ 2026-06-22
-- [ ] **Phase 10: Pure forward-labeling HOS engine** — deterministic drive/break/rest engine shared by sim + optimizer
+- [x] **Phase 10: Pure forward-labeling HOS engine** — deterministic drive/break/rest engine shared by sim + optimizer ✅ 2026-06-22
 - [ ] **Phase 11: Sim HOS enforcement + load/unload events + golden** — 5th RNG substream; HOS-off byte-identical to pre-v1.2 golden
 - [ ] **Phase 12: Driver relay / swap at hubs** — per-hub driver pools, deterministic handoffs
 - [ ] **Phase 13: Driver-status projection + tables** — OPERATIONAL read-model feeding hub-detail
@@ -173,7 +173,7 @@
 | 7. Time-Aware Optimizer | v1.1 | — | ✅ Complete | 2026-06-21 |
 | 8. Client Hardening & Coverage | v1.1 | — | ✅ Complete | 2026-06-22 |
 | 9. Driver model + HOS config + duty/phase events | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
-| 10. Pure HOS engine (shared sim+optimizer) | v1.2 | 0/— | ⬜ Not started | — |
+| 10. Pure HOS engine (shared sim+optimizer) | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 11. Sim HOS enforcement + load/unload events + golden | v1.2 | 0/— | ⬜ Not started | — |
 | 12. Driver relay / swap at hubs | v1.2 | 0/— | ⬜ Not started | — |
 | 13. Driver-status projection + tables | v1.2 | 0/— | ⬜ Not started | — |
