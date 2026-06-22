@@ -7,10 +7,10 @@ last_updated: "2026-06-22T00:20:43.053Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 100
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 8 of 8 — Client Hardening & Coverage (ready; Phases 6 & 7 ✅ complete)
+Phase: All 3 phases (6, 7, 8) ✅ COMPLETE — v1.1 implementation done & verified
 Plan: —
-Status: Phases 6 & 7 verified (gate green: build/typecheck/lint 0 · 949 unit · 82 integration / 20 files). Next = Phase 8 (HRD-01 parseEnvelope fallback, QA-01 coverage top-up) — last phase, then milestone lifecycle.
-Last activity: 2026-06-21 — VIZ-06 finalized with real ORS roads + ORS-duration medians (e0aae29); Phase 7 optimizer-consumes-timing complete (fa02cf7, c36a7fb); full gate re-verified independently
+Status: v1.1 ready for milestone lifecycle (audit → complete → cleanup → merge feature/v1.1-realistic-time-model → develop via git-flow → tag). Gate green: build/typecheck/lint 0 · 960 unit · 183 ui · 82 integration / 20 files.
+Last activity: 2026-06-22 — Phase 8 (HRD-01 tolerant parseEnvelope + QA-01 socket coverage) complete (faf69a8); orphaned-hook dead-code removed (18c68ce); full gate re-verified
 
 ## Performance Metrics
 

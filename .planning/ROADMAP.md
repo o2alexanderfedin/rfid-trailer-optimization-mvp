@@ -62,4 +62,4 @@
 | 5. Simulation + Visualization Wrapper | v1.0 | 8/8 | ✅ Complete | 2026-06-19 |
 | 6. Realistic Geography & Time Model | v1.1 | — | ✅ Complete (incl. VIZ-06 real ORS roads) | 2026-06-21 |
 | 7. Time-Aware Optimizer | v1.1 | — | ✅ Complete (OPT-09/10) | 2026-06-21 |
-| 8. Client Hardening & Coverage | v1.1 | 0/? | ○ Not Started | — |
+| 8. Client Hardening & Coverage | v1.1 | — | ✅ Complete (HRD-01, QA-01) | 2026-06-22 |
