@@ -1,6 +1,6 @@
 # Phase 6: Realistic Geography & Time Model — Summary
 
-**Completed:** 2026-06-21 · **Branch:** `feature/v1.1-realistic-time-model` · **Status:** Substantially complete — VIZ-06 *road geometry data* deferred (needs `ORS_API_KEY`); all other criteria met & verified.
+**Completed:** 2026-06-21 · **Branch:** `feature/v1.1-realistic-time-model` · **Status:** ✅ COMPLETE & verified — all criteria met, including VIZ-06 real road polylines (ORS key provided; precomputed + committed).
 
 ## What was delivered
 
@@ -9,7 +9,7 @@
 | **OPT-10 foundation** (enabling infra) | ✅ Done | `LogNormalParams`/`TimingConfig`/`DEFAULT_TIMING_CONFIG` moved to `@mm/domain` + pure `expectedMinutes(p)=clamp(median·exp(σ²/2),min,max)` (log-normal MEAN). `@mm/simulation` re-imports (DRY); `sampleLogNormal` unchanged. (`cd2b5c8`) |
 | **TIME-02** | ✅ Done | Distinct center re-dispatch dwell at turnaround — `dwellCenter` (≈65 min) now fires; spoke uses `dwellSpoke`; exactly one dwell per stop (no double-count). Seeded/deterministic. (`86c28b1`) |
 | **TIME-01** | ✅ Done | Per-leg transit median derived from real great-circle (haversine) distance @ 80 km/h HGV — long legs proportionally longer. DIP override: explicit `timing` config → flat transit. (`5d653cd`) |
-| **VIZ-06** | ⚠️ Partial | Loader for committed static GeoJSON + great-circle **fallback** + `scripts/precompute-routes.ts` (ORS `driving-hgv`, gated on `ORS_API_KEY`) + hub-coord checksum — all done (`179f960`). **Deferred:** generating the real `road-geometry.generated.json` (needs an ORS key); fallback keeps great-circle geometry active, so the map is unchanged from v1.0 for now. |
+| **VIZ-06** | ✅ Done | Loader + great-circle fallback + `scripts/precompute-routes.ts` (`179f960`). **Finalized (`e0aae29`):** ORS key provided → precomputed real `driving-hgv` polylines, **RDP-simplified 8.5 MB → 82 KB** (~72 pts/leg), committed `road-geometry.generated.json` (now the default; great-circle = fallback-when-absent, drift-guarded by hub checksum). Per-leg ORS `duration_s` also became the transit median on both the simulator and optimizer (TIME-01 upgrade), so the displayed roads and the planned times are consistent end-to-end. Caught + fixed a real build gap (`tsc` doesn't emit data files → added a `copy-assets` step so built `@mm/api` resolves the JSON). |
 
 ## Verification (independently re-run by the orchestrator)
 
@@ -26,7 +26,7 @@
 
 ## Deferred / follow-ups
 
-- **VIZ-06 road data** — run `ORS_API_KEY=… pnpm tsx scripts/precompute-routes.ts` to generate + commit `road-geometry.generated.json`; the loader then serves real `driving-hgv` polylines and TIME-01's median can switch from haversine to ORS `summary.duration`.
+- ✅ **VIZ-06 road data — DONE** (`e0aae29`): ORS key provided; real `driving-hgv` polylines precomputed + RDP-simplified (82 KB) + committed; transit medians switched from haversine to ORS `duration_s`. The `.env` holds the key (gitignored) to regenerate via `scripts/precompute-routes.ts` if hubs change (a `hubChecksum` drift guard flags staleness).
 - **Integration suite runtime** ballooned (~350s → ~1600s) under realistic-timing horizons; a CI-time optimization (more flat-timing pins or shorter horizons) is a candidate cleanup.
 - One re-baseline: `demo-feed.int.test.ts` `MIN_WRONG_TRAILER` 3→1 (TIME-02's longer turnaround ⇒ fewer round trips / spoke reads in a 120-tick window) — assertion intent preserved.
 

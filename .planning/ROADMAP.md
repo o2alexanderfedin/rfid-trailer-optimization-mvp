@@ -60,6 +60,6 @@
 | 3. RFID-Assisted Validation | v1.0 | 7/7 | ✅ Complete | 2026-06-19 |
 | 4. Rolling Optimizer | v1.0 | 6/6 | ✅ Complete | 2026-06-19 |
 | 5. Simulation + Visualization Wrapper | v1.0 | 8/8 | ✅ Complete | 2026-06-19 |
-| 6. Realistic Geography & Time Model | v1.1 | — | ◑ Substantially complete (VIZ-06 road data deferred — needs ORS key) | 2026-06-21 |
-| 7. Time-Aware Optimizer | v1.1 | 0/? | ○ Not Started | — |
+| 6. Realistic Geography & Time Model | v1.1 | — | ✅ Complete (incl. VIZ-06 real ORS roads) | 2026-06-21 |
+| 7. Time-Aware Optimizer | v1.1 | — | ✅ Complete (OPT-09/10) | 2026-06-21 |
 | 8. Client Hardening & Coverage | v1.1 | 0/? | ○ Not Started | — |

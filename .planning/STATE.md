@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 
 ## Current Position
 
-Phase: 6 of 8 — Realistic Geography & Time Model (substantially complete; VIZ-06 road data deferred → needs ORS_API_KEY)
+Phase: 8 of 8 — Client Hardening & Coverage (ready; Phases 6 & 7 ✅ complete)
 Plan: —
-Status: Phase 6 verified (gate green: build/typecheck/lint 0 · 918 unit · 82 integration). Next = Phase 7 Time-Aware Optimizer (OPT-09/10).
-Last activity: 2026-06-21 — Phase 6 built (foundation inline; TIME-02/TIME-01/VIZ-06 via ultracode workflow); integration regression caught + fixed (3bf463f); fully re-verified
+Status: Phases 6 & 7 verified (gate green: build/typecheck/lint 0 · 949 unit · 82 integration / 20 files). Next = Phase 8 (HRD-01 parseEnvelope fallback, QA-01 coverage top-up) — last phase, then milestone lifecycle.
+Last activity: 2026-06-21 — VIZ-06 finalized with real ORS roads + ORS-duration medians (e0aae29); Phase 7 optimizer-consumes-timing complete (fa02cf7, c36a7fb); full gate re-verified independently
 
 ## Performance Metrics
 
