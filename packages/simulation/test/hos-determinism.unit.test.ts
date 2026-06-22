@@ -121,17 +121,19 @@ describe("SIM-HOS-06: HOS-on golden-replay (same seed + HosConfig ⇒ byte-ident
 // SIM-HOS-02 — per-trip driver assignment + accrual
 // ---------------------------------------------------------------------------
 describe("SIM-HOS-02: per-trip driver assignment + HOS accrual", () => {
-  it("seeds exactly one DriverRegistered per trailer (one driver per spoke)", () => {
+  it("seeds the center driver POOL: one per trailer PLUS the relay spares (DRV-04)", () => {
     const s = simulate(ON);
     const registered = s.filter((e) => e.event.type === "DriverRegistered");
-    // 10 hubs ⇒ 9 spokes ⇒ 9 trailers ⇒ 9 drivers.
-    expect(registered.length).toBe(9);
+    // Phase 12 (DRV-04): 10 hubs ⇒ 9 spokes ⇒ 9 trailers ⇒ 9 PRIMARY drivers
+    // PLUS 6 relay spares = 15 (the pool is larger than the trailer count so a
+    // fresh driver is usually available for a swap). Each id is unique.
+    expect(registered.length).toBe(15);
     const driverIds = new Set(
       registered.map((e) =>
         e.event.type === "DriverRegistered" ? e.event.payload.driverId : "",
       ),
     );
-    expect(driverIds.size).toBe(9);
+    expect(driverIds.size).toBe(15);
   });
 
   it("every DriverRegistered comes before the first DriverAssignedToTrip", () => {

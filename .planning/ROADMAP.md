@@ -35,7 +35,7 @@
 - [x] **Phase 9: Driver model + HOS config + duty/phase events** — Driver entity, HosClock, full-FMCSA HosConfig, driver + load/unload events ✅ 2026-06-22
 - [x] **Phase 10: Pure forward-labeling HOS engine** — deterministic drive/break/rest engine shared by sim + optimizer ✅ 2026-06-22
 - [x] **Phase 11: Sim HOS enforcement + load/unload events + golden** — 5th RNG substream; HOS-off byte-identical to pre-v1.2 golden ✅ 2026-06-22
-- [ ] **Phase 12: Driver relay / swap at hubs** — per-hub driver pools, deterministic handoffs
+- [x] **Phase 12: Driver relay / swap at hubs** — per-hub driver pools, deterministic handoffs ✅ 2026-06-22
 - [ ] **Phase 13: Driver-status projection + tables** — OPERATIONAL read-model feeding hub-detail
 - [ ] **Phase 14: Hub-detail endpoint + ws driver buckets** — GET /api/hubs/:id/detail aggregation
 - [ ] **Phase 15: Optimizer HOS-aware** — consume driver status, soft restCost preference
@@ -175,7 +175,7 @@
 | 9. Driver model + HOS config + duty/phase events | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 10. Pure HOS engine (shared sim+optimizer) | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 11. Sim HOS enforcement + load/unload events + golden | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
-| 12. Driver relay / swap at hubs | v1.2 | 0/— | ⬜ Not started | — |
+| 12. Driver relay / swap at hubs | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 13. Driver-status projection + tables | v1.2 | 0/— | ⬜ Not started | — |
 | 14. Hub-detail endpoint + ws driver buckets | v1.2 | 0/— | ⬜ Not started | — |
 | 15. Optimizer HOS-aware | v1.2 | 0/— | ⬜ Not started | — |
