@@ -37,10 +37,10 @@
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| OPT-09 | _(filled by roadmap)_ | Planned |
-| OPT-10 | _(filled by roadmap)_ | Planned |
-| TIME-01 | _(filled by roadmap)_ | Planned |
-| TIME-02 | _(filled by roadmap)_ | Planned |
-| VIZ-06 | _(filled by roadmap)_ | Planned |
-| HRD-01 | _(filled by roadmap)_ | Planned |
-| QA-01 | _(filled by roadmap)_ | Planned |
+| OPT-09 | Phase 7 — Time-Aware Optimizer | Planned |
+| OPT-10 | Phase 7 — Time-Aware Optimizer | Planned |
+| TIME-01 | Phase 6 — Realistic Geography & Time Model | Planned |
+| TIME-02 | Phase 6 — Realistic Geography & Time Model | Planned |
+| VIZ-06 | Phase 6 — Realistic Geography & Time Model | Planned |
+| HRD-01 | Phase 8 — Client Hardening & Coverage | Planned |
+| QA-01 | Phase 8 — Client Hardening & Coverage | Planned |

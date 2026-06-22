@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-06-22T00:20:43.053Z"
 last_activity: 2026-06-22
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-20)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 6 of 8 — Realistic Geography & Time Model (ready to plan)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-22 — Milestone v1.1 started
+Status: Roadmap complete — ready to plan Phase 6
+Last activity: 2026-06-21 — v1.1 roadmap created (Phases 6–8); research + requirements committed
 
 ## Performance Metrics
 
