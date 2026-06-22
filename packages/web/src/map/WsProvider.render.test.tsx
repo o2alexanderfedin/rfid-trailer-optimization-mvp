@@ -398,4 +398,58 @@ describe("<WsProvider /> (jsdom ui lane)", () => {
     // No duplicate envelope delivery from a phantom reconnect.
     expect(received).toHaveLength(1);
   });
+
+  it("sends a {v:1,type:\"resync\"} request when a seq GAP is detected (T-05-14)", async () => {
+    const received: Receipt[] = [];
+    // Capture every frame the CLIENT sends back to the server (the resync probe).
+    const clientFrames: string[] = [];
+
+    // A gapped tick: seq 5 after the seq-1 snapshot (2,3,4 missing) → resync.
+    const gappedTick: WsEnvelope = {
+      v: 1,
+      type: "tick",
+      seq: 5,
+      simMs: 2_000,
+      speed: SPEED,
+      payload: {
+        trailers: [
+          {
+            id: "T-RENDER",
+            routeId: "R-A-B",
+            departMs: 0,
+            etaMs: 10_000,
+            state: "late",
+            util: 0.6,
+          },
+        ],
+      },
+    };
+
+    server.resetHandlers(
+      api.addEventListener("connection", ({ client }) => {
+        client.addEventListener("message", (event: MessageEvent) => {
+          if (typeof event.data === "string") clientFrames.push(event.data);
+        });
+        client.send(JSON.stringify(SNAPSHOT)); // seq 1 → lastSeq = 1
+        client.send(JSON.stringify(gappedTick)); // seq 5 → gap → resync
+      }),
+    );
+
+    render(
+      <WsProvider>
+        <Recorder label="gap" received={received} />
+      </WsProvider>,
+    );
+
+    // Both envelopes are delivered (the gapped tick is applied, not dropped).
+    await waitFor(() => {
+      expect(received.map((r) => r.seq)).toEqual([1, 5]);
+    });
+
+    // The provider sent EXACTLY ONE resync request in response to the gap.
+    await waitFor(() => {
+      expect(clientFrames).toHaveLength(1);
+    });
+    expect(JSON.parse(clientFrames[0] as string)).toEqual({ v: 1, type: "resync" });
+  });
 });

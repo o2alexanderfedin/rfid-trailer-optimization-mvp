@@ -23,7 +23,50 @@ import type {
   TrailerKeyframe,
   HubState,
   RouteState,
+  SimSpeedState,
 } from "@mm/api";
+
+// ---------------------------------------------------------------------------
+// Speed fallback (HRD-01)
+// ---------------------------------------------------------------------------
+
+/**
+ * The default "speed of time" the client assumes when a server omits or sends a
+ * malformed envelope-level `speed` field (e.g. a stale/older server build).
+ *
+ * Mirrors the backend SpeedController's 1× default
+ * (`packages/api/src/sim/speed-controller.ts`):
+ *   - `tickIntervalMs = 500` (the default wall-clock interval),
+ *   - `multiplier = defaultIntervalMs / tickIntervalMs = 500 / 500 = 1`,
+ *   - `simSpeed   = msPerTick / tickIntervalMs = 60000 / 500 = 120`,
+ *   - `paused = false`.
+ *
+ * Using this fallback (instead of dropping the envelope) keeps the live map
+ * flowing against a server that predates the `speed` field — the only divergence
+ * is the trailer-tween playback rate, which the next valid `speed` corrects.
+ */
+export const DEFAULT_SPEED: SimSpeedState = {
+  multiplier: 1,
+  tickIntervalMs: 500,
+  simSpeed: 120,
+  paused: false,
+};
+
+/**
+ * Module-level warn-once guard. The first time `parseEnvelope` substitutes
+ * {@link DEFAULT_SPEED} for a missing/invalid `speed`, it logs ONCE; subsequent
+ * substitutions stay silent so a stale server does not spam the console per tick.
+ */
+let warnedSpeedFallback = false;
+
+/**
+ * Test-only reset of the {@link warnedSpeedFallback} guard so each test can
+ * assert the "warns exactly once" behavior from a known state. Not part of the
+ * production API surface (underscore-prefixed by convention).
+ */
+export function __resetSpeedFallbackWarning(): void {
+  warnedSpeedFallback = false;
+}
 
 // ---------------------------------------------------------------------------
 // Entity maps (pure imperative state, off the React render path)
@@ -52,24 +95,70 @@ export function makeEntityMaps(): EntityMaps {
 /**
  * Narrow an arbitrary parsed JSON value to a `WsEnvelope`.
  *
- * Returns `null` for unknown versions, unknown types, or missing required
- * fields (T-05-13: malformed envelopes are silently ignored, not applied).
+ * Returns `null` for malformed CORE fields — unknown version, unknown type,
+ * non-number `seq`/`simMs`, or missing/non-object `payload` (T-05-13: genuinely
+ * malformed envelopes are silently ignored, not applied).
+ *
+ * HRD-01 (tolerant speed): the ONLY field that does not hard-reject is `speed`.
+ * When every core field is valid but `speed` is missing or structurally invalid,
+ * the envelope is ACCEPTED with {@link DEFAULT_SPEED} substituted, and a single
+ * `console.warn` is emitted (warn-once guard) — so a stale/older server that
+ * predates the `speed` field keeps the live map flowing instead of blanking it.
+ * The fallback is deliberately narrow: it must NEVER mask a real protocol/version
+ * error (PITFALLS P7), which is why every other field still returns `null`.
  */
 export function parseEnvelope(raw: unknown): WsEnvelope | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (r["v"] !== 1) return null;
-  if (r["type"] !== "snapshot" && r["type"] !== "tick") return null;
+  const type = r["type"];
+  if (type !== "snapshot" && type !== "tick") return null;
   if (typeof r["seq"] !== "number") return null;
   if (typeof r["simMs"] !== "number") return null;
-  if (!isSimSpeedState(r["speed"])) return null;
-  if (typeof r["payload"] !== "object" || r["payload"] === null) return null;
+  const payload = r["payload"];
+  if (typeof payload !== "object" || payload === null) return null;
 
-  return raw as WsEnvelope;
+  // Tolerant speed: accept-with-default (not reject) when only `speed` is bad.
+  let speed: SimSpeedState;
+  if (isSimSpeedState(r["speed"])) {
+    speed = r["speed"];
+  } else {
+    speed = DEFAULT_SPEED;
+    if (!warnedSpeedFallback) {
+      warnedSpeedFallback = true;
+      console.warn(
+        "wsClient: envelope missing/invalid speed; using DEFAULT_SPEED",
+      );
+    }
+  }
+
+  const seq = r["seq"];
+  const simMs = r["simMs"];
+  if (type === "snapshot") {
+    return {
+      v: 1,
+      type: "snapshot",
+      seq,
+      simMs,
+      speed,
+      payload: payload as SnapshotPayload,
+    };
+  }
+  return {
+    v: 1,
+    type: "tick",
+    seq,
+    simMs,
+    speed,
+    payload,
+  };
 }
 
-/** Validate the envelope-level `speed` field (the SimSpeedState wire contract). */
-function isSimSpeedState(value: unknown): boolean {
+/**
+ * Validate the envelope-level `speed` field (the SimSpeedState wire contract).
+ * Acts as a TS type guard so a `true` result narrows `value` to SimSpeedState.
+ */
+function isSimSpeedState(value: unknown): value is SimSpeedState {
   if (typeof value !== "object" || value === null) return false;
   const s = value as Record<string, unknown>;
   return (
