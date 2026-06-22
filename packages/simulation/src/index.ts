@@ -19,7 +19,11 @@ export {
   haversineKm,
   transitParamsForLeg,
   buildTransitParamsByLeg,
+  loadStaticRoadGeometry,
+  applyRoadGeometry,
+  hubCoordsChecksum,
 } from "./network/routes.js";
+export type { RoadLeg, RoadGeometryFile } from "./network/routes.js";
 
 // --- SIM-02: deterministic primitives ---------------------------------------
 export type { Rng } from "./rng.js";

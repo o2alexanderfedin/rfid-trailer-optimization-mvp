@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Hub, LogNormalParams, LonLat, Route } from "@mm/domain";
 
 /**
@@ -152,32 +154,144 @@ export function buildTransitParamsByLeg(
   return byLeg;
 }
 
+// --- VIZ-06: loadable road-following geometry (great-circle FALLBACK) --------
+
+/**
+ * One directed leg's precomputed ROAD geometry, as written by the offline
+ * `scripts/precompute-routes.ts` (OpenRouteService `driving-hgv`). `geometry` is
+ * a `[lon, lat][]` LineString (GeoJSON axis order); `distance_m` / `duration_s`
+ * carry the ORS `summary` for reference / a future speed-based transit estimate.
+ */
+export interface RoadLeg {
+  /** Road-snapped `[lon, lat]` LineString for this directed leg. */
+  readonly geometry: readonly LonLat[];
+  /** ORS `summary.distance` in METERS (optional). */
+  readonly distance_m?: number;
+  /** ORS `summary.duration` in SECONDS (optional). */
+  readonly duration_s?: number;
+}
+
+/**
+ * The committed `road-geometry.generated.json` shape: a checksum of the hub
+ * coordinates the geometry was computed against (drift detection) plus a map of
+ * directed {@link routeId} → {@link RoadLeg}. Any leg may be absent (it then
+ * falls back to {@link greatCircle}).
+ */
+export interface RoadGeometryFile {
+  /** {@link hubCoordsChecksum} of the hubs the geometry was precomputed for. */
+  readonly hubChecksum: string;
+  /** Road geometry keyed by directed `route-<from>-<to>` id. */
+  readonly legs: Readonly<Record<string, RoadLeg>>;
+}
+
+/** Path of the committed generated file, resolved relative to THIS module. */
+const GENERATED_GEOMETRY_PATH = fileURLToPath(
+  new URL("./road-geometry.generated.json", import.meta.url),
+);
+
+/** Minimal structural guard — keeps the loaded JSON inside the typed contract. */
+function isRoadGeometryFile(value: unknown): value is RoadGeometryFile {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as { hubChecksum?: unknown; legs?: unknown };
+  return typeof v.hubChecksum === "string" && typeof v.legs === "object" && v.legs !== null;
+}
+
+/**
+ * Load the committed `road-geometry.generated.json` if it exists, else
+ * `undefined`. This is the ONLY filesystem read in this module and it happens
+ * lazily (when {@link buildRoutes} is first called WITHOUT an injected source),
+ * never over the network — so determinism and import-time purity hold. A missing
+ * file (the current state — no ORS key, nothing precomputed) is the normal
+ * fallback path and returns `undefined` quietly.
+ */
+export function loadStaticRoadGeometry(): RoadGeometryFile | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(GENERATED_GEOMETRY_PATH, "utf8");
+  } catch {
+    return undefined; // file absent -> great-circle fallback (back-compat).
+  }
+  const parsed: unknown = JSON.parse(raw);
+  return isRoadGeometryFile(parsed) ? parsed : undefined;
+}
+
+/**
+ * A stable, order-sensitive checksum of the hub coordinates a geometry file was
+ * precomputed against. Stored alongside the geometry so a moved hub (stale
+ * geometry) is test-detectable. Pure: a function of the hubs' `id/lon/lat` only
+ * (rounded to 6 dp — ~0.1 m — so trivial float noise does not churn it).
+ */
+export function hubCoordsChecksum(hubs: readonly Hub[]): string {
+  const round = (n: number): number => Math.round(n * 1e6) / 1e6;
+  const canon = hubs.map((h) => `${h.hubId}:${round(h.lon)},${round(h.lat)}`).join("|");
+  // Deterministic 32-bit FNV-1a over the canonical string -> 8-hex-char digest.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < canon.length; i += 1) {
+    hash ^= canon.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Resolve one directed leg's geometry: the PRECOMPUTED road line from `file` if
+ * present and usable (>= 2 vertices), else the deterministic {@link greatCircle}
+ * arc. A road line's endpoints are SNAPPED EXACTLY to the hub coordinates so the
+ * shape-agnostic seam (ws protocol + OpenLayers animation) stays anchored
+ * regardless of ORS rounding. Pure: no I/O, a function of its arguments only.
+ */
+export function applyRoadGeometry(
+  file: RoadGeometryFile | undefined,
+  from: Hub,
+  to: Hub,
+  points: number,
+): LonLat[] {
+  const fallback = (): LonLat[] =>
+    greatCircle([from.lon, from.lat], [to.lon, to.lat], points);
+  if (file === undefined) return fallback();
+  const leg = file.legs[routeId(from.hubId, to.hubId)];
+  if (leg === undefined || leg.geometry.length < 2) return fallback();
+  // Copy interior vertices verbatim; snap the two endpoints to the hub coords.
+  const out: LonLat[] = leg.geometry.map((p) => [p[0], p[1]]);
+  out[0] = [from.lon, from.lat];
+  out[out.length - 1] = [to.lon, to.lat];
+  return out;
+}
+
 /**
  * Build the hub-and-spoke linehaul routes for `hubs`. The first hub is the
  * center; every other hub gets a DIRECTED pair of legs (center -> spoke and
  * spoke -> center) so trailers can run trips in both directions and the
  * undirected graph is fully connected. Routes are returned in a stable,
  * deterministic order (input hub order).
+ *
+ * VIZ-06: each leg's geometry comes from precomputed ROAD geometry when
+ * available, else the great-circle arc. The road source is `geometry` if
+ * supplied (injectable for tests), otherwise the committed static file via
+ * {@link loadStaticRoadGeometry} (absent today ⇒ great-circle fallback, so the
+ * default behaviour is byte-identical to v1.0).
  */
-export function buildRoutes(hubs: readonly Hub[]): Route[] {
+export function buildRoutes(
+  hubs: readonly Hub[],
+  geometry?: RoadGeometryFile,
+): Route[] {
   if (hubs.length < 2) return [];
+  const file = geometry ?? loadStaticRoadGeometry();
   const center = hubs[0]!;
   const routes: Route[] = [];
   for (let i = 1; i < hubs.length; i += 1) {
     const spoke = hubs[i]!;
-    const out = greatCircle([center.lon, center.lat], [spoke.lon, spoke.lat], ROUTE_POINTS);
-    const back = greatCircle([spoke.lon, spoke.lat], [center.lon, center.lat], ROUTE_POINTS);
     routes.push({
       routeId: routeId(center.hubId, spoke.hubId),
       fromHubId: center.hubId,
       toHubId: spoke.hubId,
-      geometry: out,
+      geometry: applyRoadGeometry(file, center, spoke, ROUTE_POINTS),
     });
     routes.push({
       routeId: routeId(spoke.hubId, center.hubId),
       fromHubId: spoke.hubId,
       toHubId: center.hubId,
-      geometry: back,
+      geometry: applyRoadGeometry(file, spoke, center, ROUTE_POINTS),
     });
   }
   return routes;
