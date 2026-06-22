@@ -131,8 +131,22 @@ export type { LogNormalParams, TimingConfig } from "./timing.js";
 export { DEFAULT_TIMING_CONFIG, expectedMinutes } from "./timing.js";
 
 // --- Shared HOS contract (v1.2 HOS-01 — full-FMCSA limits, sim + optimizer) --
-export type { HosConfig } from "./hos.js";
-export { DEFAULT_HOS_CONFIG, hosConfigSchema } from "./hos.js";
+export type {
+  DrivingLegResult,
+  DutySegment,
+  HosConfig,
+  SleeperBerthResult,
+} from "./hos.js";
+export {
+  applyDrivingLeg,
+  applySleeperBerthPeriod,
+  DEFAULT_HOS_CONFIG,
+  epochMinutesToIso,
+  hosConfigSchema,
+  isoToEpochMinutes,
+  mayDriveNow,
+  remainingLegalDriveMinutes,
+} from "./hos.js";
 
 // --- Shared geography→transit derivation (v1.1 Phase-7 OPT-09/OPT-10) --------
 // Pure helpers the optimizer imports (it cannot import @mm/simulation) and the
