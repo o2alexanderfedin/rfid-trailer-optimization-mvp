@@ -10,28 +10,22 @@
  * The engine feeds these draws from a DEDICATED timing substream (a seed-derived
  * Rng) so adding timing variance never perturbs the operational / RFID / over-carry
  * draws — the determinism contract (threat T-01-15) is preserved.
+ *
+ * v1.1: the distribution config ({@link LogNormalParams}, {@link TimingConfig},
+ * {@link DEFAULT_TIMING_CONFIG}) and the deterministic mean estimator
+ * ({@link expectedMinutes}) now live in `@mm/domain` — the shared leaf the
+ * optimizer also reads — so the simulator's random draw and the planner's
+ * estimate use ONE source of truth (DRY). This module keeps the seeded SAMPLER
+ * and re-exports the config for back-compat.
  */
 
+import type { LogNormalParams } from "@mm/domain";
 import type { Rng } from "./rng.js";
 
-/**
- * Parameters of a clamped log-normal draw, in MINUTES (1 tick = 1 minute).
- *
- *  - `median` is the geometric median (the `exp(mu)` scale): half the mass falls
- *    below it. It is the typical, unskewed value.
- *  - `sigma` is the log-space standard deviation; larger ⇒ heavier right tail.
- *  - `min` / `max` clamp the result to a sane operational band.
- */
-export interface LogNormalParams {
-  /** Geometric median in minutes (`exp(mu)`). Must be > 0. */
-  readonly median: number;
-  /** Log-space standard deviation (spread / skew). Must be >= 0. */
-  readonly sigma: number;
-  /** Lower clamp in minutes (inclusive). */
-  readonly min: number;
-  /** Upper clamp in minutes (inclusive). */
-  readonly max: number;
-}
+// Re-export the shared timing contract so existing `./timing.js` importers
+// (engine.ts, the package index) keep working unchanged.
+export type { LogNormalParams, TimingConfig } from "@mm/domain";
+export { DEFAULT_TIMING_CONFIG, expectedMinutes } from "@mm/domain";
 
 /**
  * Draw one clamped log-normal value (minutes) from the seeded `rng`.
@@ -64,31 +58,3 @@ export function sampleLogNormal(rng: Rng, params: LogNormalParams): number {
   // Clamp to the operational band (handles the long right tail + any underflow).
   return Math.min(max, Math.max(min, value));
 }
-
-/**
- * Injectable (DIP) timing configuration the engine draws from. Tests may pass an
- * override to pin or widen the distributions; the engine uses
- * {@link DEFAULT_TIMING_CONFIG} when none is supplied.
- *
- * Dwell is split by HUB ROLE: a center hub (cross-dock, reload, contention) sits
- * longer than a spoke. Transit is a single distribution around a typical leg.
- */
-export interface TimingConfig {
-  /** Hub-dwell distribution at a SPOKE hub (minutes). */
-  readonly dwellSpoke: LogNormalParams;
-  /** Hub-dwell distribution at the CENTER hub (minutes). */
-  readonly dwellCenter: LogNormalParams;
-  /** Leg-transit distribution (minutes). */
-  readonly transit: LogNormalParams;
-}
-
-/**
- * Default timing distributions (minutes). Spoke dwell ~25, center dwell ~60
- * (longer cross-dock), transit ~30 — matching the prior fixed constants at the
- * median while adding realistic right-skewed spread.
- */
-export const DEFAULT_TIMING_CONFIG: TimingConfig = {
-  dwellSpoke: { median: 25, sigma: 0.4, min: 10, max: 180 },
-  dwellCenter: { median: 60, sigma: 0.4, min: 10, max: 180 },
-  transit: { median: 30, sigma: 0.3, min: 10, max: 120 },
-};

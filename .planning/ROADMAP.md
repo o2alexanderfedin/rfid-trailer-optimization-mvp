@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 MVP** — Phases 1–5 (shipped 2026-06-20) — full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
+- ✅ **v1.1 Realistic Time Model + Hardening** — Phases 6–8 (shipped 2026-06-22) — full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 
 ## Phases
 
@@ -17,9 +18,14 @@
 
 </details>
 
-### 🔜 Next Milestone (not yet defined)
+<details>
+<summary>✅ v1.1 Realistic Time Model + Hardening (Phases 6–8) — SHIPPED 2026-06-22</summary>
 
-Run `/gsd-new-milestone` to scope v1.1+. Candidate backlog (from v1 requirements v2 block + review notes): VIZX-01/02/03 (RFID heatmaps, re-routing animations, 2D trailer fill), OPS-01/02 (human override workflow, richer simulation scenarios), and a live 8-metric A/B money slide (UI-04 currently a calibrated seed-42 2-metric before/after).
+- [x] Phase 6: Realistic Geography & Time Model — completed 2026-06-21 (VIZ-06, TIME-01, TIME-02)
+- [x] Phase 7: Time-Aware Optimizer — completed 2026-06-21 (OPT-09, OPT-10)
+- [x] Phase 8: Client Hardening & Coverage — completed 2026-06-22 (HRD-01, QA-01)
+
+</details>
 
 ## Progress
 
@@ -30,3 +36,6 @@ Run `/gsd-new-milestone` to scope v1.1+. Candidate backlog (from v1 requirements
 | 3. RFID-Assisted Validation | v1.0 | 7/7 | ✅ Complete | 2026-06-19 |
 | 4. Rolling Optimizer | v1.0 | 6/6 | ✅ Complete | 2026-06-19 |
 | 5. Simulation + Visualization Wrapper | v1.0 | 8/8 | ✅ Complete | 2026-06-19 |
+| 6. Realistic Geography & Time Model | v1.1 | — | ✅ Complete | 2026-06-21 |
+| 7. Time-Aware Optimizer | v1.1 | — | ✅ Complete | 2026-06-21 |
+| 8. Client Hardening & Coverage | v1.1 | — | ✅ Complete | 2026-06-22 |

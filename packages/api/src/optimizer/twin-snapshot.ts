@@ -1,6 +1,10 @@
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import type { ProjectionDb } from "@mm/projections";
+import type { Hub, LonLat, TimingConfig } from "@mm/domain";
+import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes } from "@mm/domain";
+import type { RoadGeometryFile } from "@mm/simulation";
+import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import type {
   TwinBlock,
   TwinRoute,
@@ -15,9 +19,10 @@ import type {
  *
  * Design discipline:
  *  - PURE read mapping — no event-store writes, no side effects.
- *  - Deterministic: every collection is sorted by id; `travelMin` comes from
- *    the sim's `TRANSIT_MIN` constant (30 min); `departureMin` comes from
- *    sim/event time — `Date.now()` is NEVER called (anti-P3).
+ *  - Deterministic: every collection is sorted by id; `travelMin` prefers the
+ *    committed ORS road `duration_s` (haversine expected-transit fallback);
+ *    `departureMin` comes from sim/event time — `Date.now()` is NEVER called
+ *    (anti-P3).
  *  - Integer capacities + volumes (P12): no floats enter the optimizer.
  *  - `nextUnloadHubId` for each block references hubs in the route network.
  */
@@ -66,21 +71,65 @@ function sortedUnique(ids: Iterable<string>): string[] {
 }
 
 /**
- * Parse a `RouteRegistered` JSONB payload into a `TwinRoute`. The geometry
- * is recorded but not used for travel time here — we use `TRANSIT_MIN` (the
- * sim's uniform transit model) to avoid float distance math (P12).
+ * A minimal `Hub`-shaped carrier of WGS84 coordinates — all
+ * `expectedTransitMinutes` (via `transitParamsForLeg`/`haversineKm`) reads is
+ * `lon`/`lat`, so the synthetic `hubId`/`name` are placeholders.
  */
-function parseRouteRow(data: unknown): TwinRoute {
+function coordHub(point: LonLat): Hub {
+  return { hubId: "x", name: "x", lon: point[0], lat: point[1] };
+}
+
+/**
+ * Parse a `RouteRegistered` JSONB payload into a `TwinRoute`.
+ *
+ * VIZ-06 / TIME-01 upgrade — the leg's `travelMin` PREFERS the ORS road
+ * `duration_s` from the committed `road-geometry.generated.json` (`road`), keyed
+ * by the leg's directed `routeId`: `round(duration_s / 60)` minutes. This is the
+ * SAME real drive time the displayed road polyline is based on, so the optimizer
+ * plans against the geometry the operator sees. The integer rounding keeps
+ * `TwinRoute.travelMin`'s whole-minute contract at the boundary (anti-P12).
+ *
+ * FALLBACK (no ORS duration for this leg — file absent, leg missing, or no
+ * `duration_s`): the deterministic per-leg expected-transit MEAN
+ * `round(expectedTransitMinutes(fromHub, toHub, timing))`, derived from the
+ * route's GEOMETRY endpoints (the recorded `[lon,lat]` LineString starts at the
+ * from-hub and ends at the to-hub — `buildRoutes` snaps both endpoints to the
+ * hub coordinates), the SAME `TimingConfig` the simulator draws from (DRY).
+ *
+ * Fail-soft: a route whose geometry has fewer than 2 points (cannot derive a
+ * leg distance) AND has no ORS duration falls back to `TRANSIT_MIN` so the
+ * snapshot never throws.
+ */
+function parseRouteRow(
+  data: unknown,
+  timing: TimingConfig,
+  road: RoadGeometryFile | undefined,
+): TwinRoute {
   const p = data as {
     routeId: string;
     fromHubId: string;
     toHubId: string;
+    geometry?: readonly LonLat[];
   };
+  const geometry = p.geometry ?? [];
+  const orsDurationS = road?.legs[routeId(p.fromHubId, p.toHubId)]?.duration_s;
+  const travelMin =
+    orsDurationS !== undefined
+      ? Math.round(orsDurationS / 60) // ORS road drive time (matches the polyline)
+      : geometry.length >= 2
+        ? Math.round(
+            expectedTransitMinutes(
+              coordHub(geometry[0]!),
+              coordHub(geometry[geometry.length - 1]!),
+              timing,
+            ),
+          )
+        : TRANSIT_MIN;
   return {
     routeId: p.routeId,
     fromHubId: p.fromHubId,
     toHubId: p.toHubId,
-    travelMin: TRANSIT_MIN,
+    travelMin,
     capacity: DEFAULT_ROUTE_CAPACITY,
   };
 }
@@ -199,15 +248,24 @@ function buildTrailerBlocks(
  *
  * Determinism guarantees (anti-P3):
  *  - All collections are sorted by their stable id.
- *  - `travelMin` = `TRANSIT_MIN` (constant, not derived from geometry floats).
+ *  - `travelMin` is the deterministic per-leg expected-transit MEAN
+ *    (`round(expectedTransitMinutes(...))` over the route geometry, OPT-09/10),
+ *    derived from the same `TimingConfig` the simulator draws from (DRY).
+ *  - `centerHubId` is the hub-and-spoke CENTER (the hub on the most legs), so the
+ *    optimizer applies the role-based `dwellCenter`/`dwellSpoke` estimate.
  *  - `departureMin` comes from `TrailerDeparted` event times in the log (not
  *    `Date.now()`). If no departure is on record, `DEFAULT_DEPARTURE_MIN` is
  *    used.
  *  - `capacity` / `volume` are positive integers (P12).
  *
- * @param db  the composition-root DB handle (event store + projection tables)
+ * @param db      the composition-root DB handle (event store + projection tables)
+ * @param timing  the active timing config (defaults to {@link DEFAULT_TIMING_CONFIG});
+ *                tests pin it to make the geography-derived `travelMin` explicit.
  */
-export async function buildTwinSnapshot(db: SnapshotDb): Promise<TwinSnapshot> {
+export async function buildTwinSnapshot(
+  db: SnapshotDb,
+  timing: TimingConfig = DEFAULT_TIMING_CONFIG,
+): Promise<TwinSnapshot> {
   // 1. Read route legs from RouteRegistered events (immutable log)
   const routeEventRows = await db
     .selectFrom("events")
@@ -216,10 +274,16 @@ export async function buildTwinSnapshot(db: SnapshotDb): Promise<TwinSnapshot> {
     .orderBy("global_seq", "asc")
     .execute();
 
+  // VIZ-06 / TIME-01: load the committed ORS road geometry ONCE (deterministic
+  // static file; `undefined` when absent → haversine fallback). Each route's
+  // `travelMin` prefers the leg's ORS `duration_s` so the plan matches the drawn
+  // road polyline.
+  const road = loadStaticRoadGeometry();
+
   // Latest route per routeId wins (idempotent upsert semantics)
   const routeById = new Map<string, TwinRoute>();
   for (const row of routeEventRows) {
-    const r = parseRouteRow(row.data);
+    const r = parseRouteRow(row.data, timing, road);
     routeById.set(r.routeId, r);
   }
   const routes: readonly TwinRoute[] = [...routeById.values()].sort((a, b) =>
@@ -313,5 +377,43 @@ export async function buildTwinSnapshot(db: SnapshotDb): Promise<TwinSnapshot> {
   }
   const hubs = sortedUnique(hubSet);
 
-  return { hubs, routes, trailers };
+  // 7. Derive the hub-and-spoke CENTER: the hub appearing on the most route legs.
+  //    In the demo star topology every leg is `center↔spoke`, so the center is an
+  //    endpoint of EVERY leg and wins the count outright. Ties break by sorted hub
+  //    id (anti-P3). The optimizer uses this to apply the longer `dwellCenter`
+  //    estimate at the center and `dwellSpoke` elsewhere (OPT-09 / TIME-02 parity).
+  const centerHubId = deriveCenterHub(routes, hubs);
+
+  return centerHubId === undefined
+    ? { hubs, routes, trailers }
+    : { hubs, centerHubId, routes, trailers };
+}
+
+/**
+ * The hub-and-spoke CENTER: the hub that is an endpoint of the most route legs.
+ * Deterministic — ties (and the no-routes case) break by the lowest sorted hub
+ * id. Returns `undefined` only when there are no hubs at all (empty network), in
+ * which case the optimizer's `hubs[0]` fallback also yields nothing to center on.
+ */
+function deriveCenterHub(
+  routes: readonly TwinRoute[],
+  sortedHubs: readonly string[],
+): string | undefined {
+  if (sortedHubs.length === 0) return undefined;
+  const degree = new Map<string, number>();
+  for (const r of routes) {
+    degree.set(r.fromHubId, (degree.get(r.fromHubId) ?? 0) + 1);
+    degree.set(r.toHubId, (degree.get(r.toHubId) ?? 0) + 1);
+  }
+  let best = sortedHubs[0]!;
+  let bestDegree = degree.get(best) ?? 0;
+  // `sortedHubs` is already id-ascending, so the first max wins the tie (anti-P3).
+  for (const hubId of sortedHubs) {
+    const d = degree.get(hubId) ?? 0;
+    if (d > bestDegree) {
+      best = hubId;
+      bestDegree = d;
+    }
+  }
+  return best;
 }

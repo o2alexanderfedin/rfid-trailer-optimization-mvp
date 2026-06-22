@@ -26,6 +26,7 @@
     "packages/*/src/**/*.tsx",
     "packages/*/test/**/*.ts",
     "packages/*/test/**/*.tsx",
+    "scripts/**/*.ts",
     "eslint.config.ts",
     "vitest.config.ts",
     "vitest.coverage.config.ts",

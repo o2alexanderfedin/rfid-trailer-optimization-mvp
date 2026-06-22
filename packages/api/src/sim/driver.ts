@@ -22,6 +22,7 @@ import {
   simulate,
   type ScenarioKnobs,
   type SimulatedEvent,
+  type TimingConfig,
 } from "@mm/simulation";
 import { makeRng } from "@mm/simulation";
 import type { DomainEvent } from "@mm/domain";
@@ -141,6 +142,14 @@ export interface DriveSimulationOptions {
    * gate with zero detector change. Absent ⇒ the golden stream is byte-identical.
    */
   readonly overCarry?: number;
+  /**
+   * DIP: override the seeded log-normal DWELL/TRANSIT distributions passed to
+   * `simulate`. When ABSENT the engine uses realistic geography-derived per-leg
+   * transit (TIME-01 default). Pass {@link DEFAULT_TIMING_CONFIG} to restore flat
+   * ~30-min transit — the right choice for lifecycle/projection integration tests
+   * that drive short horizons and must see trailers dock.
+   */
+  readonly timing?: TimingConfig;
   /**
    * Detection calibration band; defaults to {@link PRODUCTION_DETECTION_CONFIG}
    * (the ONE production band). Injectable for tuning/tests (DIP).
@@ -396,6 +405,7 @@ export async function driveSimulation(
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -426,6 +436,7 @@ export async function driveSimulationPaced(
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
   });
   const ticks = intoTicks(stream);
 
@@ -573,6 +584,7 @@ export async function driveSimulationWithScenario(
     seed: opts.seed,
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
   });
 
   // 2. Apply the scenario knobs (seeded, deterministic).

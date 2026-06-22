@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import fastifyWebsocket from "@fastify/websocket";
+import type { TimingConfig } from "@mm/simulation";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
@@ -60,6 +61,13 @@ export interface ServerDeps {
    * Must match `SIM_TICKS` / `durationTicks` used in `main.ts`. Default: 120.
    */
   readonly baselineTicks?: number;
+  /**
+   * DIP: timing config forwarded to `SimController` for scenario re-opt. When
+   * absent, the engine uses realistic geography-derived per-leg transit (TIME-01
+   * default). Pass `DEFAULT_TIMING_CONFIG` from `@mm/simulation` in tests that
+   * drive short horizons so the base-stream docking events match the stored state.
+   */
+  readonly timing?: TimingConfig;
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -163,6 +171,7 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
     baselineTicks,
     loop,
     broadcast,
+    ...(deps.timing !== undefined ? { timing: deps.timing } : {}),
   });
   registerScenarioRoutes(app, simController);
 

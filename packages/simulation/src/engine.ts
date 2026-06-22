@@ -10,7 +10,7 @@ import type {
   TrailerDocked,
 } from "@mm/domain";
 import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
-import { buildRoutes } from "./network/routes.js";
+import { buildRoutes, buildTransitParamsByLeg, routeId } from "./network/routes.js";
 import { makeRng } from "./rng.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
@@ -190,9 +190,30 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // a fixed seed + timing config.
   const timingRng = makeRng((seed ^ 0x00_00_77_17) >>> 0);
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
-  /** Draw a whole-tick transit duration (≥1) for one departure. */
-  const drawTransitTicks = (): number =>
-    Math.max(1, Math.round(sampleLogNormal(timingRng, timingConfig.transit)));
+  // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
+  // the real great-circle (haversine) distance between its two hubs at an 80 km/h
+  // average HGV speed — replacing the single flat ~30-min global transit median.
+  // The leg's log-space spread (sigma) is carried in from the timing config's
+  // `transit.sigma`. The map is keyed by directed routeId (`route-<from>-<to>`)
+  // and is a pure function of hub coordinates + sigma (deterministic).
+  //
+  // DIP OVERRIDE: per-leg geography drives the DEFAULT path. When a caller passes
+  // an EXPLICIT `timing` config, its flat `transit` params win for every leg —
+  // so a test that pins transit to a small constant (to make round-trips complete
+  // in a short horizon) keeps full control. The default config (no override) uses
+  // the realistic geography-derived per-leg medians.
+  //
+  // NO-ORS-KEY PATH: see `transitParamsForLeg` in routes.ts — swap each leg's
+  // median to its ORS `summary.duration` once VIZ-06's road-geometry exists.
+  const useGeographyTransit = timing === undefined;
+  const transitByLeg = buildTransitParamsByLeg(USA_HUBS, timingConfig.transit.sigma);
+  /** Draw a whole-tick transit duration (≥1) for one departure on a directed leg. */
+  const drawTransitTicks = (fromHubId: string, toHubId: string): number => {
+    const params = useGeographyTransit
+      ? transitByLeg.get(routeId(fromHubId, toHubId)) ?? timingConfig.transit
+      : timingConfig.transit;
+    return Math.max(1, Math.round(sampleLogNormal(timingRng, params)));
+  };
   /** Draw a whole-tick dwell duration (≥1) for one arrival, chosen by hub role. */
   const drawDwellTicks = (role: "spoke" | "center"): number => {
     const params = role === "center" ? timingConfig.dwellCenter : timingConfig.dwellSpoke;
@@ -342,7 +363,9 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     }
 
     // Per-departure seeded log-normal transit (right-skewed; same seed ⇒ same).
-    const arriveTick = departTick + drawTransitTicks();
+    // TIME-01: the outbound leg is center→spoke, so transit is drawn from THAT
+    // leg's geography-derived per-leg params (a long coast leg dwarfs a short one).
+    const arriveTick = departTick + drawTransitTicks(center.hubId, spoke.hubId);
     schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
   };
 
@@ -442,19 +465,28 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       // Schedule the return arrival at the center, which unloads the over-carried
       // package there (so it does NOT skew spoke utilization/SLA). A fresh
       // per-departure transit draw (the return leg is its own departure).
-      const returnArriveTick = arriveTick + drawTransitTicks();
+      // TIME-01: the return leg is spoke→center, so it draws from that directed
+      // leg's geography-derived params.
+      const returnArriveTick = arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
       const overCarriedId = heldBack;
       schedule(returnArriveTick, () =>
         arriveOverCarriedAtCenter(trailerId, overCarriedId, returnTripId),
       );
     }
 
-    // Loop: after dwell, the trailer returns toward the center and re-dispatches.
-    // The only dwell-then-redispatch site in the modeled cycle is the SPOKE (the
-    // over-carried return arrival at the center is a terminal unload, not a
-    // re-dispatch), so this is the spoke-role dwell draw. `dwellCenter` is wired
-    // into the config for when a distinct center re-dispatch is modeled.
-    const nextDepart = arriveTick + drawDwellTicks("spoke");
+    // TIME-02: model the trailer's full turnaround as TWO role-keyed dwells, each
+    // applied EXACTLY ONCE (PITFALLS P4 — no double-count). The trailer first
+    // turns around at the SPOKE (`dwellSpoke`), then returns to the center where
+    // the cross-dock re-dispatch incurs the distinct, longer `dwellCenter`. The
+    // next outbound departure is `arriveTick + dwellSpoke + dwellCenter`. Both
+    // draws come from the seeded timing substream in deterministic queue order,
+    // so a fixed seed + config stays byte-identical. (The over-carried return
+    // arrival at the center is a terminal unload, not a re-dispatch, so it does
+    // NOT draw a center dwell — the center dwell is owned by this re-dispatch site
+    // alone.)
+    const spokeDwell = drawDwellTicks("spoke");
+    const centerDwell = drawDwellTicks("center");
+    const nextDepart = arriveTick + spokeDwell + centerDwell;
     if (nextDepart <= durationTicks) {
       schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
     }

@@ -4,6 +4,7 @@ import { buildServer } from "../src/server.js";
 import type { BuiltServer } from "../src/server.js";
 import { driveSimulation } from "../src/sim/driver.js";
 import { startPgFixture, type PgFixture } from "./pg-fixture.js";
+import { DEFAULT_TIMING_CONFIG } from "@mm/simulation";
 
 /**
  * KEYSTONE (c) — SIM-04: scenario-knob → visible re-optimization e2e
@@ -57,14 +58,20 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
       simSeed: SEED,
       scenarioReoptTicks: SCENARIO_REOPT_TICKS,
       baselineTicks: BASELINE_TICKS,
+      // Pin flat timing so scenario re-opt base stream matches the stored stream.
+      timing: DEFAULT_TIMING_CONFIG,
     });
 
     // Drive the baseline sim WITH the server's rolling loop so projections
     // are populated AND the optimizer runs per tick on the live path.
+    // Pin flat DEFAULT_TIMING_CONFIG (transit median ~30 min) so trailers
+    // dock within the short BASELINE_TICKS horizon. Transit realism (TIME-01)
+    // is covered by transit-geography.unit.test.ts, not this lifecycle test.
     await driveSimulation({
       db,
       seed: SEED,
       durationTicks: BASELINE_TICKS,
+      timing: DEFAULT_TIMING_CONFIG,
       broadcast: undefined, // No ws in this test.
       loop: built.loop, // The live rolling-optimizer loop.
     });
@@ -167,12 +174,15 @@ describe("KEYSTONE (c) — scenario knob → visible re-optimization e2e", () =>
         simSeed: SEED,
         scenarioReoptTicks: SCENARIO_REOPT_TICKS,
         baselineTicks: BASELINE_TICKS,
+        // Pin flat timing so scenario re-opt base stream matches the stored stream.
+        timing: DEFAULT_TIMING_CONFIG,
       });
 
       await driveSimulation({
         db: db2,
         seed: SEED,
         durationTicks: BASELINE_TICKS,
+        timing: DEFAULT_TIMING_CONFIG,
         broadcast: undefined,
         loop: built2.loop,
       });

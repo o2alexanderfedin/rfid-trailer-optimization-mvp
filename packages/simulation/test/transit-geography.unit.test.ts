@@ -1,0 +1,257 @@
+import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_TIMING_CONFIG,
+  expectedMinutes,
+  haversineKm as domainHaversineKm,
+  transitParamsForLeg as domainTransitParamsForLeg,
+  type LogNormalParams,
+} from "@mm/domain";
+import { USA_HUBS } from "../src/network/hubs.js";
+import {
+  buildTransitParamsByLeg,
+  haversineKm,
+  loadStaticRoadGeometry,
+  routeId,
+  transitParamsForLeg,
+  transitParamsFromDuration,
+  type RoadGeometryFile,
+} from "../src/network/routes.js";
+import { simulate, type SimulatedEvent } from "../src/engine.js";
+
+/**
+ * TIME-01 — per-leg transit MEDIAN derived from REAL geography.
+ *
+ * The flat ~30-min global transit median is replaced by a per-directed-leg
+ * median computed from the great-circle (haversine) distance between the leg's
+ * two hubs at an 80 km/h average HGV speed (`distanceKm / 80 * 60` minutes). The
+ * derivation is a PURE function of hub coordinates — no clock, no RNG — so the
+ * resulting medians are byte-reproducible. (No ORS key is available here; once
+ * VIZ-06's road-geometry.generated.json exists the median swaps to ORS
+ * `summary.duration`. See `routes.ts`.)
+ */
+
+const EPOCH = Date.parse("2026-04-01T00:00:00.000Z");
+const MS_PER_TICK = 60_000;
+const tick = (iso: string): number => Math.round((Date.parse(iso) - EPOCH) / MS_PER_TICK);
+
+const hub = (id: string) => {
+  const h = USA_HUBS.find((x) => x.hubId === id);
+  if (h === undefined) throw new Error(`no hub ${id}`);
+  return h;
+};
+
+const MEM = hub("MEM");
+const SEA = hub("SEA"); // longest spoke leg from Memphis (~3000 km)
+const ATL = hub("ATL"); // shortest spoke leg from Memphis (~540 km)
+
+describe("re-import from @mm/domain (Phase-7 S0 move — no behavior change)", () => {
+  it("the sim's haversineKm IS the @mm/domain helper (re-export identity)", () => {
+    // Locks Task A: the geography→transit derivation moved to @mm/domain; sim
+    // re-exports it verbatim, so timing draws + the golden-replay keystone stay
+    // byte-identical. If these diverge, the move regressed.
+    expect(haversineKm).toBe(domainHaversineKm);
+    expect(transitParamsForLeg).toBe(domainTransitParamsForLeg);
+  });
+});
+
+describe("haversineKm (pure great-circle distance)", () => {
+  it("is symmetric and positive for distinct hubs", () => {
+    const ab = haversineKm(MEM, SEA);
+    const ba = haversineKm(SEA, MEM);
+    expect(ab).toBeGreaterThan(0);
+    expect(ab).toBeCloseTo(ba, 6); // symmetric
+  });
+
+  it("is zero for coincident points and pure (same inputs ⇒ same output)", () => {
+    expect(haversineKm(MEM, MEM)).toBeCloseTo(0, 6);
+    expect(haversineKm(MEM, SEA)).toBe(haversineKm(MEM, SEA));
+  });
+
+  it("matches a known-good Memphis→Seattle great-circle distance (~3000 km)", () => {
+    expect(haversineKm(MEM, SEA)).toBeGreaterThan(2900);
+    expect(haversineKm(MEM, SEA)).toBeLessThan(3100);
+  });
+});
+
+describe("transitParamsForLeg (geography-derived LogNormalParams)", () => {
+  const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+
+  it("median = haversineKm / 80 * 60 (80 km/h HGV)", () => {
+    const p = transitParamsForLeg(MEM, SEA, sigma);
+    expect(p.median).toBeCloseTo((haversineKm(MEM, SEA) / 80) * 60, 6);
+    expect(p.sigma).toBe(sigma);
+  });
+
+  it("a LONG leg has a strictly larger median than a SHORT leg", () => {
+    const long = transitParamsForLeg(MEM, SEA, sigma);
+    const short = transitParamsForLeg(MEM, ATL, sigma);
+    expect(long.median).toBeGreaterThan(short.median);
+  });
+
+  it("derives the clamp band from the median: min=max(5,round(median*0.4)), max=round(median*3)", () => {
+    const p = transitParamsForLeg(MEM, SEA, sigma);
+    expect(p.min).toBe(Math.max(5, Math.round(p.median * 0.4)));
+    expect(p.max).toBe(Math.round(p.median * 3));
+    expect(p.min).toBeLessThan(p.max);
+  });
+
+  it("is pure: medians are a function of coordinates only", () => {
+    const a = transitParamsForLeg(MEM, SEA, sigma);
+    const b = transitParamsForLeg(MEM, SEA, sigma);
+    expect(a).toEqual(b);
+  });
+});
+
+describe("buildTransitParamsByLeg (per directed leg)", () => {
+  const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+  /** A file with NO legs forces the deterministic haversine fallback. */
+  const EMPTY_FILE: RoadGeometryFile = { hubChecksum: "x", legs: {} };
+
+  it("produces a directed entry per hub-and-spoke leg, keyed by routeId", () => {
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma);
+    // 9 spokes × 2 directions = 18 directed legs.
+    expect(byLeg.size).toBe((USA_HUBS.length - 1) * 2);
+    expect(byLeg.get(routeId("MEM", "SEA"))).toBeDefined();
+    expect(byLeg.get(routeId("SEA", "MEM"))).toBeDefined();
+  });
+
+  it("uses the haversine median for every leg when NO road file carries it (fallback)", () => {
+    // RE-BASELINE (VIZ-06 upgrade): with an empty file injected (no ORS leg
+    // durations) the median falls back to the pure haversine estimate, exactly as
+    // before. Directed legs over the same pair share the (symmetric) median.
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma, EMPTY_FILE);
+    const out = byLeg.get(routeId("MEM", "SEA"))!;
+    const back = byLeg.get(routeId("SEA", "MEM"))!;
+    expect(out.median).toBeCloseTo(back.median, 6);
+    expect(out.median).toBeCloseTo((haversineKm(MEM, SEA) / 80) * 60, 6);
+  });
+});
+
+describe("buildTransitParamsByLeg PREFERS ORS road duration (VIZ-06 / TIME-01 upgrade)", () => {
+  const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+
+  it("uses duration_s/60 as the median when the road file carries the leg", () => {
+    // An injected file with a deliberately LONG ORS duration for MEM→SEA (longer
+    // than the haversine estimate) — the median must come from duration_s, not
+    // the great-circle distance.
+    const durationS = 200_000; // 3333.3 min — longer than the ~2249-min haversine median
+    const fixture: RoadGeometryFile = {
+      hubChecksum: "x",
+      legs: { [routeId("MEM", "SEA")]: { geometry: [], duration_s: durationS } },
+    };
+    const byLeg = buildTransitParamsByLeg([MEM, SEA], sigma, fixture);
+    const leg = byLeg.get(routeId("MEM", "SEA"))!;
+    // Median is the ORS drive time in minutes; clamp band scales off it (shared).
+    expect(leg).toEqual(transitParamsFromDuration(durationS, sigma));
+    expect(leg.median).toBeCloseTo(durationS / 60, 6);
+    // ORS duration here is strictly LONGER than the haversine estimate for the leg.
+    expect(leg.median).toBeGreaterThan((haversineKm(MEM, SEA) / 80) * 60);
+  });
+
+  it("falls back to the haversine median for a leg ABSENT from the road file", () => {
+    // The file has MEM→SEA but NOT SEA→MEM → the reverse leg falls back to
+    // haversine (the deterministic great-circle estimate), unchanged.
+    const fixture: RoadGeometryFile = {
+      hubChecksum: "x",
+      legs: { [routeId("MEM", "SEA")]: { geometry: [], duration_s: 200_000 } },
+    };
+    const byLeg = buildTransitParamsByLeg([MEM, SEA], sigma, fixture);
+    const back = byLeg.get(routeId("SEA", "MEM"))!;
+    expect(back).toEqual(transitParamsForLeg(SEA, MEM, sigma));
+    expect(back.median).toBeCloseTo((haversineKm(SEA, MEM) / 80) * 60, 6);
+  });
+
+  it("the DEFAULT (committed file) median for MEM→ORD equals the file's duration_s/60", () => {
+    // End-to-end: with no injected file, the committed road-geometry.generated.json
+    // is the source. MEM→ORD's median is its ORS duration in minutes — the SAME
+    // drive time the displayed road polyline is based on.
+    const file = loadStaticRoadGeometry();
+    const orsDurationS = file?.legs[routeId("MEM", "ORD")]?.duration_s;
+    expect(orsDurationS).toBeDefined();
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma);
+    const leg = byLeg.get(routeId("MEM", "ORD"))!;
+    expect(leg.median).toBeCloseTo(orsDurationS! / 60, 6);
+    // ORS drive time exceeds the great-circle-at-80km/h estimate for this leg.
+    expect(leg.median).toBeGreaterThan((haversineKm(MEM, hub("ORD")) / 80) * 60);
+  });
+});
+
+/** Recover per-leg transit ticks tagged with the leg's directed routeId. */
+interface LegTransit {
+  readonly routeKey: string;
+  readonly ticks: number;
+}
+function transitsByLeg(stream: readonly SimulatedEvent[]): LegTransit[] {
+  const depart = new Map<string, { tick: number; from: string; to: string }>();
+  const out: LegTransit[] = [];
+  for (const s of stream) {
+    if (s.event.type === "TrailerDeparted") {
+      depart.set(s.event.payload.tripId, {
+        tick: tick(s.occurredAt),
+        from: s.event.payload.fromHubId,
+        to: s.event.payload.toHubId,
+      });
+    } else if (s.event.type === "TrailerArrivedAtHub") {
+      const d = depart.get(s.event.payload.tripId);
+      if (d !== undefined) out.push({ routeKey: routeId(d.from, d.to), ticks: tick(s.occurredAt) - d.tick });
+    }
+  }
+  return out;
+}
+
+describe("engine wires per-leg transit (TIME-01)", () => {
+  // A long horizon so even the longest coast legs complete at least one transit.
+  const SEED = 4242;
+  const TICKS = 8000;
+
+  it("the long MEM→SEA leg realizes a strictly larger transit than the short MEM→ATL leg", () => {
+    const stream = simulate({ seed: SEED, durationTicks: TICKS });
+    const legs = transitsByLeg(stream);
+    const seaOut = legs.filter((l) => l.routeKey === routeId("MEM", "SEA")).map((l) => l.ticks);
+    const atlOut = legs.filter((l) => l.routeKey === routeId("MEM", "ATL")).map((l) => l.ticks);
+    expect(seaOut.length).toBeGreaterThan(0);
+    expect(atlOut.length).toBeGreaterThan(0);
+    // Every realized SEA transit dwarfs every realized ATL transit (the medians
+    // differ by ~5×; the log-normal spread cannot bridge that gap).
+    expect(Math.min(...seaOut)).toBeGreaterThan(Math.max(...atlOut));
+  });
+
+  it("each realized transit lands within its OWN geography-derived clamp band", () => {
+    const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma);
+    const stream = simulate({ seed: SEED, durationTicks: TICKS });
+    const legs = transitsByLeg(stream);
+    expect(legs.length).toBeGreaterThan(0);
+    for (const { routeKey, ticks } of legs) {
+      const p = byLeg.get(routeKey);
+      expect(p, `expected per-leg params for ${routeKey}`).toBeDefined();
+      // The engine rounds the sampled minutes to whole ticks (≥1), so the
+      // realized value sits within [min, max] (the sampler clamp), floored at 1.
+      const lo = Math.max(1, (p as LogNormalParams).min);
+      expect(ticks).toBeGreaterThanOrEqual(lo);
+      expect(ticks).toBeLessThanOrEqual((p as LogNormalParams).max);
+    }
+  });
+
+  it("the realized transit clusters around the per-leg expectedMinutes (mean)", () => {
+    const sigma = DEFAULT_TIMING_CONFIG.transit.sigma;
+    const byLeg = buildTransitParamsByLeg(USA_HUBS, sigma);
+    const stream = simulate({ seed: SEED, durationTicks: TICKS });
+    const seaOut = transitsByLeg(stream)
+      .filter((l) => l.routeKey === routeId("MEM", "SEA"))
+      .map((l) => l.ticks);
+    expect(seaOut.length).toBeGreaterThan(0);
+    const mean = expectedMinutes(byLeg.get(routeId("MEM", "SEA"))!);
+    // Realized SEA transit is within a factor of 2 of the distribution mean.
+    for (const v of seaOut) {
+      expect(v).toBeGreaterThan(mean / 2);
+      expect(v).toBeLessThan(mean * 2);
+    }
+  });
+
+  it("same seed ⇒ byte-identical stream (per-leg transit draws stay deterministic)", () => {
+    const a = simulate({ seed: SEED, durationTicks: 2000 });
+    const b = simulate({ seed: SEED, durationTicks: 2000 });
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+});

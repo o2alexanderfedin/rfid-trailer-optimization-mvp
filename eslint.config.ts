@@ -66,6 +66,20 @@ export default tseslint.config(
     },
   },
   {
+    // Build-asset helper scripts (`scripts/*.mjs`) run OUTSIDE the typed program
+    // (plain Node ESM, not part of any tsconfig). Detach them from typed linting
+    // and parse as ESM so `import.meta` resolves — same treatment as config files.
+    files: ["**/scripts/**/*.mjs"],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      parserOptions: {
+        project: false,
+        projectService: false,
+        sourceType: "module",
+      },
+    },
+  },
+  {
     // Vitest Browser Mode tests (`*.browser.test.tsx`) execute in a real browser
     // type universe — their `vitest-browser-react` `render()` result and the
     // `@vitest/browser` `expect.element`/locator augmentations are not part of
