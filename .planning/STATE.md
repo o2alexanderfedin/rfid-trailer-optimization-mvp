@@ -7,10 +7,10 @@ last_updated: "2026-06-22T08:59:23.428Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 10
-  completed_phases: 3
-  total_plans: 3
-  completed_plans: 3
-  percent: 30
+  completed_phases: 4
+  total_plans: 4
+  completed_plans: 4
+  percent: 40
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: 12 (next) — Phases 9–11 ✅ complete
+Phase: 13 (next) — Phases 9–12 ✅ complete
 Plan: —
-Status: Autonomous build in progress (3/10 phases). Phases 9–11 merged to develop.
-Last activity: 2026-06-22 — Phase 11 PASSED (sim HOS: 5th RNG substream salt 0x10510901, per-trip driver assignment + HOS accrual + rest/break injection + load/unload events; **HOS-off byte-identical to pre-v1.2 golden**, new HOS-on golden green; build 10/10, typecheck 0, lint 0, 1323 tests)
+Status: Autonomous build in progress (4/10 phases). Phases 9–12 merged to develop.
+Last activity: 2026-06-22 — Phase 12 PASSED (driver relay/swap at hubs: per-hub pool 15=9+6 spares, deterministic fresh-driver handoff, 25 swaps @seed1234; HOS-off byte-identical, HOS-on golden regenerated; build 10/10, typecheck 0, lint 0, 1338 tests)
 
 ## Performance Metrics
 
