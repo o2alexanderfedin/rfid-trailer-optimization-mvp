@@ -20,6 +20,18 @@ rehandle** and continuously repair them as conditions change — demonstrated li
 over a simulated USA hub network. If everything else fails, the load planner + operational
 twin producing explainable plans must work.
 
+## Current Milestone: v1.1 — Realistic Time Model + Hardening
+
+**Goal:** Make the simulated time model defensible end-to-end — so the rolling optimizer plans against realistic, geography-derived dwell+transit instead of flat constants — and close the post-v1.0 audit follow-ups.
+
+**Target features:**
+- Optimizer consumes the timing model — expected dwell+transit fold into the time-expanded graph (travel / `serviceMin` / wait-edge weights) via a deterministic stochastic→estimate mapping (OPT-09, OPT-10).
+- Distance-derived transit — per-leg transit medians from real route geography, not a flat ~30-min median (TIME-01).
+- Center-hub re-dispatch dwell — model a distinct center dwell so the wired-but-unused `dwellCenter` applies (TIME-02).
+- Road-following routes — ORS `driving-hgv` polylines, precomputed to static GeoJSON for determinism (VIZ-06).
+- Client hardening — `parseEnvelope` tolerates a missing `speed` field, falling back to `DEFAULT_SPEED` (HRD-01).
+- Coverage top-up — `wsClient.ts` socket path + branch coverage toward target (QA-01).
+
 ## Requirements
 
 ### Validated
@@ -96,7 +108,24 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 
 <!-- Current scope. Building toward these. Detailed REQ-IDs live in REQUIREMENTS.md. -->
 
-(none — v1.0 complete; run /gsd-new-milestone to scope v1.1)
+**Milestone v1.1 — Realistic Time Model + Hardening**
+
+**Optimizer time-awareness (OPT)**
+- [ ] OPT-09 Optimizer plans against expected dwell+transit (graph travel/`serviceMin`/wait-edge weights), not fixed 15-min steps
+- [ ] OPT-10 Planning estimates derive deterministically from the timing distribution config (documented median/mean mapping)
+
+**Realistic time model (TIME)**
+- [ ] TIME-01 Transit medians derived per-leg from real route distance/geography
+- [ ] TIME-02 Distinct center-hub re-dispatch dwell modeled so `dwellCenter` applies
+
+**Visualization (VIZ)**
+- [ ] VIZ-06 Route geometry follows real roads (ORS `driving-hgv` polylines, precomputed static GeoJSON, deterministic)
+
+**Hardening (HRD)**
+- [ ] HRD-01 `parseEnvelope` tolerates missing `speed` (DEFAULT_SPEED fallback) so partial envelopes still animate
+
+**Quality (QA)**
+- [ ] QA-01 Coverage top-up: `wsClient.ts` socket path + branch coverage toward target
 
 ### Out of Scope
 
@@ -173,4 +202,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-20 after v1.0 milestone*
+*Last updated: 2026-06-21 — started milestone v1.1 (Realistic Time Model + Hardening)*

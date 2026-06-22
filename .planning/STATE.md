@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: Awaiting next milestone
-stopped_at: ""
-last_updated: "2026-06-20T23:34:29.942Z"
-last_activity: 2026-06-20 — Milestone v1.0 completed and archived
+milestone: v1.1
+milestone_name: Realistic Time Model + Hardening
+status: planning
+last_updated: "2026-06-22T00:20:43.053Z"
+last_activity: 2026-06-22
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 34
-  completed_plans: 34
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-20)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** v1.0 MVP shipped + archived (2026-06-20; main @ v1.0.0). Planning next milestone — run /gsd-new-milestone.
+**Current focus:** v1.1 "Realistic Time Model + Hardening" — defining requirements (optimizer consumes log-normal timing, distance-derived transit, center dwell, road-following routes, client hardening). v1.0 MVP shipped + archived (2026-06-20; main @ v1.0.0).
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-21 — Seeded log-normal dwell+transit timing in @mm/simulation (realistic right-skew, deterministic; replaces fixed 10/30-tick constants)
+Status: Defining requirements
+Last activity: 2026-06-22 — Milestone v1.1 started
 
 ## Performance Metrics
 
@@ -95,6 +94,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 Last session: 2026-06-21 — three merges to develop: (1) UI speed-of-time gauge (quick task 260621-0fy); (2) test coverage 78%→95.2% lines (v8 attribution fix + jsdom/Browser-Mode/MSW web harness, 14 tests); (3) seeded log-normal dwell+transit timing (260621-j57) replacing fixed 10/30-tick constants — dedicated timing RNG keeps it orthogonal to RFID/over-carry; deterministic; scenario-reopt keystone re-baselined + strengthened. Gate green: 1149 tests / 117 files.
 Stopped at: log-normal timing merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1 (realistic-time-model items queued in Pending Todos)
+Resumed: 2026-06-21 — /gsd-resume-work; verified clean between-milestones state (gate green, no incomplete work); presenting v1.1 scoping path.
 Resume file: .continue-here.md (root)
 
 ## Operator Next Steps
