@@ -449,12 +449,19 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       );
     }
 
-    // Loop: after dwell, the trailer returns toward the center and re-dispatches.
-    // The only dwell-then-redispatch site in the modeled cycle is the SPOKE (the
-    // over-carried return arrival at the center is a terminal unload, not a
-    // re-dispatch), so this is the spoke-role dwell draw. `dwellCenter` is wired
-    // into the config for when a distinct center re-dispatch is modeled.
-    const nextDepart = arriveTick + drawDwellTicks("spoke");
+    // TIME-02: model the trailer's full turnaround as TWO role-keyed dwells, each
+    // applied EXACTLY ONCE (PITFALLS P4 — no double-count). The trailer first
+    // turns around at the SPOKE (`dwellSpoke`), then returns to the center where
+    // the cross-dock re-dispatch incurs the distinct, longer `dwellCenter`. The
+    // next outbound departure is `arriveTick + dwellSpoke + dwellCenter`. Both
+    // draws come from the seeded timing substream in deterministic queue order,
+    // so a fixed seed + config stays byte-identical. (The over-carried return
+    // arrival at the center is a terminal unload, not a re-dispatch, so it does
+    // NOT draw a center dwell — the center dwell is owned by this re-dispatch site
+    // alone.)
+    const spokeDwell = drawDwellTicks("spoke");
+    const centerDwell = drawDwellTicks("center");
+    const nextDepart = arriveTick + spokeDwell + centerDwell;
     if (nextDepart <= durationTicks) {
       schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
     }

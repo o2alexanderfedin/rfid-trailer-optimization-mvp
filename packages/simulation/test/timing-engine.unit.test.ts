@@ -44,9 +44,12 @@ function transitTicks(stream: readonly SimulatedEvent[]): number[] {
 }
 
 /**
- * Recover per-trailer dwell ticks: the gap between an ARRIVAL and that trailer's
- * NEXT outbound (center-origin) departure. Skips the over-carried return arrival
- * at the center (which is a terminal unload, not a dwell-then-redispatch).
+ * Recover per-trailer TURNAROUND ticks: the gap between an ARRIVAL and that
+ * trailer's NEXT outbound (center-origin) departure. Since TIME-02 a turnaround
+ * spans TWO role-keyed dwells — one `dwellSpoke` at the spoke plus one
+ * `dwellCenter` at the center re-dispatch boundary — so the gap lies in the SUM
+ * of both bands. Skips the over-carried return arrival at the center (a terminal
+ * unload, not a dwell-then-redispatch).
  */
 function dwellTicks(stream: readonly SimulatedEvent[]): number[] {
   const lastArrivalTick = new Map<string, number>();
@@ -79,13 +82,17 @@ describe("engine log-normal timing (SIM-02)", () => {
     }
   });
 
-  it("dwell ticks VARY across arrivals and stay within [min,max]", () => {
+  it("turnaround dwell ticks VARY across arrivals and stay within the summed [min,max] (spoke + center)", () => {
     const stream = simulate({ seed: SEED, durationTicks: TICKS });
     const d = dwellTicks(stream);
     expect(d.length).toBeGreaterThan(5);
     // Real variance — not all equal (the old fixed 10).
     expect(new Set(d).size).toBeGreaterThan(1);
-    const { min, max } = DEFAULT_TIMING_CONFIG.dwellSpoke;
+    // TIME-02: a turnaround = one spoke dwell + one center re-dispatch dwell, so
+    // the realized gap lies within the SUM of both role bands.
+    const { dwellSpoke, dwellCenter } = DEFAULT_TIMING_CONFIG;
+    const min = dwellSpoke.min + dwellCenter.min;
+    const max = dwellSpoke.max + dwellCenter.max;
     for (const v of d) {
       expect(v).toBeGreaterThanOrEqual(min);
       expect(v).toBeLessThanOrEqual(max);
