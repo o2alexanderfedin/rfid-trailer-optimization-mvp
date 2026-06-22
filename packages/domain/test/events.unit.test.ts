@@ -222,13 +222,28 @@ function describeEvent(e: DomainEvent): string {
       return e.payload.planId;
     case "PlanAccepted":
       return e.payload.planId;
+    // Phase-9 (v1.2) driver-lifecycle + load/unload phase events.
+    case "DriverRegistered":
+      return e.payload.driverId;
+    case "DriverAssignedToTrip":
+      return e.payload.driverId;
+    case "DriverDutyStateChanged":
+      return e.payload.driverId;
+    case "DriverSwappedAtHub":
+      return e.payload.incomingDriverId;
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
+      return e.payload.trailerId;
     default:
       return assertNever(e);
   }
 }
 
 describe("DomainEvent closed discriminated union (FND-01)", () => {
-  it("covers exactly the 13 event types (8 Phase-1 + 3 Phase-3 RFID + 2 Phase-4 plan)", () => {
+  it("covers the 13 pre-v1.2 base event types (8 Phase-1 + 3 Phase-3 RFID + 2 Phase-4 plan)", () => {
+    // `ALL_EVENTS` here are the 13 PRE-v1.2 base fixtures; the 7 Phase-9 (v1.2)
+    // driver/phase events are fixtured + asserted in events-phase9.unit.test.ts.
     const types = new Set<DomainEventType>(ALL_EVENTS.map((e) => e.type));
     expect(types).toEqual(
       new Set<DomainEventType>([
@@ -284,7 +299,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 13 literal discriminators", () => {
+  it("DomainEventType is the union of the 20 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -299,6 +314,14 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       | "MissedUnloadDetected"
       | "PlanGenerated"
       | "PlanAccepted"
+      // Phase-9 (v1.2) driver-lifecycle + load/unload phase events.
+      | "DriverRegistered"
+      | "DriverAssignedToTrip"
+      | "DriverDutyStateChanged"
+      | "DriverSwappedAtHub"
+      | "UnloadStarted"
+      | "LoadStarted"
+      | "UnloadCompleted"
     >();
   });
 
