@@ -20,17 +20,9 @@ rehandle** and continuously repair them as conditions change — demonstrated li
 over a simulated USA hub network. If everything else fails, the load planner + operational
 twin producing explainable plans must work.
 
-## Current Milestone: v1.1 — Realistic Time Model + Hardening
+## Current Milestone: v1.1 shipped — Awaiting next milestone
 
-**Goal:** Make the simulated time model defensible end-to-end — so the rolling optimizer plans against realistic, geography-derived dwell+transit instead of flat constants — and close the post-v1.0 audit follow-ups.
-
-**Target features:**
-- Optimizer consumes the timing model — expected dwell+transit fold into the time-expanded graph (travel / `serviceMin` / wait-edge weights) via a deterministic stochastic→estimate mapping (OPT-09, OPT-10).
-- Distance-derived transit — per-leg transit medians from real route geography, not a flat ~30-min median (TIME-01).
-- Center-hub re-dispatch dwell — model a distinct center dwell so the wired-but-unused `dwellCenter` applies (TIME-02).
-- Road-following routes — ORS `driving-hgv` polylines, precomputed to static GeoJSON for determinism (VIZ-06).
-- Client hardening — `parseEnvelope` tolerates a missing `speed` field, falling back to `DEFAULT_SPEED` (HRD-01).
-- Coverage top-up — `wsClient.ts` socket path + branch coverage toward target (QA-01).
+**v1.1 shipped 2026-06-22.** 7/7 requirements (OPT-09, OPT-10, TIME-01, TIME-02, VIZ-06, HRD-01, QA-01) live-wired and behavior-tested. Gate green: build 10/10 · typecheck 0 · lint 0 · unit 960 · ui 183 · integration 82/20. Archive: `milestones/v1.1-ROADMAP.md`, `milestones/v1.1-REQUIREMENTS.md`.
 
 ## Requirements
 
@@ -104,28 +96,28 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 - ✓ UI-03 KPI dashboard — v1.0
 - ✓ UI-04 Before/after money slide — v1.0
 
+**Optimizer time-awareness — v1.1 (OPT)**
+- ✓ OPT-09 Optimizer plans against expected dwell+transit (graph travel/`serviceMin`/wait-edge weights) — v1.1 (Phase 7)
+- ✓ OPT-10 Planning estimates derived deterministically from timing config via shared `expectedMinutes` mean estimator — v1.1 (Phase 7)
+
+**Realistic time model — v1.1 (TIME)**
+- ✓ TIME-01 Transit medians derived per-leg from ORS `duration_s` road distance/geography — v1.1 (Phase 6)
+- ✓ TIME-02 Distinct center-hub re-dispatch dwell (`dwellCenter`) modeled, fires exactly once per stop — v1.1 (Phase 6)
+
+**Visualization — v1.1 (VIZ)**
+- ✓ VIZ-06 Route geometry follows real ORS `driving-hgv` roads (precomputed static GeoJSON, deterministic) — v1.1 (Phase 6)
+
+**Hardening — v1.1 (HRD)**
+- ✓ HRD-01 `parseEnvelope` tolerates missing `speed` (DEFAULT_SPEED fallback + warn-once) — v1.1 (Phase 8)
+
+**Quality — v1.1 (QA)**
+- ✓ QA-01 ws socket-path behavior coverage (open-once, seq-gap→resync, snapshot-replace, tick-apply via MSW) — v1.1 (Phase 8)
+
 ### Active
 
-<!-- Current scope. Building toward these. Detailed REQ-IDs live in REQUIREMENTS.md. -->
+<!-- Current scope. Building toward these. Detailed REQ-IDs live in REQUIREMENTS.md for the next milestone. -->
 
-**Milestone v1.1 — Realistic Time Model + Hardening**
-
-**Optimizer time-awareness (OPT)**
-- [ ] OPT-09 Optimizer plans against expected dwell+transit (graph travel/`serviceMin`/wait-edge weights), not fixed 15-min steps
-- [ ] OPT-10 Planning estimates derive deterministically from the timing distribution config (documented median/mean mapping)
-
-**Realistic time model (TIME)**
-- [ ] TIME-01 Transit medians derived per-leg from real route distance/geography
-- [ ] TIME-02 Distinct center-hub re-dispatch dwell modeled so `dwellCenter` applies
-
-**Visualization (VIZ)**
-- [ ] VIZ-06 Route geometry follows real roads (ORS `driving-hgv` polylines, precomputed static GeoJSON, deterministic)
-
-**Hardening (HRD)**
-- [ ] HRD-01 `parseEnvelope` tolerates missing `speed` (DEFAULT_SPEED fallback) so partial envelopes still animate
-
-**Quality (QA)**
-- [ ] QA-01 Coverage top-up: `wsClient.ts` socket path + branch coverage toward target
+*(v1.1 complete — no active requirements. Start /gsd-new-milestone to define v1.2.)*
 
 ### Out of Scope
 
@@ -143,6 +135,7 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 
 ## Context
 
+- **Shipped v1.1** (2026-06-22) — 60 files changed (8,513 ins / 1,466 del) across 3 phases. Gate: build 10/10 · typecheck 0 · lint 0 · unit 960 · ui 183 · integration 82/20. Key additions: shared `expectedMinutes` mean estimator in `@mm/domain`; center re-dispatch dwell; ORS `driving-hgv` road polylines (committed 82 KB GeoJSON); optimizer `TwinRoute.travelMin` + VRPTW `serviceMin` from expected timing; tolerant `parseEnvelope`; ws socket-path behavior tests. LOW debt carried: asymmetric timing-config plumbing to optimizer; `DEFAULT_SPEED` literal × 3; `seq`/`simMs` accept NaN (pre-existing); `GET /routes` assertion weak. Full debt: milestones/v1.1-MILESTONE-AUDIT.md.
 - **Shipped v1.0** — 42,591 LOC across 251 TS/TSX files, 10 pnpm packages (~21k src / ~21k test, TDD-heavy). Tech stack: TypeScript 5.9 strict / Node 22 / pnpm+Turborepo; Fastify 5 + @fastify/websocket + ws; Zod (not TypeBox); PostgreSQL via Kysely + pg, Testcontainers; custom time-expanded graph + SSP min-cost-flow + custom VRPTW (graphology/ngraph NOT adopted); glpk.js as a TEST-ONLY LP oracle; OpenLayers 10 + React 19 + Vite 7; Vitest 4 (872 unit+int tests / 98 files green) + Playwright (3 real chromium-real e2e). Lint 0 / typecheck 0 / build 10/10 at close. Known tech debt: in-memory (epoch,scopeHash) idempotency (no restart durability); utilization is a package-count proxy not true volume fill; UI-04 money slide is a calibrated seed-42 2-metric before/after (live 8-metric A/B deferred); 2 ws connections in web App (consolidate); scope-completeness under-scopes trailers loaded at a hub. Full debt list in milestones/v1.0-MILESTONE-AUDIT.md.
 - **Source of truth:** A detailed 1,600-line technical specification lives at
   `rfid_middle_mile_trailer_optimization_tech_spec.md` (domain model, algorithms,
@@ -183,6 +176,10 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 | UI-04 money slide as calibrated seed-42 before/after (not live A/B) | reviewer-recommended MVP simplification; reproducible | ⚠️ Revisit (live 8-metric A/B = v2) |
 | In-memory (epoch,scopeHash) idempotency | sufficient for single-process MVP demo | ⚠️ Revisit (no restart durability) |
 | Two ws connections in web App | avoid refactoring MapView under time pressure | ⚠️ Revisit (consolidate) |
+| Timing estimate = log-normal MEAN (`median·exp(σ²/2)`) in shared `@mm/domain` estimator | DRY between simulator draw and planner estimate; unbiased vs realized throughput | ✓ Good |
+| Transit scale = realistic-absolute (ORS `duration_s` / haversine fallback) + 120× sim-speed gauge for watchability | defensible time model is the v1.1 goal; lifecycle tests use DIP flat-timing override | ✓ Good |
+| Road geometry committed as static GeoJSON (RDP-simplified, hub-checksum drift guard) | preserves determinism; no live ORS in hot path | ✓ Good |
+| Timing-config plumbing to optimizer asymmetric (`RollingLoop` hardcodes DEFAULT) | acceptable for demo (both sides agree on default); document and thread in v1.2 | ⚠️ Revisit (v1.2 DRY cleanup) |
 
 ## Evolution
 
@@ -202,4 +199,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-21 — started milestone v1.1 (Realistic Time Model + Hardening)*
+*Last updated: 2026-06-22 after v1.1 milestone (Realistic Time Model + Hardening)*

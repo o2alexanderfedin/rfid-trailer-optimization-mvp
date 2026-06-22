@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Realistic Time Model + Hardening
-status: planning
-last_updated: "2026-06-22T00:20:43.053Z"
+status: complete
+last_updated: "2026-06-22T00:00:00.000Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 3
@@ -17,17 +17,17 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-20)
+See: .planning/PROJECT.md (updated 2026-06-22)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** v1.1 "Realistic Time Model + Hardening" — defining requirements (optimizer consumes log-normal timing, distance-derived transit, center dwell, road-following routes, client hardening). v1.0 MVP shipped + archived (2026-06-20; main @ v1.0.0).
+**Current focus:** v1.1 shipped (2026-06-22). Awaiting next milestone — run /gsd-new-milestone to define v1.2.
 
 ## Current Position
 
-Phase: All 3 phases (6, 7, 8) ✅ COMPLETE — v1.1 implementation done & verified
+Phase: —
 Plan: —
-Status: v1.1 ready for milestone lifecycle (audit → complete → cleanup → merge feature/v1.1-realistic-time-model → develop via git-flow → tag). Gate green: build/typecheck/lint 0 · 960 unit · 183 ui · 82 integration / 20 files.
-Last activity: 2026-06-22 — Phase 8 (HRD-01 tolerant parseEnvelope + QA-01 socket coverage) complete (faf69a8); orphaned-hook dead-code removed (18c68ce); full gate re-verified
+Status: v1.1 milestone archived (2026-06-22). Awaiting next milestone.
+Last activity: 2026-06-22 — v1.1 milestone bookkeeping complete; archives created; REQUIREMENTS.md deleted; feature branch ready for git-flow merge by orchestrator.
 
 ## Performance Metrics
 
@@ -99,4 +99,5 @@ Resume file: .continue-here.md (root)
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Orchestrator: merge feature/v1.1-realistic-time-model → develop via git-flow, tag v1.1.0
+- Then: /gsd-new-milestone to define v1.2
