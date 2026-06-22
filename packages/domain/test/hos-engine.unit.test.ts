@@ -65,10 +65,11 @@ describe("isoToEpochMinutes (pure ISO↔minute conversion)", () => {
 // --- HOS-03: remainingLegalDriveMinutes -------------------------------------
 
 describe("remainingLegalDriveMinutes (HOS-03)", () => {
-  it("a fresh driver has the full 11h (660) bound — drive limit binds first", () => {
+  it("a fresh driver is bound by the 8h-break clock (480) — break binds first", () => {
     const now = isoToEpochMinutes(FRESH_AT);
-    // min(660-0, 840-0, 480-0) = 660
-    expect(remainingLegalDriveMinutes(freshClock(), DEFAULT_HOS_CONFIG, now)).toBe(660);
+    // min(660-0, 840-0, 480-0) = 480 — a fresh driver may drive at most 8h
+    // before a mandatory 30-min break, so the break clock is the binding limit.
+    expect(remainingLegalDriveMinutes(freshClock(), DEFAULT_HOS_CONFIG, now)).toBe(480);
   });
 
   it("the 8h-break clock binds once 8h have been driven without a break", () => {
@@ -103,8 +104,9 @@ describe("mayDriveNow (HOS-03 predicate)", () => {
   it("false when the weekly 70h/8-day cap is reached even with hours left today", () => {
     const now = isoToEpochMinutes(FRESH_AT);
     const capped: HosClock = { ...freshClock(), weeklyOnDutyMin: 4200 };
-    // remaining=660>0 but weekly cap reached → cannot drive.
-    expect(remainingLegalDriveMinutes(capped, DEFAULT_HOS_CONFIG, now)).toBe(660);
+    // remaining=480>0 (per-shift clocks fresh) but the weekly cap is reached, so
+    // the predicate is false — the cap is the gate remaining-minutes excludes.
+    expect(remainingLegalDriveMinutes(capped, DEFAULT_HOS_CONFIG, now)).toBe(480);
     expect(mayDriveNow(capped, DEFAULT_HOS_CONFIG, now)).toBe(false);
   });
 
