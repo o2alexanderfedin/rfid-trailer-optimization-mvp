@@ -1,4 +1,4 @@
-import type { DomainEvent, PlanAccepted, PlanGenerated } from "@mm/domain";
+import type { DomainEvent, PlanAccepted, PlanGenerated, TimingConfig } from "@mm/domain";
 
 import type { ObjectiveBreakdown, ObjectiveWeights } from "../objective/types.js";
 import type { OptimizerScope } from "../graph/types.js";
@@ -78,6 +78,15 @@ export interface TwinTrailer {
 export interface TwinSnapshot {
   /** Hubs in the network (identity only — the optimizer never re-models them). */
   readonly hubs: readonly string[];
+  /**
+   * The hub-and-spoke network CENTER hub id (OPT-09 / TIME-02 parity). A stop at
+   * this hub draws the longer `dwellCenter` estimate; every other hub draws the
+   * `dwellSpoke` estimate (mirroring the simulator's role-keyed dwell). OPTIONAL
+   * + additive: when absent, the center defaults to `hubs[0]` (the convention the
+   * simulator uses — `const center = hubs[0]`), so existing snapshots keep their
+   * meaning without a contract break.
+   */
+  readonly centerHubId?: string;
   /** Route legs trailers run along (travel + capacity). */
   readonly routes: readonly TwinRoute[];
   /** Trailers in the network with their current load + route. */
@@ -118,6 +127,15 @@ export interface EpochInput {
   readonly events: readonly DomainEvent[];
   /** The planning-twin snapshot the epoch optimizes over (cloned, never mutated). */
   readonly twinSnapshot: TwinSnapshot;
+  /**
+   * The active timing config (OPT-09 / OPT-10) — the SINGLE source the optimizer
+   * derives its deterministic role-based dwell estimate from (`expectedDwellMinutes`),
+   * the same `TimingConfig` the simulator draws its random dwell from. OPTIONAL +
+   * additive: defaults to `DEFAULT_TIMING_CONFIG` when absent, so existing callers
+   * are unaffected. (Per-leg transit reaches the optimizer as `TwinRoute.travelMin`,
+   * which the twin builder derives from `expectedTransitMinutes` of this config.)
+   */
+  readonly timing?: TimingConfig;
 }
 
 /**

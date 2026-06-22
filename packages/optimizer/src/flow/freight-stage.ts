@@ -78,6 +78,18 @@ function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * Round a (possibly fractional) per-leg transit estimate to a NON-NEGATIVE
+ * INTEGER minute count at the graph boundary (anti-P12). `TwinRoute.travelMin`
+ * carries the deterministic expected-transit MEAN, which is fractional; the
+ * time-expanded min-cost-flow graph only ever sees integers so the solver and
+ * the glpk.js oracle agree to the last unit.
+ */
+function toNonNegIntMinutes(value: number): number {
+  const rounded = Math.round(value);
+  return rounded < 0 ? 0 : rounded;
+}
+
 /** Round an absolute minute UP to the scope grid `start + k·step` (matches the graph builder). */
 function ceilToStep(absoluteMin: number, startMin: number, stepMin: number): number {
   const steps = Math.ceil((absoluteMin - startMin) / stepMin);
@@ -115,7 +127,14 @@ export function assignFreightForEpoch(
           routeId: r.routeId,
           fromHubId: r.fromHubId,
           toHubId: r.toHubId,
-          travelMin: r.travelMin,
+          // OPT-09 / OPT-10: `TwinRoute.travelMin` is the deterministic per-leg
+          // expected transit MEAN (the twin builder derives it from
+          // `expectedTransitMinutes`). The time-expanded graph drives
+          // `arriveTimestep = ceilToStep(departMin + travelMin)` and the integer
+          // trip cost, so the (possibly fractional) mean is rounded to a
+          // non-negative integer HERE, at the graph boundary (anti-P12), before
+          // it reaches `buildTimeExpandedGraph`.
+          travelMin: toNonNegIntMinutes(r.travelMin),
           capacity: r.capacity,
         }),
       )
