@@ -4,18 +4,10 @@
  * Exports:
  *  - Pure functions (testable in Node, no DOM): `parseEnvelope`, `applySnapshot`,
  *    `applyTick`, `makeEntityMaps`.
- *  - React hook: `useWsEnvelope` — single socket, handler in a ref (no re-open on
- *    closure change), seq-gap detection, resync-on-gap, all off the React render path.
  *
- * Realtime discipline (Phase-1 + Q3):
- *  - The WebSocket is opened ONCE per mount; handler is a ref so a changing
- *    onEnvelope closure NEVER tears down and reopens the socket.
- *  - Entity maps (`trailers`, `hubs`, `routes`) are imperative Map objects, NOT
- *    React state — so feature mutations bypass the React render path entirely.
- *  - A `seq` gap triggers a `{ v:1, type:"resync" }` client request; the server
- *    responds with a fresh `snapshot` (T-05-14 bounded recovery).
+ * The React hook (`useWsEnvelope`) lives in WsProvider.tsx — it subscribes to the
+ * shared per-app WebSocket managed by WsProvider rather than opening its own socket.
  */
-import { useEffect, useRef } from "react";
 import type {
   WsEnvelope,
   SnapshotPayload,
@@ -220,84 +212,3 @@ export function applyTick(maps: EntityMaps, payload: TickPayload): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-/** Called for each parsed envelope AFTER entity maps are updated. */
-export type EnvelopeHandler = (envelope: WsEnvelope, maps: EntityMaps) => void;
-
-// ---------------------------------------------------------------------------
-// React hook: useWsEnvelope
-// ---------------------------------------------------------------------------
-
-/** Resolve the same-origin ws URL for the API snapshot channel (`/api/ws`). */
-function wsUrl(): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/api/ws`;
-}
-
-/**
- * Subscribe to the API ws envelope channel and invoke `onEnvelope` for each
- * parsed + applied message.
- *
- * Realtime discipline:
- *  - Socket opened ONCE per mount; `onEnvelope` stored in a ref so a changing
- *    closure NEVER reopens the socket.
- *  - Snapshot → `applySnapshot` (full replace); Tick → `applyTick` (upsert/delete).
- *  - Seq gap → request fresh snapshot from server (T-05-14).
- *  - All entity map mutations happen off the React render path.
- */
-export function useWsEnvelope(
-  onEnvelope: EnvelopeHandler,
-  maps: EntityMaps,
-): void {
-  const handlerRef = useRef<EnvelopeHandler>(onEnvelope);
-  handlerRef.current = onEnvelope;
-
-  const mapsRef = useRef<EntityMaps>(maps);
-  mapsRef.current = maps;
-
-  useEffect(() => {
-    let lastSeq = 0;
-    const socket = new WebSocket(wsUrl());
-
-    socket.onmessage = (event: MessageEvent<string>) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      const envelope = parseEnvelope(parsed);
-      if (envelope === null) return;
-
-      // Seq-gap detection (T-05-14): if we missed messages, request a resync.
-      const currentMaps = mapsRef.current;
-      if (lastSeq > 0 && envelope.seq > lastSeq + 1) {
-        // Gap detected — request a fresh snapshot.
-        try {
-          socket.send(JSON.stringify({ v: 1, type: "resync" }));
-        } catch {
-          // Best-effort; server will re-send snapshot on next connect.
-        }
-      }
-      lastSeq = envelope.seq;
-
-      // Apply the envelope to the local entity maps.
-      if (envelope.type === "snapshot") {
-        applySnapshot(currentMaps, envelope.payload);
-      } else {
-        applyTick(currentMaps, envelope.payload);
-      }
-
-      handlerRef.current(envelope, currentMaps);
-    };
-
-    return () => {
-      socket.onmessage = null;
-      socket.close();
-    };
-  }, []);
-}
