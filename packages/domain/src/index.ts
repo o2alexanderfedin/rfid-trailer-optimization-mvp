@@ -110,6 +110,16 @@ export {
 export type { LogNormalParams, TimingConfig } from "./timing.js";
 export { DEFAULT_TIMING_CONFIG, expectedMinutes } from "./timing.js";
 
+// --- Shared geography→transit derivation (v1.1 Phase-7 OPT-09/OPT-10) --------
+// Pure helpers the optimizer imports (it cannot import @mm/simulation) and the
+// simulator re-imports — one source of truth for per-leg transit + role dwell.
+export {
+  expectedDwellMinutes,
+  expectedTransitMinutes,
+  haversineKm,
+  transitParamsForLeg,
+} from "./timing-geo.js";
+
 // --- Ingestion boundary (FND-03) --------------------------------------------
 export { validateEvent, ValidationError } from "./ingestion/validate.js";
 

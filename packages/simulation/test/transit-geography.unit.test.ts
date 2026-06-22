@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TIMING_CONFIG, expectedMinutes, type LogNormalParams } from "@mm/domain";
+import {
+  DEFAULT_TIMING_CONFIG,
+  expectedMinutes,
+  haversineKm as domainHaversineKm,
+  transitParamsForLeg as domainTransitParamsForLeg,
+  type LogNormalParams,
+} from "@mm/domain";
 import { USA_HUBS } from "../src/network/hubs.js";
 import {
   buildTransitParamsByLeg,
@@ -34,6 +40,16 @@ const hub = (id: string) => {
 const MEM = hub("MEM");
 const SEA = hub("SEA"); // longest spoke leg from Memphis (~3000 km)
 const ATL = hub("ATL"); // shortest spoke leg from Memphis (~540 km)
+
+describe("re-import from @mm/domain (Phase-7 S0 move — no behavior change)", () => {
+  it("the sim's haversineKm IS the @mm/domain helper (re-export identity)", () => {
+    // Locks Task A: the geography→transit derivation moved to @mm/domain; sim
+    // re-exports it verbatim, so timing draws + the golden-replay keystone stay
+    // byte-identical. If these diverge, the move regressed.
+    expect(haversineKm).toBe(domainHaversineKm);
+    expect(transitParamsForLeg).toBe(domainTransitParamsForLeg);
+  });
+});
 
 describe("haversineKm (pure great-circle distance)", () => {
   it("is symmetric and positive for distinct hubs", () => {
