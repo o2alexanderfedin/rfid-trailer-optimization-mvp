@@ -1,4 +1,3 @@
 # Archive
 
-(empty)
 ```
