@@ -91,9 +91,9 @@ export interface BuiltServer {
   readonly simController: SimController;
   /**
    * The "speed of time" controller (GET/POST /sim/speed). `main.ts` passes its
-   * `getTickIntervalMs`/`isPaused` to `driveSimulationPaced` so the live demo's
-   * pacing is tunable mid-run. The snapshot builder stamps its `snapshot()` on
-   * every ws envelope.
+   * `getMultiplier`/`isPaused` to `driveSimulationPaced` so the live demo's
+   * accumulator pacing is tunable mid-run. The snapshot builder stamps its
+   * `snapshot()` on every ws envelope.
    */
   readonly speedController: SpeedController;
 }
