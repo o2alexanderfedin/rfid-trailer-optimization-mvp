@@ -7,10 +7,10 @@ last_updated: "2026-06-22T08:59:23.428Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 10
-  completed_phases: 7
-  total_plans: 7
-  completed_plans: 7
-  percent: 70
+  completed_phases: 8
+  total_plans: 8
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: 16 (next) — Phases 9–15 ✅ complete
+Phase: 17 (next) — Phases 9–16 ✅ complete
 Plan: —
-Status: Autonomous build in progress (7/10 phases). Phases 9–15 merged to develop.
-Last activity: 2026-06-22 — Phase 15 PASSED (optimizer HOS-aware: TwinDriver in snapshot, soft restCost weight neutral-by-default; glpk oracle + planner-vs-validator green, default reproduces prior plans; build 10/10, typecheck 0, lint 0, 1398 tests)
+Status: Autonomous build in progress (8/10 phases). Phases 9–16 merged to develop. Backend HOS fully enforced.
+Last activity: 2026-06-22 — Phase 16 PASSED (optimizer HOS-enforced: restMin→serviceMin, hard legal-drive gate reusing LIFO pattern, insertRest/relay EpochRecommendation; glpk oracle + planner-vs-validator green, pure/deterministic; build 10/10, typecheck 0, lint 0, 1416 tests)
 
 ## Performance Metrics
 
