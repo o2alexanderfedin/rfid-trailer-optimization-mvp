@@ -25,6 +25,16 @@ export {
 export type { OverCarryConfig } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
+// Plan 05-04 (VIZ-05) / Phase 14 (HUBQ-04): trailer plan detail DTO.
+export { registerPlanDetailRoutes } from "./routes/plan-detail.js";
+export type { TrailerPlanDto, RearToNoseSlice } from "./routes/plan-detail.js";
+// Phase 14 (HUBQ-01..07): the hub-detail read endpoint + DTOs.
+export { registerHubDetailRoutes } from "./routes/hub-detail.js";
+export type {
+  HubDetailDto,
+  HubTrailerDto,
+  HubTrailerDriverDto,
+} from "./routes/hub-detail.js";
 export { registerOptimizerRoutes } from "./routes/optimizer.js";
 export type {
   OptimizerRecommendationsDto,

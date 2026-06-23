@@ -208,6 +208,49 @@ export function trailerStateFor(
   return implicatedTrailerIds.has(trailerId) ? "slaRisk" : baseState;
 }
 
+/** Per-hub driver-duty tally (HUBQ-08): total + the on_break / resting subsets. */
+export interface DriverDutyBuckets {
+  readonly driverCount: number;
+  readonly onBreakCount: number;
+  readonly restingCount: number;
+}
+
+/**
+ * HUBQ-08 — derive each hub's driver-duty buckets from the trailers AT that hub
+ * and their bound drivers' duty status. A driver is counted at the hub its
+ * trailer currently sits at; the `on_break` / `resting` subsets are tallied from
+ * `driver_status`. Trailers with no `current_hub_id` or no `driver_id`, and
+ * drivers with no `driver_status` row, are skipped. Pure + deterministic — same
+ * rows ⇒ same map (no clock/RNG), so the snapshot replays identically (P3).
+ *
+ * The SAME join the REST `/hubs/:id/detail` performs, reduced here to small
+ * integer counts for map coloring (the ws envelope carries counts, never lists).
+ *
+ * Exported for unit testing.
+ */
+export function driverBucketsPerHub(
+  trailerRows: readonly { current_hub_id: string | null; driver_id: string | null }[],
+  driverRows: readonly { driver_id: string; status: string }[],
+): Map<string, DriverDutyBuckets> {
+  const statusById = new Map<string, string>();
+  for (const d of driverRows) statusById.set(d.driver_id, d.status);
+
+  const out = new Map<string, { driverCount: number; onBreakCount: number; restingCount: number }>();
+  for (const t of trailerRows) {
+    const hubId = t.current_hub_id;
+    const driverId = t.driver_id;
+    if (hubId === null || driverId === null) continue;
+    const status = statusById.get(driverId);
+    if (status === undefined) continue; // unknown driver → not counted
+    const acc = out.get(hubId) ?? { driverCount: 0, onBreakCount: 0, restingCount: 0 };
+    acc.driverCount += 1;
+    if (status === "on_break") acc.onBreakCount += 1;
+    else if (status === "resting") acc.restingCount += 1;
+    out.set(hubId, acc);
+  }
+  return out;
+}
+
 /**
  * Translate a projection exception `kind` (hyphenated taxonomy) onto the wire
  * envelope `kind` (camelCase) the frontend `AlertFeed.kindLabel` map expects
@@ -257,18 +300,33 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   const catchup = catchupView(db);
   const proj = projView(db);
 
-  const [keyframes, hubList, openExceptions, hubInventoryRows, geoRouteRows, inflightTripRows] =
-    await Promise.all([
-      readGeoKeyframes(catchup),
-      readHubsFromLog(db),
-      readOpenExceptions(proj),
-      // FIX 3: real hub inventory for volumeBucket + congestionBucket
-      proj.selectFrom("hub_inventory").selectAll().execute(),
-      // FIX 3: route leg list for RouteState[]
-      proj.selectFrom("geo_route").selectAll().execute(),
-      // FIX 3: in-transit trips for route loadBucket
-      proj.selectFrom("geo_inflight_trip").selectAll().execute(),
-    ]);
+  const [
+    keyframes,
+    hubList,
+    openExceptions,
+    hubInventoryRows,
+    geoRouteRows,
+    inflightTripRows,
+    trailerStateRows,
+    driverStatusRows,
+  ] = await Promise.all([
+    readGeoKeyframes(catchup),
+    readHubsFromLog(db),
+    readOpenExceptions(proj),
+    // FIX 3: real hub inventory for volumeBucket + congestionBucket
+    proj.selectFrom("hub_inventory").selectAll().execute(),
+    // FIX 3: route leg list for RouteState[]
+    proj.selectFrom("geo_route").selectAll().execute(),
+    // FIX 3: in-transit trips for route loadBucket
+    proj.selectFrom("geo_inflight_trip").selectAll().execute(),
+    // HUBQ-08: trailers-at-hub + their bound driver, for per-hub driver buckets.
+    proj
+      .selectFrom("trailer_state")
+      .select(["current_hub_id", "driver_id"])
+      .execute(),
+    // HUBQ-08: each driver's current duty status (driving / on_break / resting).
+    proj.selectFrom("driver_status").select(["driver_id", "status"]).execute(),
+  ]);
 
   // Build TrailerKeyframes: one per trailer, from the LATEST depart + earliest
   // arrive keyframe so we have a departMs/etaMs leg range for tweening.
@@ -352,6 +410,10 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     }
   }
 
+  // HUBQ-08 — per-hub driver-duty buckets (the same trailer→driver join the REST
+  // /hubs/:id/detail performs, reduced to small integer counts for map coloring).
+  const driversPerHub = driverBucketsPerHub(trailerStateRows, driverStatusRows);
+
   const hubs: HubState[] = hubList
     .map((h): HubState => {
       const inv = invByHub.get(h.hubId);
@@ -360,11 +422,17 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
       const stagedCount = inv?.staged.length ?? 0;
       const totalCount = inboundCount + outboundCount + stagedCount;
       const excCount = exceptionsPerHub.get(h.hubId) ?? 0;
+      const drv =
+        driversPerHub.get(h.hubId) ?? { driverCount: 0, onBreakCount: 0, restingCount: 0 };
       return {
         id: h.hubId,
         volumeBucket: volumeBucketFor(totalCount),
         slaRiskBucket: slaRiskBucketFor(excCount),
         congestionBucket: volumeBucketFor(outboundCount + stagedCount),
+        // HUBQ-08: driver-duty buckets (small integer counts).
+        driverCount: drv.driverCount,
+        onBreakCount: drv.onBreakCount,
+        restingCount: drv.restingCount,
       };
     })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

@@ -180,6 +180,39 @@ describe("diffTick: hub changes", () => {
     const tick = diffTick(prev, next);
     expect(tick.hubs).toBeUndefined();
   });
+
+  it("HUBQ-08: a changed driverCount is an upsert (driver bucket delta)", () => {
+    const prev = makeSnapshot({
+      hubs: [{ id: "H1", volumeBucket: 0, slaRiskBucket: 0, congestionBucket: 0, driverCount: 1, onBreakCount: 0, restingCount: 0 }],
+    });
+    const next = makeSnapshot({
+      hubs: [{ id: "H1", volumeBucket: 0, slaRiskBucket: 0, congestionBucket: 0, driverCount: 2, onBreakCount: 0, restingCount: 0 }],
+    });
+    const tick = diffTick(prev, next);
+    expect(tick.hubs).toHaveLength(1);
+    expect(tick.hubs?.[0]?.driverCount).toBe(2);
+  });
+
+  it("HUBQ-08: a changed onBreakCount/restingCount is an upsert", () => {
+    const base = { id: "H1", volumeBucket: 0, slaRiskBucket: 0, congestionBucket: 0, driverCount: 3 };
+    const prev = makeSnapshot({ hubs: [{ ...base, onBreakCount: 0, restingCount: 0 }] });
+    const next = makeSnapshot({ hubs: [{ ...base, onBreakCount: 1, restingCount: 2 }] });
+    const tick = diffTick(prev, next);
+    expect(tick.hubs).toHaveLength(1);
+    expect(tick.hubs?.[0]?.onBreakCount).toBe(1);
+    expect(tick.hubs?.[0]?.restingCount).toBe(2);
+  });
+
+  it("HUBQ-08 back-compat: absent driver buckets are treated as 0 (no spurious delta)", () => {
+    // A v1 payload that predates the driver buckets must not flicker against one
+    // that sets them to 0 — `?? 0` keeps them equivalent.
+    const prev = makeSnapshot({ hubs: [hub("H1", 1, 0, 0)] }); // no driver fields
+    const next = makeSnapshot({
+      hubs: [{ id: "H1", volumeBucket: 1, slaRiskBucket: 0, congestionBucket: 0, driverCount: 0, onBreakCount: 0, restingCount: 0 }],
+    });
+    const tick = diffTick(prev, next);
+    expect(tick.hubs).toBeUndefined();
+  });
 });
 
 describe("diffTick: route changes", () => {
