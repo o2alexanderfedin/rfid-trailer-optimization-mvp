@@ -7,6 +7,7 @@ import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import type {
   TwinBlock,
+  TwinDriver,
   TwinRoute,
   TwinSnapshot,
   TwinStop,
@@ -312,11 +313,29 @@ export async function buildTwinSnapshot(
     }
   }
 
-  // 3. Read operational projections
-  const [trailerRows, hubInventoryRows] = await Promise.all([
+  // 3. Read operational projections. OPT-HOS-01: also read the Phase-13
+  //    `driver_status` projection (driver → remaining legal drive minutes, already
+  //    computed by the Phase-10 HOS engine at projection time) so the optimizer can
+  //    SOFT-prefer more-rested drivers. Read deterministically — no recompute,
+  //    no clock, no RNG.
+  const [trailerRows, hubInventoryRows, driverStatusRows] = await Promise.all([
     db.selectFrom("trailer_state").selectAll().execute(),
     db.selectFrom("hub_inventory").selectAll().execute(),
+    db
+      .selectFrom("driver_status")
+      .select(["driver_id", "remaining_drive_minutes"])
+      .execute(),
   ]);
+
+  // OPT-HOS-01: driverId → remaining legal drive minutes (integer, anti-P12). The
+  // trailer's `driver_id` (PRJ-02 join-free link) indexes into this map; a
+  // trailer with no `driver_id` (or a `driver_id` with no status row) gets no
+  // `driver` field — so a driverless twin reproduces the pre-Phase-15 snapshot
+  // byte-identically.
+  const remainingMinByDriver = new Map<string, number>();
+  for (const row of driverStatusRows) {
+    remainingMinByDriver.set(row.driver_id, Math.trunc(row.remaining_drive_minutes));
+  }
 
   // 4. Build the outbound/staged index: hub → [pkgId, ...]
   //    Used for block assignment (which hub does each package unload at).
@@ -352,6 +371,18 @@ export async function buildTwinSnapshot(
       const departureMin =
         departureMinByTrailer.get(r.trailer_id) ?? DEFAULT_DEPARTURE_MIN;
 
+      // OPT-HOS-01: attach the assigned driver's HOS summary IFF the trailer's
+      // trip is bound to a driver AND that driver has a `driver_status` row.
+      // Otherwise the field is omitted (additive, back-compatible — driverless
+      // trailers reproduce the prior snapshot exactly).
+      const driverId = r.driver_id;
+      const remainingDriveMinutes =
+        driverId !== null ? remainingMinByDriver.get(driverId) : undefined;
+      const driver: TwinDriver | undefined =
+        driverId !== null && remainingDriveMinutes !== undefined
+          ? { driverId, remainingDriveMinutes }
+          : undefined;
+
       const trailer: TwinTrailer = {
         trailerId: r.trailer_id,
         currentHubId,
@@ -359,6 +390,7 @@ export async function buildTwinSnapshot(
         capacity: DEFAULT_TRAILER_CAPACITY,
         route: stops,
         blocks,
+        ...(driver !== undefined ? { driver } : {}),
       };
       return trailer;
     });

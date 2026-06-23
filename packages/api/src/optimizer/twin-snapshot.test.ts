@@ -36,6 +36,8 @@ function makeDb(opts: {
     current_hub_id: string | null;
     trip_id: string | null;
     assigned_package_ids: string[];
+    /** OPT-HOS-01: the driver bound to the trailer's trip (PRJ-02). */
+    driver_id?: string | null;
   }>;
   routeEventRows?: Array<{
     data: {
@@ -60,11 +62,18 @@ function makeDb(opts: {
       departedAt: string;
     };
   }>;
+  /** OPT-HOS-01: Phase-13 `driver_status` rows (driver → remaining drive minutes). */
+  driverStatusRows?: Array<{
+    driver_id: string;
+    status: string;
+    remaining_drive_minutes: number;
+  }>;
 }): SnapshotDb {
   const trailerRows = opts.trailerRows ?? [];
   const routeEventRows = opts.routeEventRows ?? [];
   const hubInventoryRows = opts.hubInventoryRows ?? [];
   const trailerDepartedRows = opts.trailerDepartedRows ?? [];
+  const driverStatusRows = opts.driverStatusRows ?? [];
 
   function makeChain(result: unknown[]): unknown {
     const chain: Record<string, unknown> = {};
@@ -94,6 +103,7 @@ function makeDb(opts: {
   const routeChain = makeChain(routeEventRows);
   const inventoryChain = makeChain(hubInventoryRows);
   const departedChain = makeChain(trailerDepartedRows);
+  const driverStatusChain = makeChain(driverStatusRows);
 
   let callCount = 0;
 
@@ -102,6 +112,7 @@ function makeDb(opts: {
       callCount += 1;
       if (table === "trailer_state") return trailerChain;
       if (table === "hub_inventory") return inventoryChain;
+      if (table === "driver_status") return driverStatusChain;
       if (table === "events") {
         // Two calls: RouteRegistered events + TrailerDeparted events (in order)
         // We track which events call we're on
@@ -401,5 +412,73 @@ describe("buildTwinSnapshot", () => {
         expect(stop.stopIndex).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OPT-HOS-01 — driver-HOS info attached to TwinTrailer from `driver_status`.
+//
+// The snapshot builder reads the Phase-13 `driver_status` projection (driver →
+// `remaining_drive_minutes`, already computed by the Phase-10 HOS engine) and the
+// `trailer_state.driver_id` link, and attaches a `driver` summary to each trailer
+// whose trip has a bound driver. Deterministic + additive: a trailer with no
+// `driver_id` has no `driver` field, so driverless twins reproduce exactly.
+// ---------------------------------------------------------------------------
+describe("buildTwinSnapshot — OPT-HOS-01 driver-HOS info", () => {
+  const DRIVER_RESTED = {
+    driver_id: "DRV-rested",
+    status: "driving",
+    remaining_drive_minutes: 540,
+  };
+
+  it("attaches the assigned driver's remaining drive minutes to the trailer", async () => {
+    const db = makeDb({
+      trailerRows: [{ ...TRAILER_1, driver_id: "DRV-rested" }],
+      routeEventRows: [ROUTE_A],
+      hubInventoryRows: [HUB_ATL],
+      driverStatusRows: [DRIVER_RESTED],
+    });
+    const snapshot = await buildTwinSnapshot(db);
+    const t = snapshot.trailers.find((tr) => tr.trailerId === "T001")!;
+    expect(t.driver).toBeDefined();
+    expect(t.driver!.driverId).toBe("DRV-rested");
+    expect(t.driver!.remainingDriveMinutes).toBe(540);
+    // Integer minutes (anti-P12).
+    expect(Number.isInteger(t.driver!.remainingDriveMinutes)).toBe(true);
+  });
+
+  it("leaves `driver` undefined for a trailer with no bound driver (back-compat)", async () => {
+    const db = makeDb({
+      trailerRows: [TRAILER_1], // no driver_id
+      routeEventRows: [ROUTE_A],
+      driverStatusRows: [DRIVER_RESTED],
+    });
+    const snapshot = await buildTwinSnapshot(db);
+    const t = snapshot.trailers.find((tr) => tr.trailerId === "T001")!;
+    expect(t.driver).toBeUndefined();
+  });
+
+  it("leaves `driver` undefined when the driver_id has no driver_status row (fail-soft)", async () => {
+    const db = makeDb({
+      trailerRows: [{ ...TRAILER_1, driver_id: "DRV-missing" }],
+      routeEventRows: [ROUTE_A],
+      driverStatusRows: [DRIVER_RESTED], // does NOT contain DRV-missing
+    });
+    const snapshot = await buildTwinSnapshot(db);
+    const t = snapshot.trailers.find((tr) => tr.trailerId === "T001")!;
+    expect(t.driver).toBeUndefined();
+  });
+
+  it("is deterministic: identical driver_status rows ⇒ byte-identical snapshot", async () => {
+    const make = () =>
+      makeDb({
+        trailerRows: [{ ...TRAILER_1, driver_id: "DRV-rested" }],
+        routeEventRows: [ROUTE_A],
+        hubInventoryRows: [HUB_ATL],
+        driverStatusRows: [DRIVER_RESTED],
+      });
+    const a = await buildTwinSnapshot(make());
+    const b = await buildTwinSnapshot(make());
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });

@@ -56,6 +56,16 @@ export interface ObjectiveWeights {
   readonly imbalance: number;
   /** Anti-P7 `planChurnPenalty` — weight on divergence from the previous plan. */
   readonly churn: number;
+  /**
+   * OPT-HOS-01 (v1.2 Phase 15) — the SOFT driver-rest weight: multiplies the
+   * {@link PlanMetrics.restPenalty} term so plans assigning drivers with FEWER
+   * remaining legal drive minutes cost more. OPTIONAL + NEUTRAL-by-default: when
+   * absent (or 0) the term contributes EXACTLY 0, so the objective is
+   * byte-identical to the pre-Phase-15 objective (the glpk oracle + planner-vs-
+   * validator regression guards stay green). This phase is SOFT awareness only —
+   * the HARD HOS feasibility gate is Phase 16 (OPT-HOS-02).
+   */
+  readonly restCost?: number;
 }
 
 /**
@@ -90,6 +100,17 @@ export interface PlanMetrics {
   readonly imbalance: number;
   /** Divergence from the previous plan (anti-P7 anchor), ≥ 0. */
   readonly churnVsPrevious: number;
+  /**
+   * OPT-HOS-01 (v1.2 Phase 15) — the SOFT driver-rest penalty: a non-negative
+   * integer that RISES as the assigned driver has FEWER remaining legal drive
+   * minutes (e.g. `max(0, maxDriveMin − remainingLegalDriveMinutes)`), so a
+   * low-on-hours driver is soft-penalized. Sourced deterministically from the
+   * Phase-13 `driver_status` projection via the twin (NEVER the clock / RNG).
+   * OPTIONAL + NEUTRAL-by-default: absent ⇒ treated as 0, weighted by the
+   * (also-defaulting-to-0) {@link ObjectiveWeights.restCost}, so the term is a
+   * no-op until the weight is raised — prior plans reproduce byte-identically.
+   */
+  readonly restPenalty?: number;
 }
 
 /**
@@ -126,6 +147,13 @@ export interface ObjectiveBreakdown {
   readonly overCarry: number;
   readonly imbalance: number;
   readonly churn: number;
+  /**
+   * OPT-HOS-01 — the weighted SOFT driver-rest contribution (`restPenalty ×
+   * restCost`). Always present; exactly 0 in the neutral default case so the
+   * breakdown is additive (and the pre-Phase-15 `total` is unchanged when the
+   * weight is 0).
+   */
+  readonly rest: number;
   /** Σ of every weighted term — equals `objective(metrics, weights)`. */
   readonly total: number;
 }
