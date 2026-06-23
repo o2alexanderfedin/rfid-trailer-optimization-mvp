@@ -38,7 +38,7 @@
 - [x] **Phase 12: Driver relay / swap at hubs** — per-hub driver pools, deterministic handoffs ✅ 2026-06-22
 - [x] **Phase 13: Driver-status projection + tables** — OPERATIONAL read-model feeding hub-detail ✅ 2026-06-22
 - [x] **Phase 14: Hub-detail endpoint + ws driver buckets** — GET /api/hubs/:id/detail aggregation ✅ 2026-06-22
-- [ ] **Phase 15: Optimizer HOS-aware** — consume driver status, soft restCost preference
+- [x] **Phase 15: Optimizer HOS-aware** — consume driver status, soft restCost preference ✅ 2026-06-22
 - [ ] **Phase 16: Optimizer HOS-enforced** — hard legal-drive gate, rest-as-serviceMin, relay recommendation
 - [ ] **Phase 17: Hub Detail panel UI + map duty styling** — clickable hub → compact panel + click-through
 - [ ] **Phase 18: README features + screenshots** — supported-features list + live screenshots

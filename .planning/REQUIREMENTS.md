@@ -44,7 +44,7 @@
 
 ### Optimizer HOS (OPT-HOS)
 
-- [ ] **OPT-HOS-01**: The rolling-epoch snapshot consumes `DriverStatus`; the objective soft-prefers drivers with more remaining hours via a `restCost` weight.
+- [x] **OPT-HOS-01**: The rolling-epoch snapshot consumes `DriverStatus`; the objective soft-prefers drivers with more remaining hours via a `restCost` weight.
 - [ ] **OPT-HOS-02**: Hard enforcement — an optional `restMin` on `Stop` folds into `serviceMin` in `feasibility.ts` (rest-as-time; no new graph edge kind), and a hard gate in route planning rejects any leg the assigned driver cannot legally complete, reusing the proven Phase-2 LIFO validation-gate pattern. Reuses the same HOS engine (HOS-02).
 - [ ] **OPT-HOS-03**: When HOS makes an assignment infeasible, the optimizer surfaces an `insertRestStop` or driver-relay recommendation through the existing `localRepair → EpochRecommendation` path.
 
@@ -123,7 +123,7 @@
 | HUBQ-06 | 14 | Planned |
 | HUBQ-07 | 14 | Planned |
 | HUBQ-08 | 14 | Planned |
-| OPT-HOS-01 | 15 | Planned |
+| OPT-HOS-01 | 15 | Done |
 | OPT-HOS-02 | 16 | Planned |
 | OPT-HOS-03 | 16 | Planned |
 | VIZ-07 | 17 | Planned |
