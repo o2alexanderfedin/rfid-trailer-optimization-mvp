@@ -60,6 +60,16 @@ export interface DriverStatus {
   readonly totalDrivenMinutes: number;
   /** Rolling 70h/8-day ON-DUTY minutes (`clock.weeklyOnDutyMin`); `0` pre-duty. */
   readonly weeklyOnDutyMin: number;
+  /**
+   * OPT-HOS-02 — the FULL per-shift {@link HosClock} snapshot carried by the last
+   * `DriverDutyStateChanged` (DRV-02), persisted verbatim so the rolling optimizer's
+   * HARD HOS gate can re-walk every driving leg through the Phase-10 engine. The
+   * derived `remainingDriveMinutes` / `totalDrivenMinutes` are summaries OF this
+   * clock; the gate needs the whole clock (driving/break/weekly/sleeper
+   * accumulators), so it is stored alongside them. `null` before the first duty
+   * transition carries a clock (the same point `dutyWindowDeadline` is null).
+   */
+  readonly hosClock: HosClock | null;
   /** Hub the driver is currently at; the home hub at registration / swap hub. */
   readonly currentHubId: string | null;
   /** The trip the driver is currently bound to; `null` if free. */
@@ -103,6 +113,7 @@ export function driverStatusReducer(
         dutyWindowDeadline: null,
         totalDrivenMinutes: 0,
         weeklyOnDutyMin: 0,
+        hosClock: null,
         currentHubId: event.payload.homeHubId,
         currentTripId: null,
         lastEventAt: occurredAt,
@@ -119,6 +130,7 @@ export function driverStatusReducer(
         dutyWindowDeadline: prior?.dutyWindowDeadline ?? null,
         totalDrivenMinutes: prior?.totalDrivenMinutes ?? 0,
         weeklyOnDutyMin: prior?.weeklyOnDutyMin ?? 0,
+        hosClock: prior?.hosClock ?? null,
         currentHubId: prior?.currentHubId ?? null,
         currentTripId: event.payload.tripId,
         lastEventAt: occurredAt,
@@ -142,6 +154,9 @@ export function driverStatusReducer(
         dutyWindowDeadline: deadlineIso(clock),
         totalDrivenMinutes: clock.driveTodayMin,
         weeklyOnDutyMin: clock.weeklyOnDutyMin,
+        // OPT-HOS-02: persist the FULL clock the hard gate re-walks (not just the
+        // derived summaries above). The reducer reads it verbatim from the event.
+        hosClock: clock,
         currentHubId: prior?.currentHubId ?? null,
         currentTripId: prior?.currentTripId ?? null,
         lastEventAt: occurredAt,
@@ -162,6 +177,7 @@ export function driverStatusReducer(
         dutyWindowDeadline: incoming?.dutyWindowDeadline ?? null,
         totalDrivenMinutes: incoming?.totalDrivenMinutes ?? 0,
         weeklyOnDutyMin: incoming?.weeklyOnDutyMin ?? 0,
+        hosClock: incoming?.hosClock ?? null,
         currentHubId: event.payload.hubId,
         currentTripId: event.payload.tripId,
         lastEventAt: occurredAt,
@@ -173,6 +189,7 @@ export function driverStatusReducer(
         dutyWindowDeadline: outgoing?.dutyWindowDeadline ?? null,
         totalDrivenMinutes: outgoing?.totalDrivenMinutes ?? 0,
         weeklyOnDutyMin: outgoing?.weeklyOnDutyMin ?? 0,
+        hosClock: outgoing?.hosClock ?? null,
         currentHubId: event.payload.hubId,
         currentTripId: null,
         lastEventAt: occurredAt,

@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS hub_inventory (
 -- snapshot in DriverDutyStateChanged; `duty_window_deadline` is the 14h ABSOLUTE
 -- deadline (nullable until the first duty transition carries a clock). Feeds the
 -- Phase-14 hub-detail panel (driver duty status + remaining legal drive time).
+-- OPT-HOS-02: `hos_clock` persists the FULL per-shift HosClock snapshot (JSONB,
+-- mirroring zone_estimate.posterior) so the rolling optimizer's HARD HOS gate can
+-- re-walk every driving leg through the Phase-10 engine; null until the first duty
+-- transition carries a clock.
 CREATE TABLE IF NOT EXISTS driver_status (
   driver_id               TEXT PRIMARY KEY,
   status                  TEXT        NOT NULL,
@@ -57,6 +61,7 @@ CREATE TABLE IF NOT EXISTS driver_status (
   duty_window_deadline    TIMESTAMPTZ,
   total_driven_minutes    INTEGER     NOT NULL DEFAULT 0,
   weekly_on_duty_min      INTEGER     NOT NULL DEFAULT 0,
+  hos_clock               JSONB,
   current_hub_id          TEXT,
   current_trip_id         TEXT,
   last_event_at           TIMESTAMPTZ NOT NULL

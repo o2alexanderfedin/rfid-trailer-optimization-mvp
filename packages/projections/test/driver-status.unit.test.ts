@@ -135,6 +135,8 @@ describe("driverStatusReducer (PRJ-01)", () => {
       dutyWindowDeadline: null,
       totalDrivenMinutes: 0,
       weeklyOnDutyMin: 0,
+      // OPT-HOS-02: no duty transition yet ⇒ no full clock persisted.
+      hosClock: null,
       currentHubId: "MEM",
       currentTripId: null,
       lastEventAt: at(0),
@@ -173,6 +175,8 @@ describe("driverStatusReducer (PRJ-01)", () => {
       dutyWindowDeadline: expectedDeadline(clock),
       totalDrivenMinutes: 120,
       weeklyOnDutyMin: 120,
+      // OPT-HOS-02: the FULL clock snapshot is persisted verbatim for the hard gate.
+      hosClock: clock,
       currentHubId: "MEM",
       currentTripId: "TRIP1",
       lastEventAt: occurredAt,
