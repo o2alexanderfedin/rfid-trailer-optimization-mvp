@@ -47,9 +47,16 @@ async function main(): Promise<void> {
   // freeze the trailer animation. Default 8; set OPTIMIZER_EVERY_TICKS=1 for the
   // strict per-tick re-opt (lean fleet).
   const optimizerEveryTicks = Math.max(1, Math.floor(Number(process.env.OPTIMIZER_EVERY_TICKS ?? 8)));
-  const { app, broadcast, loop, speedController } = await buildServer({
+  // Optimizer transport (spec §5): the DEMO defaults to `worker` (offload the
+  // CPU-heavy min-cost-flow + VRPTW to a worker_threads worker so the paced
+  // playback loop never stalls). Set OPTIMIZER_EXECUTION=inline for the strict
+  // in-process path (e.g. parity debugging). Anything other than `inline` ⇒ worker.
+  const optimizerExecution =
+    process.env.OPTIMIZER_EXECUTION === "inline" ? "inline" : "worker";
+  const { app, broadcast, loop, speedController, worker } = await buildServer({
     db,
     simSeed: seed,
+    optimizerExecution,
     // FIX F: pass the full baseline tick count so scenario injection computes
     // scenarioEpochMs beyond any already-memoized baseline epoch.
     baselineTicks: durationTicks,
@@ -66,7 +73,11 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`${signal} received — shutting down`);
     try {
+      // `app.close()` already terminates the worker via its onClose hook; we also
+      // close it explicitly (idempotent) so the worker thread never outlives the
+      // process on shutdown.
       await app.close();
+      await worker?.close();
       await db.destroy();
     } catch (err: unknown) {
       app.log.error(err, "error during shutdown");
@@ -77,12 +88,18 @@ async function main(): Promise<void> {
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Wall-clock ms between each sim-tick broadcast (presentation pacing only —
-  // the sim engine is deterministic; only the delivery interval is wall-clock).
-  // The interval/pause are now LIVE-tunable via the SpeedController (GET/POST
-  // /sim/speed): the paced driver reads `getTickIntervalMs()`/`isPaused()` fresh
-  // each iteration. `tickIntervalMs` is kept as the back-compat fallback.
-  const tickIntervalMs = Number(process.env.SIM_TICK_INTERVAL_MS ?? 500);
+  // Accumulator pacing knobs (presentation only — the sim engine is
+  // deterministic; only the FRAME cadence + per-frame batching are wall-clock).
+  // The speed multiplier + pause are LIVE-tunable via the SpeedController
+  // (GET/POST /sim/speed): the paced driver reads `getMultiplier()`/`isPaused()`
+  // FRESH each frame so a slider drag lands on the very next frame.
+  const frameMs = Number(process.env.SIM_FRAME_MS ?? 250);
+  // Low per-frame drain budget ⇒ more WS deltas (smoother map responsiveness) at
+  // ~the same total cost, since the per-frame fold dominates at a large fleet.
+  const maxTicksPerFrame = Math.max(
+    1,
+    Math.floor(Number(process.env.SIM_MAX_TICKS_PER_FRAME ?? 4)),
+  );
 
   // Phase 18 — live driver-HOS prerequisite: enable Hours-of-Service on the LIVE
   // demo (DEFAULT ON; set HOS_ENABLED=0 to disable). With HOS on, the engine
@@ -113,8 +130,9 @@ async function main(): Promise<void> {
     optimizerEveryTicks,
     broadcast,
     loop,
-    tickIntervalMs,
-    getTickIntervalMs: () => speedController.getTickIntervalMs(),
+    frameMs,
+    maxTicksPerFrame,
+    getMultiplier: () => speedController.getMultiplier(),
     isPaused: () => speedController.isPaused(),
   }).catch((err: unknown) => {
     app.log.error(err, "paced sim driver error");

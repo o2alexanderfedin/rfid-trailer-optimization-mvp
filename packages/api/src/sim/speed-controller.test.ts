@@ -95,6 +95,45 @@ describe("makeSpeedController — multiplier clamping (out of range)", () => {
   });
 });
 
+describe("makeSpeedController — getMultiplier (the pacing primitive)", () => {
+  it("returns 1 at the default interval (1×)", () => {
+    const c = makeSpeedController();
+    expect(c.getMultiplier()).toBe(1);
+  });
+
+  it("returns 64 after apply({multiplier:64})", () => {
+    const c = makeSpeedController();
+    c.apply({ multiplier: 64 });
+    expect(c.getMultiplier()).toBeCloseTo(64);
+  });
+
+  it("returns 0.25 after apply({multiplier:0.25})", () => {
+    const c = makeSpeedController();
+    c.apply({ multiplier: 0.25 });
+    expect(c.getMultiplier()).toBe(0.25);
+  });
+
+  it("always equals snapshot().multiplier", () => {
+    const c = makeSpeedController();
+    for (const m of [1, 2, 0.5, 8, 0.25, 64]) {
+      c.setMultiplier(m);
+      expect(c.getMultiplier()).toBe(c.snapshot().multiplier);
+    }
+  });
+
+  it("pause does NOT change getMultiplier (multiplier is the rate; freeze lives on simSpeed)", () => {
+    const c = makeSpeedController();
+    c.setMultiplier(8);
+    const before = c.getMultiplier();
+    c.setPaused(true);
+    // Pause flips simSpeed to 0 but leaves the multiplier (rate) untouched.
+    expect(c.getMultiplier()).toBe(before);
+    expect(c.getSimSpeed()).toBe(0);
+    c.setPaused(false);
+    expect(c.getMultiplier()).toBe(before);
+  });
+});
+
 describe("makeSpeedController — pause semantics", () => {
   it("paused ⇒ simSpeed is 0 but the tickIntervalMs (cadence target) is unchanged", () => {
     const c = makeSpeedController();

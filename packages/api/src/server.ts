@@ -13,6 +13,7 @@ import { registerKpiRoutes } from "./routes/kpis.js";
 import { registerScenarioRoutes } from "./routes/scenario.js";
 import { registerSimSpeedRoutes } from "./routes/sim-speed.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
+import { makeWorkerOptimizer, type WorkerOptimizer } from "./optimizer/worker-client.js";
 import { RollingLoop } from "./optimizer/live-loop.js";
 import { buildTwinSnapshot } from "./optimizer/twin-snapshot.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
@@ -69,6 +70,16 @@ export interface ServerDeps {
    * drive short horizons so the base-stream docking events match the stored state.
    */
   readonly timing?: TimingConfig;
+  /**
+   * The optimizer compute transport (spec §5). `'inline'` (DEFAULT) runs the pure
+   * `runEpoch` synchronously in-process — byte-for-byte the current behavior, so
+   * every existing optimizer/loop/integration test runs unchanged. `'worker'`
+   * spawns ONE long-lived `worker_threads` worker and offloads the CPU compute to
+   * it (the main thread keeps all DB I/O = single writer); the demo (`main.ts`)
+   * uses this. The worker is exposed on {@link BuiltServer.worker} and is also
+   * terminated by `app.close()` via an `onClose` hook.
+   */
+  readonly optimizerExecution?: "inline" | "worker";
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -91,11 +102,17 @@ export interface BuiltServer {
   readonly simController: SimController;
   /**
    * The "speed of time" controller (GET/POST /sim/speed). `main.ts` passes its
-   * `getTickIntervalMs`/`isPaused` to `driveSimulationPaced` so the live demo's
-   * pacing is tunable mid-run. The snapshot builder stamps its `snapshot()` on
-   * every ws envelope.
+   * `getMultiplier`/`isPaused` to `driveSimulationPaced` so the live demo's
+   * accumulator pacing is tunable mid-run. The snapshot builder stamps its
+   * `snapshot()` on every ws envelope.
    */
   readonly speedController: SpeedController;
+  /**
+   * The long-lived worker-thread optimizer when `optimizerExecution:'worker'`;
+   * `undefined` in the default inline mode. `app.close()` already terminates it
+   * (an `onClose` hook); exposed here so `main.ts` can also close it on shutdown.
+   */
+  readonly worker?: WorkerOptimizer;
 }
 
 /** Build the Fastify server (REST query routes + optional ws snapshots). */
@@ -123,8 +140,22 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // endpoint. The service owns the ONE write path (PlanAccepted); the route reads.
   // The optimizer only appends to the event store, so it views the handle as the
   // event-store schema (the same narrowing the sim driver uses).
+  //
+  // OPTIMIZER EXECUTION (spec §5): inline by default (synchronous, in-process —
+  // unchanged for every test); `worker` spawns ONE long-lived worker_threads
+  // worker and offloads the pure `runEpoch` CPU to it. The main thread keeps ALL
+  // DB I/O (single writer) — the worker is pure compute. `app.close()` terminates
+  // the worker via an onClose hook; it is also exposed on BuiltServer.
+  const worker =
+    deps.optimizerExecution === "worker" ? makeWorkerOptimizer() : undefined;
+  if (worker !== undefined) {
+    app.addHook("onClose", async () => {
+      await worker.close();
+    });
+  }
   const optimizer = new RollingOptimizerService({
     db: deps.db as unknown as Kysely<Database>,
+    ...(worker !== undefined ? { runEpochFn: worker.run } : {}),
   });
   registerOptimizerRoutes(app, optimizer);
 
@@ -184,5 +215,13 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   registerSimSpeedRoutes(app, speedController);
 
   await app.ready();
-  return { app, broadcast, optimizer, loop, simController, speedController };
+  return {
+    app,
+    broadcast,
+    optimizer,
+    loop,
+    simController,
+    speedController,
+    ...(worker !== undefined ? { worker } : {}),
+  };
 }

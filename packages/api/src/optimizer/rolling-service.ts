@@ -51,16 +51,38 @@ export interface RollingEpochOutcome {
   readonly committed: boolean;
 }
 
+/**
+ * The pure epoch compute, behind a DIP port so it can run INLINE (default) or be
+ * offloaded to a `worker_threads` worker (Task 6) with NO change to the shell's
+ * memo/append logic. Identical signature in both modes — only the transport
+ * differs. `Promise`-returning so the worker round-trip is async; the inline
+ * default just wraps the synchronous `runEpoch` in a resolved promise.
+ */
+export type RunEpochFn = (
+  epoch: Epoch,
+  input: EpochInput,
+  weights: ObjectiveWeights,
+) => Promise<EpochResult>;
+
 /** Construction deps for {@link RollingOptimizerService} (DIP — inject the store). */
 export interface RollingOptimizerDeps {
   readonly db: Kysely<Database>;
   /** §12 objective weights (defaults to the optimizer's demo weights). */
   readonly weights?: ObjectiveWeights;
+  /**
+   * The epoch compute transport (DIP). Default: INLINE — `(e,i,w) =>
+   * Promise.resolve(runEpoch(e,i,w))` — byte-for-byte the current synchronous
+   * behavior, so every existing optimizer/loop/integration test runs unchanged.
+   * The demo server injects a worker-backed implementation (Task 6/7).
+   */
+  readonly runEpochFn?: RunEpochFn;
 }
 
 export class RollingOptimizerService {
   private readonly db: Kysely<Database>;
   private readonly weights: ObjectiveWeights;
+  /** The epoch compute transport (inline by default; worker when injected). */
+  private readonly runEpochFn: RunEpochFn;
   /** `${epochId}:${scopeHash}` → the committed result (idempotency memo). */
   private readonly memo = new Map<string, EpochResult>();
   /** The most recent epoch result (what the API endpoint surfaces). */
@@ -76,6 +98,8 @@ export class RollingOptimizerService {
   constructor(deps: RollingOptimizerDeps) {
     this.db = deps.db;
     this.weights = deps.weights ?? DEFAULT_OBJECTIVE_WEIGHTS;
+    this.runEpochFn =
+      deps.runEpochFn ?? ((e, i, w) => Promise.resolve(runEpoch(e, i, w)));
   }
 
   /**
@@ -94,9 +118,11 @@ export class RollingOptimizerService {
    * `PlanAccepted` append. Idempotent per `(epochId, scopeHash)`.
    */
   async runOnce(epoch: Epoch, input: EpochInput): Promise<RollingEpochOutcome> {
-    // 1. EVALUATE — pure, zero side effects (OPT-04). We compute the scopeHash via
-    //    the result so the memo key matches the idempotency contract exactly.
-    const fresh = runEpoch(epoch, input, this.weights);
+    // 1. EVALUATE — pure, zero side effects (OPT-04). The compute runs through the
+    //    injected transport (inline by default; a worker thread in the demo); the
+    //    result is plain data either way (structured-clone-safe). We compute the
+    //    scopeHash via the result so the memo key matches the idempotency contract.
+    const fresh = await this.runEpochFn(epoch, input, this.weights);
     const key = `${epoch.epochId}:${fresh.scopeHash}`;
 
     // 2. IDEMPOTENCY — a memoized epoch never re-appends (anti-P7).
