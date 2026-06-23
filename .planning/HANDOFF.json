@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-06-22",
+  "context": "between-milestones",
+  "milestone": "v1.1",
+  "milestone_name": "Realistic Time Model + Hardening",
+  "status": "milestone_shipped",
+  "phase": null,
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "completed_tasks": [
+    {"name": "Phase 6 — Realistic Geography & Time Model (VIZ-06, TIME-01, TIME-02)", "status": "done"},
+    {"name": "Phase 7 — Time-Aware Optimizer (OPT-09, OPT-10)", "status": "done"},
+    {"name": "Phase 8 — Client Hardening & Coverage (HRD-01, QA-01)", "status": "done"},
+    {"name": "Milestone audit (tech_debt, all live-wired, no blockers)", "status": "done", "commit": "6764f8c"},
+    {"name": "Complete + archive milestone (milestones/v1.1-*)", "status": "done", "commit": "95104c8"},
+    {"name": "Ship: merge develop+main, tag v1.1/v1.1.0, push, GitHub release", "status": "done", "commit": "7e1044a"}
+  ],
+  "remaining_tasks": [
+    {"name": "Scope v1.2 via /gsd-new-milestone", "status": "not_started"},
+    {"name": "(optional) /gsd-cleanup — archive .planning/phases/06-08 to milestones/v1.1-phases/", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Rotate the ORS API key if this transcript could be shared", "context": "Key appeared in chat (NOT in git — verified). Stored gitignored in .env.", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "Transit scale = realistic-absolute (ORS road durations)", "rationale": "Milestone goal = defensible time model; 120x speed gauge handles watchability", "phase": "6/7"},
+    {"decision": "Deterministic planning estimate = log-normal MEAN (expectedMinutes)", "rationale": "Unbiased vs realized throughput; one shared source in @mm/domain (DRY)", "phase": "7"},
+    {"decision": "Verify integration keystones via Bash, not subagents", "rationale": "~30-min suite exceeds an agent's token budget → null/false-pass (PITFALLS P6); a workflow auditor gave a false determinism PASS this milestone", "phase": "all"}
+  ],
+  "uncommitted_files": [
+    ".planning/config.json (model_profile=quality, context_window=1000000, workflow.subagent_timeout=1800 — set via /gsd-config; hook-blocked from committing to develop, active from disk)",
+    ".continue-here.md (this handoff)",
+    ".planning/HANDOFF.json (this file)",
+    ".remember/* (session memory; a session-memory-churn git stash also remains)"
+  ],
+  "next_action": "Run /gsd-new-milestone to scope v1.2. Strong opener: fix the LOW-debt timing-config plumbing (thread deps.timing through the optimizer's RollingLoop/buildTwinSnapshot/runEpoch so a non-default timing config reaches both sim and optimizer). Start in a FRESH session — this one ended at ~73% context.",
+  "context_notes": "v1.1 fully SHIPPED & public: main@7e1044a tagged v1.1.0 (+v1.1), develop@30ecc5f, release published, repo public + secret-clean. Gate: build 10/10 / typecheck 0 / lint 0 / unit 960 / ui 183 / integration 82-20. Branches: develop+main only (feature branch deleted). The whole v1.1 build happened amid sustained 429/529 server-limit waves — research+roadmap were done inline on the main loop when subagents died; phases built via ultracode workflows once the API recovered; integration regressions the workflow audits MISSED were caught by running keystones via Bash. LOW debt for v1.2 in milestones/v1.1-MILESTONE-AUDIT.md."
+}

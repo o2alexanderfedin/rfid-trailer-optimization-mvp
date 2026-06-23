@@ -1,5 +1,5 @@
 {
-  "model_profile": "balanced",
+  "model_profile": "quality",
   "commit_docs": true,
   "parallelization": true,
   "search_gitignored": false,
@@ -32,7 +32,8 @@
     "ai_integration_phase": true,
     "discuss_strategy": "brainstorm",
     "discuss_brainstorm_skill": "superpowers:brainstorming",
-    "use_worktrees": true
+    "use_worktrees": true,
+    "subagent_timeout": 1800
   },
   "hooks": {
     "context_warnings": true
@@ -43,5 +44,6 @@
   "features": {},
   "granularity": "standard",
   "resolve_model_ids": "omit",
-  "mode": "yolo"
+  "mode": "yolo",
+  "context_window": 1000000
 }

@@ -2,9 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Driver HOS & Hub Detail
-status: planning
-last_updated: "2026-06-22T08:59:23.428Z"
-last_activity: 2026-06-22
+status: Awaiting next milestone
+stopped_at: v1.2 milestone close complete — awaiting next milestone.
+last_updated: "2026-06-22T04:12:01.801Z"
+last_activity: 2026-06-22 — Milestone v1.2 completed and archived
 progress:
   total_phases: 10
   completed_phases: 10
@@ -20,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-22)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** v1.2 (Driver HOS & Hub Detail) — defining requirements → roadmap. Fully-enforced HOS, full FMCSA, driver relay/swap; grounding in REQUIREMENTS.md + `research/v1.2-*-GROUNDING.md`.
+**Current focus:** v1.2 (Driver HOS & Hub Detail) shipped 2026-06-22 and archived. Awaiting the next milestone — run `/gsd-new-milestone` for v1.3.
 
 ## Current Position
 
-Phase: — (all 10 phases complete) → milestone lifecycle (audit → complete → cleanup)
+Phase: Milestone v1.2 complete (Phases 9–18, 35/35 requirements) — shipped & archived 2026-06-22
 Plan: —
-Status: v1.2 build COMPLETE (10/10 phases, 35/35 requirements). Phases 9–18 merged to develop. Live demo runs HOS-on; Hub Detail panel + screenshots shipped.
-Last activity: 2026-06-22 — Phase 18 PASSED (live-demo HOS_ENABLED on; README supported-features + 2 real screenshots; build 10/10, typecheck 0, lint 0, test:all 1472, browser 9). Determinism goldens byte-identical throughout.
+Status: Awaiting next milestone (run /gsd-new-milestone for v1.3)
+Last activity: 2026-06-22 — Milestone v1.2 completed and archived
 
 ## Performance Metrics
 
@@ -92,13 +93,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-22 — v1.2 milestone definition (Driver HOS & Hub Detail).
-Stopped at: defining requirements → roadmap.
-Resumed: 2026-06-22 — /gsd-new-milestone; deep codebase + FMCSA grounding via 2 adversarially-verified workflows; scope locked (fully-enforced HOS, full FMCSA, driver relay/swap).
+Last session: 2026-06-22 — v1.2 (Driver HOS & Hub Detail) shipped and archived; 10 phases (9–18), 35/35 requirements; final gate green (test:all 1473/139).
+Stopped at: v1.2 milestone close complete — awaiting next milestone.
 Resume file: None
 
 ## Operator Next Steps
 
-- v1.2 planning on branch `feature/v1.2-planning`: PROJECT.md + REQUIREMENTS.md + research grounding written; roadmap next.
-- After roadmap approval: `/gsd-discuss-phase 9` (or `/gsd-plan-phase 9`) to begin Phase 9.
-- **Keystone:** keep HOS-off byte-identical to the pre-v1.2 golden replay; all HOS RNG through one new isolated substream.
+- v1.2 shipped 2026-06-22; awaiting next milestone. Run /gsd-new-milestone for v1.3.
