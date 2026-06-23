@@ -1,41 +1,39 @@
 {
   "version": "1.0",
-  "timestamp": "2026-06-22",
+  "timestamp": "2026-06-23T19:16:27.577Z",
   "context": "between-milestones",
-  "milestone": "v1.1",
-  "milestone_name": "Realistic Time Model + Hardening",
-  "status": "milestone_shipped",
+  "milestone": "v1.2",
+  "milestone_name": "Driver HOS & Hub Detail",
+  "status": "paused",
   "phase": null,
   "plan": null,
   "task": null,
   "total_tasks": null,
   "completed_tasks": [
-    {"name": "Phase 6 — Realistic Geography & Time Model (VIZ-06, TIME-01, TIME-02)", "status": "done"},
-    {"name": "Phase 7 — Time-Aware Optimizer (OPT-09, OPT-10)", "status": "done"},
-    {"name": "Phase 8 — Client Hardening & Coverage (HRD-01, QA-01)", "status": "done"},
-    {"name": "Milestone audit (tech_debt, all live-wired, no blockers)", "status": "done", "commit": "6764f8c"},
-    {"name": "Complete + archive milestone (milestones/v1.1-*)", "status": "done", "commit": "95104c8"},
-    {"name": "Ship: merge develop+main, tag v1.1/v1.1.0, push, GitHub release", "status": "done", "commit": "7e1044a"}
+    {"name": "Resume + ship v1.2 -> main (git-flow, tag v1.2.0, push, GitHub release Latest)", "status": "done"},
+    {"name": "v1.2 milestone re-audit: passed, 35/35 live-wired (.planning/v1.2-MILESTONE-AUDIT.md)", "status": "done", "commit": "446485b"},
+    {"name": "Fix live trailer animation (routeId->[0,0], simClock snap, distance-based ETA) + tests", "status": "done", "commit": "253f9e3"},
+    {"name": "feat: 64x max speed + fleetPerSpoke + optimizer-cadence gate + tests", "status": "done", "commit": "2b7373d"},
+    {"name": "Merge feat branch -> develop, pushed", "status": "done", "commit": "e000a89"}
   ],
   "remaining_tasks": [
-    {"name": "Scope v1.2 via /gsd-new-milestone", "status": "not_started"},
-    {"name": "(optional) /gsd-cleanup — archive .planning/phases/06-08 to milestones/v1.1-phases/", "status": "not_started"}
+    {"name": "USER-DIRECTED paced-loop redesign: fixed wall cadence (advance simClock by simSpeed*elapsed, batch sim-events in window) + DEBOUNCED off-path optimizer; then demo FLEET_PER_SPOKE=3 verify 27 trucks @ 64x", "status": "not_started"},
+    {"name": "After redesign: /gsd-new-milestone for v1.3", "status": "not_started"}
   ],
   "blockers": [],
-  "human_actions_pending": [
-    {"action": "Rotate the ORS API key if this transcript could be shared", "context": "Key appeared in chat (NOT in git — verified). Stored gitignored in .env.", "blocking": false}
-  ],
+  "human_actions_pending": [],
   "decisions": [
-    {"decision": "Transit scale = realistic-absolute (ORS road durations)", "rationale": "Milestone goal = defensible time model; 120x speed gauge handles watchability", "phase": "6/7"},
-    {"decision": "Deterministic planning estimate = log-normal MEAN (expectedMinutes)", "rationale": "Unbiased vs realized throughput; one shared source in @mm/domain (DRY)", "phase": "7"},
-    {"decision": "Verify integration keystones via Bash, not subagents", "rationale": "~30-min suite exceeds an agent's token budget → null/false-pass (PITFALLS P6); a workflow auditor gave a false determinism PASS this milestone", "phase": "all"}
+    {"decision": "Trailer keyframe routeId must be the /api/routes geometry key (route-FROM-TO), not the tripId", "rationale": "client looks up route polyline by routeId; tripId missed -> trailers stuck at [0,0]", "phase": "demo-hardening"},
+    {"decision": "simClock.resync snaps on corrections > maxNudge (was clamp-only)", "rationale": "simMs:0 snapshot anchor never caught up to absolute-epoch ticks -> trailers frozen at fraction 0", "phase": "demo-hardening"},
+    {"decision": "fleetPerSpoke config defaults to 1 (byte-identical golden); demo defaults to 3", "rationale": "preserve determinism keystone while enabling more trucks", "phase": "demo-hardening"},
+    {"decision": "ACCEPTED (next session): rewrite paced loop to fixed cadence + debounced optimizer", "rationale": "current loop ties tick cadence to speed and runs optimizer per-tick -> sim-loop-bound; >9 trucks freeze and 64x is moot (compute-bound)", "phase": "demo-hardening"}
   ],
   "uncommitted_files": [
-    ".planning/config.json (model_profile=quality, context_window=1000000, workflow.subagent_timeout=1800 — set via /gsd-config; hook-blocked from committing to develop, active from disk)",
-    ".continue-here.md (this handoff)",
+    ".continue-here.md (handoff, this pause)",
     ".planning/HANDOFF.json (this file)",
-    ".remember/* (session memory; a session-memory-churn git stash also remains)"
+    ".remember/now.md (session memory churn)",
+    "demo-*.png x9 (throwaway debug screenshots in repo root, untracked, safe to delete)"
   ],
-  "next_action": "Run /gsd-new-milestone to scope v1.2. Strong opener: fix the LOW-debt timing-config plumbing (thread deps.timing through the optimizer's RollingLoop/buildTwinSnapshot/runEpoch so a non-default timing config reaches both sim and optimizer). Start in a FRESH session — this one ended at ~73% context.",
-  "context_notes": "v1.1 fully SHIPPED & public: main@7e1044a tagged v1.1.0 (+v1.1), develop@30ecc5f, release published, repo public + secret-clean. Gate: build 10/10 / typecheck 0 / lint 0 / unit 960 / ui 183 / integration 82-20. Branches: develop+main only (feature branch deleted). The whole v1.1 build happened amid sustained 429/529 server-limit waves — research+roadmap were done inline on the main loop when subagents died; phases built via ultracode workflows once the API recovered; integration regressions the workflow audits MISSED were caught by running keystones via Bash. LOW debt for v1.2 in milestones/v1.1-MILESTONE-AUDIT.md."
+  "next_action": "Implement the paced-loop redesign in packages/api/src/sim/driver.ts (driveSimulationPaced) + speed-controller.ts: FIXED wall cadence (~250ms-1s); each tick advances a sim-clock cursor by simSpeed*wallElapsed and processes all sim-events with occurredAt<=cursor in one batch, broadcasting once/tick; tickIntervalMs becomes the fixed cadence and simSpeed the lever. Replace optimizerEveryTicks with a DEBOUNCED, off-event-path optimizer (>=once per trailing ~500ms-1s quiet window). Keep determinism goldens green (default config byte-identical). Then FLEET_PER_SPOKE=3 and verify 27 trucks glide at 64x. Full plan + run commands + the @mm/simulation must-rebuild-dist gotcha are in .continue-here.md.",
+  "context_notes": "v1.2 fully RELEASED & public (main=6f61884 / v1.2.0). Branches develop+main only; develop=e000a89 in sync with origin. Demo run: docker compose up -d; DATABASE_URL=postgres://mm:mm@localhost:5432/mm SIM_TICKS=20000 FLEET_PER_SPOKE=1 pnpm --filter @mm/api demo (:3001) + pnpm --filter @mm/web dev (:5173). KEY GOTCHA: api (tsx) imports @mm/simulation from compiled dist -> run pnpm build after any engine.ts edit. ~15-20s first-tick warmup; sim then ~5 ticks/sec at fleet=1. fleet 2-3 currently freeze the sim (the reason for the redesign)."
 }
