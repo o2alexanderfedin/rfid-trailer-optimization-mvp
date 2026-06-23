@@ -47,9 +47,16 @@ async function main(): Promise<void> {
   // freeze the trailer animation. Default 8; set OPTIMIZER_EVERY_TICKS=1 for the
   // strict per-tick re-opt (lean fleet).
   const optimizerEveryTicks = Math.max(1, Math.floor(Number(process.env.OPTIMIZER_EVERY_TICKS ?? 8)));
-  const { app, broadcast, loop, speedController } = await buildServer({
+  // Optimizer transport (spec §5): the DEMO defaults to `worker` (offload the
+  // CPU-heavy min-cost-flow + VRPTW to a worker_threads worker so the paced
+  // playback loop never stalls). Set OPTIMIZER_EXECUTION=inline for the strict
+  // in-process path (e.g. parity debugging). Anything other than `inline` ⇒ worker.
+  const optimizerExecution =
+    process.env.OPTIMIZER_EXECUTION === "inline" ? "inline" : "worker";
+  const { app, broadcast, loop, speedController, worker } = await buildServer({
     db,
     simSeed: seed,
+    optimizerExecution,
     // FIX F: pass the full baseline tick count so scenario injection computes
     // scenarioEpochMs beyond any already-memoized baseline epoch.
     baselineTicks: durationTicks,
@@ -66,7 +73,11 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`${signal} received — shutting down`);
     try {
+      // `app.close()` already terminates the worker via its onClose hook; we also
+      // close it explicitly (idempotent) so the worker thread never outlives the
+      // process on shutdown.
       await app.close();
+      await worker?.close();
       await db.destroy();
     } catch (err: unknown) {
       app.log.error(err, "error during shutdown");
