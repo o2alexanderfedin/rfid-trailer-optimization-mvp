@@ -50,6 +50,7 @@ export { RollingOptimizerService } from "./optimizer/rolling-service.js";
 export type {
   RollingEpochOutcome,
   RollingOptimizerDeps,
+  RunEpochFn,
 } from "./optimizer/rolling-service.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
