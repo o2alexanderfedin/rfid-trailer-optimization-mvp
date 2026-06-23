@@ -52,6 +52,9 @@ export type {
   RollingOptimizerDeps,
   RunEpochFn,
 } from "./optimizer/rolling-service.js";
+// Worker-thread optimizer (spec §5): pure `runEpoch` offload + long-lived client.
+export { makeWorkerOptimizer } from "./optimizer/worker-client.js";
+export type { WorkerOptimizer } from "./optimizer/worker-client.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
   Broadcast,
