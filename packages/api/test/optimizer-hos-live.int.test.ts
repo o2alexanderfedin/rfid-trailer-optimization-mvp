@@ -1,22 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Kysely } from "kysely";
 import type { DomainEvent, HosClock } from "@mm/domain";
-import type { Database } from "@mm/event-store";
 import { appendToStream, readAll } from "@mm/event-store";
-import {
-  applyInline,
-  projectionView,
-  type ProjectionDb,
-  type ReplayEvent,
-} from "@mm/projections";
+import { applyInline, projectionView } from "@mm/projections";
 import { DEFAULT_OBJECTIVE_WEIGHTS, runEpoch, type Epoch } from "@mm/optimizer";
 import { buildTwinSnapshot } from "../src/optimizer/twin-snapshot.js";
-import {
-  eventStoreView,
-  startPgFixture,
-  type FixtureDb,
-  type PgFixture,
-} from "./pg-fixture.js";
+import { eventStoreView, startPgFixture, type PgFixture } from "./pg-fixture.js";
 
 /**
  * GAP-1 (v1.2 milestone audit) — OPT-HOS-02 / OPT-HOS-03 fire on the LIVE path.
@@ -36,13 +24,6 @@ import {
  * complete (`hosFeasible: false` ⇒ recommendation `feasible: false`), and an
  * `insertRest`/`relay` `EpochRecommendation` is surfaced.
  */
-
-function replayReadAll(
-  db: Kysely<ProjectionDb>,
-  fromGlobalSeq: bigint,
-): Promise<readonly ReplayEvent[]> {
-  return readAll(eventStoreView(db as unknown as FixtureDb), fromGlobalSeq);
-}
 
 const T0 = Date.parse("2026-05-01T00:00:00.000Z");
 const at = (ms: number): Date => new Date(T0 + ms);
@@ -197,10 +178,9 @@ describe("OPT-HOS-02/03 LIVE PATH: live-built snapshot carries hosClock + hard g
       .executeTakeFirst();
     expect(trailerRow!.driver_id).toBe(D1);
 
-    // 3. Build the LIVE snapshot and assert it now carries the full hosClock.
-    const snapshot = await buildTwinSnapshot(
-      fx.db as unknown as Kysely<Database & ProjectionDb>,
-    );
+    // 3. Build the LIVE snapshot (the SAME builder server.ts wires into the rolling
+    //    loop) and assert it now carries the full hosClock.
+    const snapshot = await buildTwinSnapshot(fx.db);
     const twinTrailer = snapshot.trailers.find((t) => t.trailerId === T1)!;
     expect(twinTrailer.driver).toBeDefined();
     expect(twinTrailer.driver!.driverId).toBe(D1);
