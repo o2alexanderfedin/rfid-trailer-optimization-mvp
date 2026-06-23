@@ -54,6 +54,14 @@ export interface SpeedControllerOptions {
 export interface SpeedController {
   /** Current wall-clock ms between ticks (read by the paced driver each iteration). */
   getTickIntervalMs(): number;
+  /**
+   * The speed multiplier — the ACCUMULATOR PACING PRIMITIVE. Equals
+   * `defaultIntervalMs / tickIntervalMs` (= `snapshot().multiplier`): 1 at the
+   * default, in `[0.25, 64]`. UNAFFECTED by pause (pause is a separate freeze
+   * carried by `isPaused()`/`getSimSpeed()` — the accumulator driver treats a
+   * paused multiplier as 0 itself). Presentation pacing only.
+   */
+  getMultiplier(): number;
   /** Whether the driver should hold before the next tick. */
   isPaused(): boolean;
   /** Frontend playback rate (sim-ms per wall-ms); 0 while paused. */
@@ -121,6 +129,7 @@ export function makeSpeedController(
 
   return {
     getTickIntervalMs: () => tickIntervalMs,
+    getMultiplier: () => defaultIntervalMs / tickIntervalMs,
     isPaused: () => paused,
     getSimSpeed,
     snapshot,
