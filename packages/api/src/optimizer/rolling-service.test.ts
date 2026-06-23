@@ -25,7 +25,7 @@ import {
 import type { DomainEvent } from "@mm/domain";
 import type { Database } from "@mm/event-store";
 import type { Kysely } from "kysely";
-import { RollingOptimizerService } from "./rolling-service.js";
+import { RollingOptimizerService, type RunEpochFn } from "./rolling-service.js";
 
 const EMPTY_SNAPSHOT: TwinSnapshot = { hubs: [], routes: [], trailers: [] };
 
@@ -81,7 +81,7 @@ describe("RollingOptimizerService — RunEpochFn port", () => {
       accepted: null,
       recommendations: [],
     };
-    const runEpochFn = vi.fn().mockResolvedValue(cannedResult);
+    const runEpochFn = vi.fn<RunEpochFn>().mockResolvedValue(cannedResult);
 
     const service = new RollingOptimizerService({ db: noWriteDb(), runEpochFn });
     const epoch: Epoch = { epochId: "e1", nowMin: 1, freezeWindowMin: 10 };

@@ -24,6 +24,11 @@ function evt(trailerId: string): DomainEvent {
   };
 }
 
+/** Extract the trailerIds from a batch of `TrailerDeparted` events (typed narrow). */
+function trailerIdsOf(events: readonly DomainEvent[]): string[] {
+  return events.flatMap((e) => (e.type === "TrailerDeparted" ? [e.payload.trailerId] : []));
+}
+
 const RESULT: EpochResult = {
   epochId: "e",
   scopeHash: "h",
@@ -76,7 +81,7 @@ describe("makeCoalescedRunner — single-flight + dirty coalescing", () => {
 
     // Only the first job started; the rest coalesced into a pending buffer.
     expect(d.calls).toHaveLength(1);
-    expect(d.calls[0]!.events.map((e) => e.payload.trailerId)).toEqual(["A"]);
+    expect(trailerIdsOf(d.calls[0]!.events)).toEqual(["A"]);
   });
 
   it("runs a second job after settle carrying the UNION of pending events + LATEST simMs", async () => {
@@ -93,7 +98,7 @@ describe("makeCoalescedRunner — single-flight + dirty coalescing", () => {
     await flush();
 
     expect(d.calls).toHaveLength(2);
-    expect(d.calls[1]!.events.map((e) => e.payload.trailerId)).toEqual(["B", "C"]);
+    expect(trailerIdsOf(d.calls[1]!.events)).toEqual(["B", "C"]);
     expect(d.calls[1]!.simMs).toBe(3000); // the LATEST simMs, not the first
   });
 
@@ -138,7 +143,7 @@ describe("makeCoalescedRunner — single-flight + dirty coalescing", () => {
     d.resolve(2);
     await c.whenIdle();
 
-    const seen = d.calls.flatMap((call) => call.events.map((e) => e.payload.trailerId));
+    const seen = d.calls.flatMap((call) => trailerIdsOf(call.events));
     expect(seen.sort()).toEqual(["A", "B", "C", "D", "E"]);
   });
 
@@ -153,7 +158,7 @@ describe("makeCoalescedRunner — single-flight + dirty coalescing", () => {
     d.reject(0); // job 0 REJECTS — coalescer must not wedge; it runs pending next
     await flush();
     expect(d.calls).toHaveLength(2);
-    expect(d.calls[1]!.events.map((e) => e.payload.trailerId)).toEqual(["B"]);
+    expect(trailerIdsOf(d.calls[1]!.events)).toEqual(["B"]);
 
     d.reject(1); // even a second rejection drains to idle
     await expect(c.whenIdle()).resolves.toBeUndefined();
