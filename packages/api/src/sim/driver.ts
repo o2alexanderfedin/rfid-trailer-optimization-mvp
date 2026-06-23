@@ -508,12 +508,13 @@ export async function driveSimulationPaced(
   let cursor = 0n;
 
   /**
-   * The per-tick body (a)–(e): append OCC per stream → departed-hub tracking →
-   * inline projection → detection → catch-up. Shared closure (DRY) over the
-   * cross-tick `cursor`/`departedHubs`; identical semantics to `driveTickStream`.
+   * (a)+(b): append ONE tick's events (OCC-safe per stream, with the tick's own
+   * domain `occurredAt`) and track departed hubs for the SNS-05 gate (accumulates
+   * across ticks). Appends MUST stay per-tick: `appendToStream` stamps a single
+   * `occurred_at` on the whole call, and each tick is a distinct domain timestamp,
+   * so coalescing appends across ticks would corrupt domain time (geo-track/audit).
    */
-  async function applyTick(tick: SimulatedEvent[]): Promise<void> {
-    // (a) Append this tick's events (OCC-safe per stream).
+  async function appendTick(tick: SimulatedEvent[]): Promise<void> {
     const perStream = new Map<string, SimulatedEvent[]>();
     for (const item of tick) {
       const buf = perStream.get(item.streamId) ?? [];
@@ -535,7 +536,6 @@ export async function driveSimulationPaced(
       );
     }
 
-    // (b) Track departed hubs for the SNS-05 gate (accumulates across ticks).
     if (detectionOn) {
       for (const item of tick) {
         if (item.event.type === "TrailerDeparted") {
@@ -543,8 +543,19 @@ export async function driveSimulationPaced(
         }
       }
     }
+  }
 
-    // (c) Inline projection (read-your-writes).
+  /**
+   * (c)+(d)+(e): the heavy DB folds, run ONCE per FRAME over every event appended
+   * since `cursor` (spec §4 — "project once"). Folding `readAll(cursor)` in one
+   * pass is identical in effect to folding each tick separately (applyInline is a
+   * per-event, order-preserving reducer), but collapses the per-tick projection
+   * transaction + detection + catch-up — the dominant per-tick cost — to once per
+   * frame, which is what unsticks broadcast density at high speed / large fleets.
+   * `driveTickStream` (the synchronous, non-paced path) is unchanged.
+   */
+  async function foldFrame(): Promise<void> {
+    // (c) Inline projection (read-your-writes) over the whole frame's events.
     const fresh = await readAll(es, cursor);
     if (fresh.length > 0) {
       await opts.db.transaction().execute(async (trx) => {
@@ -554,7 +565,7 @@ export async function driveSimulationPaced(
       cursor = fresh[fresh.length - 1]!.globalSeq;
     }
 
-    // (d) Detection (PLANNED vs OBSERVED → exceptions).
+    // (d) Detection once over the frame's folded state (PLANNED vs OBSERVED).
     if (detectionOn) {
       await runDetection(
         detectorReads(opts.db, es, destHub, departedHubs),
@@ -570,7 +581,7 @@ export async function driveSimulationPaced(
       }
     }
 
-    // (e) Catch-up projections (audit timeline + geo-track).
+    // (e) Catch-up projections (audit timeline + geo-track) once per frame.
     await runCatchup(catchupView(opts.db), replayReadAll);
   }
 
@@ -593,31 +604,38 @@ export async function driveSimulationPaced(
   let pendingOptEvents: SimulatedEvent["event"][] = [];
   let lastOptTickMs = 0;
 
-  // Process exactly the ticks selected for THIS frame (in order), running the
-  // per-tick body + landmark optimizer triggers. Returns the simMs to broadcast.
+  // Process exactly the ticks selected for THIS frame (in order): append each
+  // tick (per-tick `occurredAt`), then fold the whole batch ONCE, then fire the
+  // coalesced optimizer landmark. Returns the simMs to broadcast for the frame.
   async function drainFrame(count: number, clampSimClock: number): Promise<number> {
+    if (count === 0) return clampSimClock;
     let broadcastSimMs = clampSimClock;
+    // (a)+(b) append every drained tick (per-tick); collect the optimizer batch.
     for (let k = 0; k < count; k += 1) {
       const idx = nextIndex;
       const tick = ticks[idx]!;
       const tickMs = tickTimesMs[idx]!;
-      await applyTick(tick);
-
-      // Optimizer landmark (sim-time cadence): batch events, fire NON-blocking
-      // every `optEvery` drained ticks (and after the very last tick).
+      await appendTick(tick);
       for (const item of tick) pendingOptEvents.push(item.event);
       lastOptTickMs = tickMs;
-      ticksSinceOpt += 1;
-      const isLastTick = idx >= ticks.length - 1;
-      if (ticksSinceOpt >= optEvery || isLastTick) {
-        coalescer.trigger(pendingOptEvents, lastOptTickMs);
-        pendingOptEvents = [];
-        ticksSinceOpt = 0;
-      }
-
       broadcastSimMs = tickMs;
       nextIndex += 1;
     }
+
+    // (c)+(d)+(e) ONE batched fold/detection/catch-up over the whole frame.
+    await foldFrame();
+
+    // Optimizer landmark (sim-time cadence): fire NON-blocking AFTER the fold (so
+    // the snapshot reflects the frame) every `optEvery` drained ticks, and once
+    // more after the final tick of the stream drains.
+    ticksSinceOpt += count;
+    const lastDrained = nextIndex >= ticks.length;
+    if (ticksSinceOpt >= optEvery || lastDrained) {
+      coalescer.trigger(pendingOptEvents, lastOptTickMs);
+      pendingOptEvents = [];
+      ticksSinceOpt = 0;
+    }
+
     return broadcastSimMs;
   }
 

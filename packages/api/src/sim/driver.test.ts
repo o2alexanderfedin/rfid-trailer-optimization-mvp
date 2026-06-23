@@ -394,8 +394,10 @@ describe("driveSimulationPaced — accumulator loop body (fixed cadence + batch)
     // Everything drained in a single frame ⇒ broadcasts << ticks (1 frame + final).
     expect(broadcasts.length).toBeLessThanOrEqual(result.ticks);
     expect(broadcasts.length).toBeGreaterThanOrEqual(1);
-    // runCatchup ran once per DRAINED tick (per-tick body still runs per tick).
-    expect(runCatchupSpy.mock.calls.length).toBe(result.ticks);
+    // BATCHED: the heavy DB folds run ONCE per FRAME, not per tick — leaping the
+    // whole horizon in one frame ⇒ exactly ONE catch-up for all drained ticks.
+    expect(runCatchupSpy.mock.calls.length).toBe(1);
+    expect(runCatchupSpy.mock.calls.length).toBeLessThan(result.ticks);
   });
 
   it("budget carry: maxTicksPerFrame:1 drains across multiple frames; all events still delivered", async () => {
@@ -467,22 +469,45 @@ describe("driveSimulationPaced — accumulator loop body (fixed cadence + batch)
     expect(allDeliveredEvents(a.loopCalls).length).toBeGreaterThan(0);
   });
 
-  it("returns { ticks }; the OCC append path + catch-up projections ran per tick", async () => {
+  it("returns { ticks }; the OCC append path ran per tick; catch-up batched per frame", async () => {
     const { result, broadcasts } = await driveWith({});
     expect(result.ticks).toBeGreaterThanOrEqual(1);
     expect(broadcasts.length).toBeGreaterThanOrEqual(1);
-    // runCatchup is invoked once per DRAINED tick (the catch-up projection advance).
-    expect(runCatchupSpy.mock.calls.length).toBe(result.ticks);
-    // The OCC append path was exercised (per-stream appends happened).
+    // Catch-up is BATCHED per frame: it runs at most once per drained tick
+    // (≤ ticks; fewer when several ticks drain in one frame), and at least once.
+    expect(runCatchupSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(runCatchupSpy.mock.calls.length).toBeLessThanOrEqual(result.ticks);
+    // The OCC append path was exercised per tick (per-stream appends happened).
     expect(appendSpy.mock.calls.length).toBeGreaterThan(0);
   });
 
-  it("with rfid enabled the detection branch runs once per drained tick", async () => {
+  it("with rfid enabled the detection branch runs (batched per frame)", async () => {
     const { result, broadcasts } = await driveWith({ rfid: {} });
     expect(result.ticks).toBeGreaterThanOrEqual(1);
     expect(broadcasts.length).toBeGreaterThanOrEqual(1);
-    // Detection runs once per drained tick (the no-op detector spy).
-    expect(runDetectionSpy.mock.calls.length).toBe(result.ticks);
+    // Detection is BATCHED per frame (≤ ticks, ≥ 1) — once over each frame's
+    // folded state rather than once per tick.
+    expect(runDetectionSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(runDetectionSpy.mock.calls.length).toBeLessThanOrEqual(result.ticks);
+  });
+
+  it("BATCHING: projection fold + detection + catch-up run ONCE per frame; appends stay per tick", async () => {
+    // Leap the WHOLE horizon in a single frame (huge multiplier, large budget) with
+    // rfid on. The heavy DB folds (inline projection / detection / catch-up) must
+    // collapse to exactly ONE run for the whole drained batch, while the OCC append
+    // path still runs per tick (per-tick `occurredAt` is preserved — appends cannot
+    // be coalesced across ticks because each tick is a distinct domain timestamp).
+    const { result } = await driveWith({
+      rfid: {},
+      getMultiplier: () => 1e12,
+      maxTicksPerFrame: 4096,
+    });
+    expect(result.ticks).toBeGreaterThanOrEqual(2);
+    // One frame drained everything ⇒ exactly one catch-up + one detection.
+    expect(runCatchupSpy.mock.calls.length).toBe(1);
+    expect(runDetectionSpy.mock.calls.length).toBe(1);
+    // Appends remain per tick (≥ one per drained tick).
+    expect(appendSpy.mock.calls.length).toBeGreaterThanOrEqual(result.ticks);
   });
 
   it("absent getMultiplier defaults to 1× and the run still completes", async () => {
