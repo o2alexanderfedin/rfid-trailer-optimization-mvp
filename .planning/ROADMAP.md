@@ -178,7 +178,7 @@
 | 12. Driver relay / swap at hubs | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 13. Driver-status projection + tables | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 14. Hub-detail endpoint + ws driver buckets | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
-| 15. Optimizer HOS-aware | v1.2 | 0/— | ⬜ Not started | — |
+| 15. Optimizer HOS-aware | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 16. Optimizer HOS-enforced | v1.2 | 0/— | ⬜ Not started | — |
 | 17. Hub Detail panel UI + map duty styling | v1.2 | 0/— | ⬜ Not started | — |
 | 18. README features + screenshots | v1.2 | 0/— | ⬜ Not started | — |

@@ -7,10 +7,10 @@ last_updated: "2026-06-22T08:59:23.428Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 10
-  completed_phases: 6
-  total_plans: 6
-  completed_plans: 6
-  percent: 60
+  completed_phases: 7
+  total_plans: 7
+  completed_plans: 7
+  percent: 70
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: 15 (next) — Phases 9–14 ✅ complete
+Phase: 16 (next) — Phases 9–15 ✅ complete
 Plan: —
-Status: Autonomous build in progress (6/10 phases). Phases 9–14 merged to develop. (Kept sequential — testcontainers contention.)
-Last activity: 2026-06-22 — Phase 14 PASSED (GET /api/hubs/:id/detail + ws driver buckets, HUBQ-01..08; DRY plan helper, slice-util, dwell from audit_timeline, est ETA; hub-detail int test 8/8; build 10/10, typecheck 0, lint 0, 1386 tests)
+Status: Autonomous build in progress (7/10 phases). Phases 9–15 merged to develop.
+Last activity: 2026-06-22 — Phase 15 PASSED (optimizer HOS-aware: TwinDriver in snapshot, soft restCost weight neutral-by-default; glpk oracle + planner-vs-validator green, default reproduces prior plans; build 10/10, typecheck 0, lint 0, 1398 tests)
 
 ## Performance Metrics
 
