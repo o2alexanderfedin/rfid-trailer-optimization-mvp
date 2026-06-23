@@ -27,6 +27,41 @@ export interface TrailerStateTable {
   trip_id: string | null;
   dock_door_id: string | null;
   assigned_package_ids: ColumnType<string[], string, string>;
+  /** PRJ-02: the driver bound to the trailer's trip (join-free hub detail). */
+  driver_id: string | null;
+  last_event_at: ColumnType<Date, string | Date, string | Date>;
+}
+
+/**
+ * PRJ-01/PRJ-02: a driver's current duty status + HOS summary, one row per
+ * driver. `driver_id` is the identity so re-applying a fold is an idempotent
+ * upsert. The HOS-derived fields are computed by the Phase-10 engine from the
+ * `HosClock` snapshot carried in `DriverDutyStateChanged`; `duty_window_deadline`
+ * is the 14h ABSOLUTE deadline (nullable until the first duty transition).
+ */
+export interface DriverStatusTable {
+  driver_id: string;
+  status: string;
+  remaining_drive_minutes: number;
+  duty_window_deadline: ColumnType<Date, string | Date, string | Date> | null;
+  total_driven_minutes: number;
+  weekly_on_duty_min: number;
+  current_hub_id: string | null;
+  current_trip_id: string | null;
+  last_event_at: ColumnType<Date, string | Date, string | Date>;
+}
+
+/**
+ * PRJ-02: the driver↔trip/trailer assignment row (one per driver), for join-free
+ * hub-detail queries. `driver_id` is the identity; `trip_id`/`trailer_id` are
+ * `null` when the driver is free (e.g. after a relay swap releases the outgoing
+ * driver). `hub_id` is the hub the driver is currently at.
+ */
+export interface DriverAssignmentTable {
+  driver_id: string;
+  trip_id: string | null;
+  trailer_id: string | null;
+  hub_id: string | null;
   last_event_at: ColumnType<Date, string | Date, string | Date>;
 }
 
@@ -157,6 +192,8 @@ export type TagRegistryRow = Selectable<TagRegistryTable>;
 export type ZoneEstimateRow = Selectable<ZoneEstimateTable>;
 export type TrailerStateRow = Selectable<TrailerStateTable>;
 export type HubInventoryRow = Selectable<HubInventoryTable>;
+export type DriverStatusRow = Selectable<DriverStatusTable>;
+export type DriverAssignmentRow = Selectable<DriverAssignmentTable>;
 export type AuditTimelineRow = Selectable<AuditTimelineTable>;
 export type GeoRouteRow = Selectable<GeoRouteTable>;
 export type GeoKeyframeRow = Selectable<GeoKeyframeTable>;
@@ -172,6 +209,8 @@ export interface ProjectionDatabase {
   package_location: PackageLocationTable;
   trailer_state: TrailerStateTable;
   hub_inventory: HubInventoryTable;
+  driver_status: DriverStatusTable;
+  driver_assignment: DriverAssignmentTable;
   tag_registry: TagRegistryTable;
   zone_estimate: ZoneEstimateTable;
   exceptions: ExceptionsTable;
@@ -192,6 +231,8 @@ export const OPERATIONAL_PROJECTIONS = [
   "package-location",
   "trailer-state",
   "hub-inventory",
+  "driver-status",
+  "driver-assignment",
   "tag-registry",
   "zone-estimate",
   "exceptions",
@@ -229,7 +270,9 @@ CREATE TABLE IF NOT EXISTS package_location (
   last_seen_at TIMESTAMPTZ      NOT NULL
 );
 
--- FND-06: a trailer's current state / assignment.
+-- FND-06: a trailer's current state / assignment. \`driver_id\` (PRJ-02) is the
+-- driver bound to the trailer's trip, stamped from the driver-lifecycle events so
+-- the hub-detail panel reads it join-free.
 CREATE TABLE IF NOT EXISTS trailer_state (
   trailer_id           TEXT PRIMARY KEY,
   status               TEXT        NOT NULL,
@@ -237,8 +280,14 @@ CREATE TABLE IF NOT EXISTS trailer_state (
   trip_id              TEXT,
   dock_door_id         TEXT,
   assigned_package_ids JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  driver_id            TEXT,
   last_event_at        TIMESTAMPTZ NOT NULL
 );
+
+-- PRJ-02: a reverse index for the hub-detail query (trailers AT a hub). Without
+-- it, \`WHERE current_hub_id = :hubId\` is a full-table scan per hub click.
+CREATE INDEX IF NOT EXISTS idx_trailer_state_current_hub
+  ON trailer_state (current_hub_id);
 
 -- FND-07: per-hub inventory, bucketed inbound / outbound / staged.
 CREATE TABLE IF NOT EXISTS hub_inventory (
@@ -246,6 +295,35 @@ CREATE TABLE IF NOT EXISTS hub_inventory (
   inbound  JSONB NOT NULL DEFAULT '[]'::jsonb,
   outbound JSONB NOT NULL DEFAULT '[]'::jsonb,
   staged   JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+
+-- PRJ-01/PRJ-02: a driver's current duty status + HOS summary (one row per
+-- driver). The HOS-derived numbers (\`remaining_drive_minutes\`,
+-- \`duty_window_deadline\`) are computed by the Phase-10 engine from the HosClock
+-- snapshot in DriverDutyStateChanged; \`duty_window_deadline\` is the 14h ABSOLUTE
+-- deadline (nullable until the first duty transition carries a clock). Feeds the
+-- Phase-14 hub-detail panel (driver duty status + remaining legal drive time).
+CREATE TABLE IF NOT EXISTS driver_status (
+  driver_id               TEXT PRIMARY KEY,
+  status                  TEXT        NOT NULL,
+  remaining_drive_minutes INTEGER     NOT NULL DEFAULT 0,
+  duty_window_deadline    TIMESTAMPTZ,
+  total_driven_minutes    INTEGER     NOT NULL DEFAULT 0,
+  weekly_on_duty_min      INTEGER     NOT NULL DEFAULT 0,
+  current_hub_id          TEXT,
+  current_trip_id         TEXT,
+  last_event_at           TIMESTAMPTZ NOT NULL
+);
+
+-- PRJ-02: the driver -> trip/trailer assignment (one row per driver) for
+-- join-free hub-detail queries. trip_id/trailer_id are null when the driver is
+-- free (e.g. after a relay swap releases the outgoing driver).
+CREATE TABLE IF NOT EXISTS driver_assignment (
+  driver_id     TEXT PRIMARY KEY,
+  trip_id       TEXT,
+  trailer_id    TEXT,
+  hub_id        TEXT,
+  last_event_at TIMESTAMPTZ NOT NULL
 );
 
 -- SNS-02: the tag -> package registry, folded from PackageCreated.rfidTagId.

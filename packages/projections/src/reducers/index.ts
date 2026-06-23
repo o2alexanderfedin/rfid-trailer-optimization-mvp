@@ -22,6 +22,20 @@ export type {
 } from "./hub-inventory.js";
 export { emptyHubInventoryState, hubInventoryReducer } from "./hub-inventory.js";
 
+// --- PRJ-01: driver duty status + HOS summary -------------------------------
+export type { DriverStatus, DriverStatusState } from "./driver-status.js";
+export { driverStatusReducer, emptyDriverStatusState } from "./driver-status.js";
+
+// --- PRJ-02: driver -> trip/trailer assignment ------------------------------
+export type {
+  DriverAssignment,
+  DriverAssignmentState,
+} from "./driver-assignment.js";
+export {
+  driverAssignmentReducer,
+  emptyDriverAssignmentState,
+} from "./driver-assignment.js";
+
 // --- SNS-02: tag -> package registry ----------------------------------------
 export type { TagRegistryState } from "./tag-registry.js";
 export {

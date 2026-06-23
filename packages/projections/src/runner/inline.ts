@@ -1,5 +1,5 @@
 import type { ColumnType, Kysely } from "kysely";
-import type { DomainEvent } from "@mm/domain";
+import type { DomainEvent, DutyStatus } from "@mm/domain";
 import type {
   OperationalProjectionName,
   ProjectionDatabase,
@@ -7,6 +7,12 @@ import type {
 import { OPERATIONAL_PROJECTIONS } from "../schema.js";
 import { DEFAULT_FUSION_CONFIG } from "@mm/sensor-fusion";
 import {
+  type DriverAssignmentState,
+  driverAssignmentReducer,
+  emptyDriverAssignmentState,
+  type DriverStatusState,
+  driverStatusReducer,
+  emptyDriverStatusState,
   type ExceptionKind,
   type ExceptionsState,
   exceptionsReducer,
@@ -158,6 +164,7 @@ async function applyTrailerState(
         tripId: r.trip_id,
         dockDoorId: r.dock_door_id,
         assignedPackageIds: r.assigned_package_ids,
+        driverId: r.driver_id,
         lastEventAt: toIso(r.last_event_at),
       },
     ]),
@@ -173,6 +180,7 @@ async function applyTrailerState(
         trip_id: t.tripId,
         dock_door_id: t.dockDoorId,
         assigned_package_ids: JSON.stringify(t.assignedPackageIds),
+        driver_id: t.driverId,
         last_event_at: t.lastEventAt,
       })
       .onConflict((oc) =>
@@ -182,7 +190,103 @@ async function applyTrailerState(
           trip_id: t.tripId,
           dock_door_id: t.dockDoorId,
           assigned_package_ids: JSON.stringify(t.assignedPackageIds),
+          driver_id: t.driverId,
           last_event_at: t.lastEventAt,
+        }),
+      )
+      .execute();
+  }
+}
+
+async function applyDriverStatus(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  const rows = await db.selectFrom("driver_status").selectAll().execute();
+  const state: DriverStatusState = new Map(
+    rows.map((r) => [
+      r.driver_id,
+      {
+        driverId: r.driver_id,
+        status: asDutyStatus(r.status),
+        remainingDriveMinutes: r.remaining_drive_minutes,
+        dutyWindowDeadline:
+          r.duty_window_deadline === null ? null : toIso(r.duty_window_deadline),
+        totalDrivenMinutes: r.total_driven_minutes,
+        weeklyOnDutyMin: r.weekly_on_duty_min,
+        currentHubId: r.current_hub_id,
+        currentTripId: r.current_trip_id,
+        lastEventAt: toIso(r.last_event_at),
+      },
+    ]),
+  );
+  const next = driverStatusReducer(state, toOccurred(replay));
+  if (next === state) return; // non-driver event ⇒ nothing to persist
+  for (const d of next.values()) {
+    await db
+      .insertInto("driver_status")
+      .values({
+        driver_id: d.driverId,
+        status: d.status,
+        remaining_drive_minutes: d.remainingDriveMinutes,
+        duty_window_deadline: d.dutyWindowDeadline,
+        total_driven_minutes: d.totalDrivenMinutes,
+        weekly_on_duty_min: d.weeklyOnDutyMin,
+        current_hub_id: d.currentHubId,
+        current_trip_id: d.currentTripId,
+        last_event_at: d.lastEventAt,
+      })
+      .onConflict((oc) =>
+        oc.column("driver_id").doUpdateSet({
+          status: d.status,
+          remaining_drive_minutes: d.remainingDriveMinutes,
+          duty_window_deadline: d.dutyWindowDeadline,
+          total_driven_minutes: d.totalDrivenMinutes,
+          weekly_on_duty_min: d.weeklyOnDutyMin,
+          current_hub_id: d.currentHubId,
+          current_trip_id: d.currentTripId,
+          last_event_at: d.lastEventAt,
+        }),
+      )
+      .execute();
+  }
+}
+
+async function applyDriverAssignment(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  const rows = await db.selectFrom("driver_assignment").selectAll().execute();
+  const state: DriverAssignmentState = new Map(
+    rows.map((r) => [
+      r.driver_id,
+      {
+        driverId: r.driver_id,
+        tripId: r.trip_id,
+        trailerId: r.trailer_id,
+        hubId: r.hub_id,
+        lastEventAt: toIso(r.last_event_at),
+      },
+    ]),
+  );
+  const next = driverAssignmentReducer(state, toOccurred(replay));
+  if (next === state) return; // non-driver event ⇒ nothing to persist
+  for (const a of next.values()) {
+    await db
+      .insertInto("driver_assignment")
+      .values({
+        driver_id: a.driverId,
+        trip_id: a.tripId,
+        trailer_id: a.trailerId,
+        hub_id: a.hubId,
+        last_event_at: a.lastEventAt,
+      })
+      .onConflict((oc) =>
+        oc.column("driver_id").doUpdateSet({
+          trip_id: a.tripId,
+          trailer_id: a.trailerId,
+          hub_id: a.hubId,
+          last_event_at: a.lastEventAt,
         }),
       )
       .execute();
@@ -396,6 +500,10 @@ const APPLIERS: ReadonlyArray<{ name: OperationalProjectionName; apply: Applier 
   { name: "package-location", apply: applyPackageLocation },
   { name: "trailer-state", apply: applyTrailerState },
   { name: "hub-inventory", apply: applyHubInventory },
+  // PRJ-01/PRJ-02 driver read models (OPERATIONAL, read-your-writes). They fold
+  // ONLY the driver-lifecycle events; order vs the others is immaterial.
+  { name: "driver-status", apply: applyDriverStatus },
+  { name: "driver-assignment", apply: applyDriverAssignment },
   // tag-registry MUST precede zone-estimate: a PackageCreated in this event
   // registers the tag BEFORE the zone-estimate applier resolves a same-call
   // RfidObserved against the persisted registry (read-your-writes within one
@@ -458,17 +566,24 @@ export interface OperationalTwin {
     string,
     { hubId: string; inbound: readonly string[]; outbound: readonly string[]; staged: readonly string[] }
   >;
+  /** PRJ-01: driver duty status + HOS summary, keyed by driverId. */
+  readonly driverStatus: DriverStatusState;
+  /** PRJ-02: driver -> trip/trailer assignment, keyed by driverId. */
+  readonly driverAssignment: DriverAssignmentState;
 }
 
 /** Read the full operational twin from the persisted projection tables. */
 export async function readOperationalTwin(
   db: Kysely<ProjectionDb>,
 ): Promise<OperationalTwin> {
-  const [pkgRows, trailerRows, hubRows] = await Promise.all([
-    db.selectFrom("package_location").selectAll().execute(),
-    db.selectFrom("trailer_state").selectAll().execute(),
-    db.selectFrom("hub_inventory").selectAll().execute(),
-  ]);
+  const [pkgRows, trailerRows, hubRows, driverRows, assignmentRows] =
+    await Promise.all([
+      db.selectFrom("package_location").selectAll().execute(),
+      db.selectFrom("trailer_state").selectAll().execute(),
+      db.selectFrom("hub_inventory").selectAll().execute(),
+      db.selectFrom("driver_status").selectAll().execute(),
+      db.selectFrom("driver_assignment").selectAll().execute(),
+    ]);
 
   const packageLocation: PackageLocationState = pkgRows.length
     ? new Map(
@@ -495,6 +610,7 @@ export async function readOperationalTwin(
             tripId: r.trip_id,
             dockDoorId: r.dock_door_id,
             assignedPackageIds: r.assigned_package_ids,
+            driverId: r.driver_id,
             lastEventAt: toIso(r.last_event_at),
           },
         ]),
@@ -508,7 +624,50 @@ export async function readOperationalTwin(
     ]),
   );
 
-  return { packageLocation, trailerState, hubInventory };
+  const driverStatus: DriverStatusState = driverRows.length
+    ? new Map(
+        driverRows.map((r) => [
+          r.driver_id,
+          {
+            driverId: r.driver_id,
+            status: asDutyStatus(r.status),
+            remainingDriveMinutes: r.remaining_drive_minutes,
+            dutyWindowDeadline:
+              r.duty_window_deadline === null
+                ? null
+                : toIso(r.duty_window_deadline),
+            totalDrivenMinutes: r.total_driven_minutes,
+            weeklyOnDutyMin: r.weekly_on_duty_min,
+            currentHubId: r.current_hub_id,
+            currentTripId: r.current_trip_id,
+            lastEventAt: toIso(r.last_event_at),
+          },
+        ]),
+      )
+    : emptyDriverStatusState;
+
+  const driverAssignment: DriverAssignmentState = assignmentRows.length
+    ? new Map(
+        assignmentRows.map((r) => [
+          r.driver_id,
+          {
+            driverId: r.driver_id,
+            tripId: r.trip_id,
+            trailerId: r.trailer_id,
+            hubId: r.hub_id,
+            lastEventAt: toIso(r.last_event_at),
+          },
+        ]),
+      )
+    : emptyDriverAssignmentState;
+
+  return {
+    packageLocation,
+    trailerState,
+    hubInventory,
+    driverStatus,
+    driverAssignment,
+  };
 }
 
 /** All operational projection names — re-exported for rebuild's checkpoint reset. */
@@ -522,6 +681,12 @@ const STATUSES = new Set(["in_transit", "arrived", "docked"]);
 function asStatus(value: string): "in_transit" | "arrived" | "docked" {
   if (STATUSES.has(value)) return value as "in_transit" | "arrived" | "docked";
   throw new Error(`Unknown trailer status in projection row: ${value}`);
+}
+
+const DUTY_STATUSES = new Set(["driving", "on_break", "resting", "off_duty"]);
+function asDutyStatus(value: string): DutyStatus {
+  if (DUTY_STATUSES.has(value)) return value as DutyStatus;
+  throw new Error(`Unknown driver duty status in projection row: ${value}`);
 }
 
 const ZONE_VALUES = new Set(["rear", "middle", "nose"]);
