@@ -1,4 +1,11 @@
-import type { DomainEvent, PlanAccepted, PlanGenerated, TimingConfig } from "@mm/domain";
+import type {
+  DomainEvent,
+  HosClock,
+  HosConfig,
+  PlanAccepted,
+  PlanGenerated,
+  TimingConfig,
+} from "@mm/domain";
 
 import type { ObjectiveBreakdown, ObjectiveWeights } from "../objective/types.js";
 import type { OptimizerScope } from "../graph/types.js";
@@ -65,6 +72,20 @@ export interface TwinDriver {
    * `remaining_drive_minutes`. Higher = more rested = soft-preferred.
    */
   readonly remainingDriveMinutes: number;
+  /**
+   * OPT-HOS-02 (Phase 16) — OPTIONAL full per-shift HOS clock (DRV-02), read
+   * DETERMINISTICALLY off the `driver_status` projection. When present (and ONLY
+   * then), the epoch runs the HARD HOS gate via the shared Phase-10 engine: a
+   * trailer whose assigned driver cannot legally complete its route is
+   * INFEASIBLE. Absent ⇒ the Phase-15 SOFT-only behavior (no hard gate) — every
+   * pre-Phase-16 twin reproduces its prior verdict byte-identically.
+   */
+  readonly hosClock?: HosClock;
+  /**
+   * OPT-HOS-02 — OPTIONAL FMCSA limits for the hard gate; defaults to
+   * `DEFAULT_HOS_CONFIG` when omitted (the demo full-rule set).
+   */
+  readonly hosConfig?: HosConfig;
 }
 
 /**

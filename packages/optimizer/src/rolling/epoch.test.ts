@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DomainEvent } from "@mm/domain";
+import { DEFAULT_HOS_CONFIG, type DomainEvent, type HosClock } from "@mm/domain";
 
 import { DEFAULT_OBJECTIVE_WEIGHTS } from "../objective/weights.js";
 import { detectAffectedScope } from "./scope.js";
@@ -517,6 +517,106 @@ describe("runEpoch OPT-HOS-01 — soft driver-HOS awareness (neutral by DEFAULT)
     const inp = (): EpochInput => ({ events, twinSnapshot: twoDriverSnapshot(540, 90) });
     const a = runEpoch(EPOCH_HOS, inp(), weights);
     const b = runEpoch(EPOCH_HOS, inp(), weights);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OPT-HOS-02 / OPT-HOS-03 — HARD HOS enforcement in the live epoch (Phase 16).
+//
+// When a trailer's `driver` carries a full `hosClock`, the epoch runs the OPT-HOS-02
+// hard gate: a trailer whose assigned driver cannot legally complete its route is
+// INFEASIBLE, and OPT-HOS-03 surfaces an `insertRest`/`relay` recommendation through
+// the existing `localRepair → EpochRecommendation` path — WITHOUT crashing the epoch.
+// A trailer with NO `hosClock` (Phase-15 soft-only) keeps its prior verdict.
+// ---------------------------------------------------------------------------
+
+/** A fresh HosClock anchored at epoch-minute `t`, with overrides. */
+function hosClockAt(t: number, over: Partial<HosClock> = {}): HosClock {
+  const iso = new Date(t * 60_000).toISOString();
+  return {
+    driveTodayMin: 0,
+    dutyWindowStartAt: iso,
+    sinceLastBreakMin: 0,
+    weeklyOnDutyMin: 0,
+    comeOnDutyAt: iso,
+    sleeperBerthLongMin: 0,
+    sleeperBerthShortMin: 0,
+    ...over,
+  };
+}
+
+describe("runEpoch OPT-HOS-02/03 — hard HOS enforcement + insertRest/relay recovery", () => {
+  // departureMin 300 — past the freeze window; a long 30-min leg the depleted
+  // driver (only 5 legal drive minutes left) cannot legally complete.
+  function depletedSnapshot(): TwinSnapshot {
+    return {
+      hubs: ["H1", "H2"],
+      routes: [{ routeId: "R1", fromHubId: "H1", toHubId: "H2", travelMin: 30, capacity: 20 }],
+      trailers: [
+        {
+          trailerId: "T_HOS",
+          currentHubId: "H1",
+          departureMin: 300,
+          capacity: 20,
+          route: [{ hubId: "H2", stopIndex: 0 }],
+          blocks: [{ blockId: "B1", nextUnloadHubId: "H2", volume: 6 }],
+          driver: {
+            driverId: "DX",
+            remainingDriveMinutes: 5,
+            // Phase 16 — the full clock that activates the HARD gate (driveToday
+            // 655 of 660 ⇒ only 5 legal minutes left for a 30-min leg).
+            hosClock: hosClockAt(300, { driveTodayMin: 655 }),
+            hosConfig: DEFAULT_HOS_CONFIG,
+          },
+        },
+      ],
+    };
+  }
+  const EPOCH_E: Epoch = { epochId: "e-hos2", nowMin: 100, freezeWindowMin: 15 };
+  const events: readonly DomainEvent[] = [departed("T_HOS", "H1", "H2")];
+
+  it("a depleted driver makes the trailer HOS-INFEASIBLE (hard gate fires)", () => {
+    const result = runEpoch(EPOCH_E, { events, twinSnapshot: depletedSnapshot() }, DEFAULT_OBJECTIVE_WEIGHTS);
+    const rec = result.recommendations.find((r) => r.trailerId === "T_HOS")!;
+    expect(rec.feasible).toBe(false);
+  });
+
+  it("surfaces an insertRest OR relay recommendation (OPT-HOS-03) without crashing", () => {
+    let result!: ReturnType<typeof runEpoch>;
+    expect(() => {
+      result = runEpoch(EPOCH_E, { events, twinSnapshot: depletedSnapshot() }, DEFAULT_OBJECTIVE_WEIGHTS);
+    }).not.toThrow();
+    const rec = result.recommendations.find((r) => r.trailerId === "T_HOS")!;
+    expect(rec.repairRecommendations).toBeDefined();
+    const kinds = new Set(rec.repairRecommendations!.map((r) => r.kind));
+    expect(kinds.has("insertRest") || kinds.has("relay")).toBe(true);
+    // The HOS recovery names the driver (explainable).
+    const hosRec = rec.repairRecommendations!.find(
+      (r) => r.kind === "insertRest" || r.kind === "relay",
+    )!;
+    expect(hosRec.rationale).toContain("DX");
+  });
+
+  it("a trailer WITHOUT a full hosClock keeps its prior (non-HOS-gated) verdict", () => {
+    // Phase-15 soft-only driver (remainingDriveMinutes but NO hosClock) ⇒ the hard
+    // gate does NOT fire; the trailer stays feasible (window/LIFO are fine).
+    const softOnly: TwinSnapshot = {
+      ...depletedSnapshot(),
+      trailers: depletedSnapshot().trailers.map((t) => ({
+        ...t,
+        driver: { driverId: "DX", remainingDriveMinutes: 5 },
+      })),
+    };
+    const result = runEpoch(EPOCH_E, { events, twinSnapshot: softOnly }, DEFAULT_OBJECTIVE_WEIGHTS);
+    const rec = result.recommendations.find((r) => r.trailerId === "T_HOS")!;
+    expect(rec.feasible).toBe(true);
+  });
+
+  it("PURITY: identical HOS-enforced inputs ⇒ byte-identical result (deterministic)", () => {
+    const inp = (): EpochInput => ({ events, twinSnapshot: depletedSnapshot() });
+    const a = runEpoch(EPOCH_E, inp(), DEFAULT_OBJECTIVE_WEIGHTS);
+    const b = runEpoch(EPOCH_E, inp(), DEFAULT_OBJECTIVE_WEIGHTS);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
