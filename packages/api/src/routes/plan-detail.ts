@@ -1,17 +1,18 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Kysely } from "kysely";
-import type { LoadBlock, RouteStop, TrailerSlice } from "@mm/domain";
-import { DEFAULT_PLANNER_CONFIG } from "@mm/domain";
-import {
-  instructions,
-  planExplanation,
-  planLoad,
-  type LoadingInstructions,
-  type LoadPlan,
-} from "@mm/load-planner";
+import type { LoadingInstructions } from "@mm/load-planner";
 import type { CatchupDb } from "@mm/projections";
 import { readTrailerAuditTimeline } from "@mm/projections";
 import type { ApiDb } from "./queries.js";
+import {
+  reconstructTrailerPlan,
+  readHubOutboundIndex,
+  readRouteDestHubs,
+  type RearToNoseSlice,
+} from "./load-plan-helper.js";
+
+// Re-export the shared slice DTO so existing consumers keep importing it from here.
+export type { RearToNoseSlice } from "./load-plan-helper.js";
 
 /**
  * `GET /trailers/:id/plan` (VIZ-05) and `GET /trailers/:id/history` (UI-02).
@@ -41,14 +42,6 @@ import type { ApiDb } from "./queries.js";
 // Wire DTOs
 // ---------------------------------------------------------------------------
 
-/** One slice in the rear→nose order (depth 0 = rear, ascending to nose). */
-export interface RearToNoseSlice {
-  /** Slice depth from the rear door; 0 = rear (the door). */
-  readonly depth: number;
-  /** The load-block ids placed in this slice (stable alphabetical order). */
-  readonly loadBlockIds: readonly string[];
-}
-
 /** The `GET /trailers/:id/plan` response (VIZ-05). */
 export interface TrailerPlanDto {
   readonly trailerId: string;
@@ -58,6 +51,12 @@ export interface TrailerPlanDto {
   readonly instructions: LoadingInstructions;
   /** Plain-English plan explanation (from the Phase-2 `planExplanation` renderer). */
   readonly explanation: string;
+  /**
+   * HUBQ-04 — slice-aware utilization ratio in `[0, 1]`
+   * (`Σ usedVolume / Σ capacityVolume`). ADDITIVE: VIZ-05 consumers that ignore
+   * it are unaffected; the hub-detail endpoint surfaces the SAME field.
+   */
+  readonly utilization: number;
 }
 
 /**
@@ -91,95 +90,6 @@ interface IdParams {
 /** View the API handle as the catch-up read schema. */
 function catchupView(db: ApiDb): Kysely<CatchupDb> {
   return db as unknown as Kysely<CatchupDb>;
-}
-
-/**
- * Build a minimal `LoadBlock[]` from the assigned package IDs, the hub-inventory
- * outbound index, and the known route legs.
- *
- * Each assigned package becomes a unit block. The `key.nextUnloadHubId` is the
- * hub the package is staged/outbound at (from the hub-inventory index). If a
- * package is not found in the outbound index, we fall back to the first route
- * destination from the trailer's current hub — this ensures the planner always
- * has a valid block, even in sparse demo data.
- *
- * This approach mirrors `twin-snapshot.ts:buildTrailerBlocks` (DRY: both read the
- * same data source; we can't import twin-snapshot here because it is in `@mm/api`'s
- * internal optimizer module, but the pattern is identical).
- */
-function buildBlocks(
-  assignedPackageIds: readonly string[],
-  hubOutboundIndex: ReadonlyMap<string, readonly string[]>,
-  routeDestHubs: readonly string[],
-): LoadBlock[] {
-  const pkgToHub = new Map<string, string>();
-  for (const [hubId, pkgIds] of hubOutboundIndex) {
-    for (const pkgId of pkgIds) {
-      if (!pkgToHub.has(pkgId)) {
-        pkgToHub.set(pkgId, hubId);
-      }
-    }
-  }
-
-  const fallbackHub = routeDestHubs[0] ?? "unknown";
-  const sorted = [...assignedPackageIds].sort();
-
-  return sorted.map((pkgId) => {
-    const nextUnloadHubId = pkgToHub.get(pkgId) ?? fallbackHub;
-    // Build a minimal LoadBlock shape for the planner.
-    // Each package is its own unit-volume block (the MVP aggregation model).
-    const block: LoadBlock = {
-      loadBlockId: pkgId,
-      key: {
-        currentHubId: "unknown", // not used by planLoad/instructions/planExplanation
-        nextUnloadHubId,
-        finalDestHubId: nextUnloadHubId, // simplified: final dest = next unload
-        slaClass: "standard",
-        deadlineBucket: 0,
-        handlingClass: "standard",
-        sizeWeightClass: "small",
-      },
-      packageIds: [pkgId],
-      packageCount: 1,
-      totalVolume: 1,
-      totalWeight: 1,
-      priority: 0,
-    };
-    return block;
-  });
-}
-
-/**
- * Build the `RouteStop[]` for the planner from the distinct next-unload hubs
- * of the assigned blocks, sorted deterministically.
- *
- * `stopIndex` is a zero-based integer: earlier stop → smaller index → LIFO
- * invariant places it nearer the rear (depth 0). The stable sort by hubId
- * ensures the same input always yields the same route (anti-P3).
- */
-function buildRoute(blocks: readonly LoadBlock[]): RouteStop[] {
-  const unloadHubs = new Set<string>();
-  for (const b of blocks) {
-    unloadHubs.add(b.key.nextUnloadHubId);
-  }
-  const sorted = [...unloadHubs].sort();
-  return sorted.map((hubId, idx) => ({ hubId, stopIndex: idx }));
-}
-
-/**
- * Convert a `LoadPlan`'s `slices` to the rear→nose DTO (ascending depth).
- * Non-empty slices only; stable inner order (alphabetical block ids).
- */
-function toRearToNose(plan: LoadPlan): RearToNoseSlice[] {
-  return [...plan.slices]
-    .filter((s) => s.loadBlockIds.length > 0)
-    .sort((a, b) => a.depth - b.depth)
-    .map(
-      (s: TrailerSlice): RearToNoseSlice => ({
-        depth: s.depth,
-        loadBlockIds: [...s.loadBlockIds].sort(),
-      }),
-    );
 }
 
 /**
@@ -236,57 +146,32 @@ export function registerPlanDetailRoutes(app: FastifyInstance, db: ApiDb): void 
         return reply.code(404).send({ error: "no_plan" });
       }
 
-      // 2. Read hub inventory to find each package's next-unload hub
-      const hubInventoryRows = await db
-        .selectFrom("hub_inventory")
-        .selectAll()
-        .execute();
+      // 2–6. Reconstruct via the SHARED helper (HUBQ-03 — same pipeline the
+      // hub-detail endpoint uses; DRY). Reads the hub-inventory outbound index
+      // and the route-leg fallback the planner needs.
+      const [hubOutboundIndex, routeDestHubs] = await Promise.all([
+        readHubOutboundIndex(db),
+        readRouteDestHubs(db, trailerRow.current_hub_id ?? ""),
+      ]);
 
-      const hubOutboundIndex = new Map<string, readonly string[]>();
-      for (const row of hubInventoryRows) {
-        const allOut = [...row.outbound, ...row.staged];
-        if (allOut.length > 0) {
-          hubOutboundIndex.set(row.hub_id, allOut);
-        }
-      }
+      const plan = reconstructTrailerPlan(
+        assignedPackageIds,
+        hubOutboundIndex,
+        routeDestHubs,
+      );
 
-      // 3. Read route legs from the event log for fallback hub resolution
-      const routeEventRows = await db
-        .selectFrom("events")
-        .select(["data"])
-        .where("event_type", "=", "RouteRegistered")
-        .orderBy("global_seq", "asc")
-        .execute();
-
-      const currentHubId = trailerRow.current_hub_id ?? "";
-      const routeDestHubs: string[] = [];
-      for (const row of routeEventRows) {
-        const r = row.data as { fromHubId: string; toHubId: string };
-        if (r.fromHubId === currentHubId) routeDestHubs.push(r.toHubId);
-      }
-
-      // 4. Build blocks + route for the planner
-      const blocks = buildBlocks(assignedPackageIds, hubOutboundIndex, routeDestHubs);
-      const route = buildRoute(blocks);
-
-      if (route.length === 0) {
+      if (plan === null) {
         // No route can be derived → no valid plan
         return reply.code(404).send({ error: "no_route" });
       }
 
-      // 5. Reconstruct the plan using the deterministic Phase-2 planner
-      const plan = planLoad(blocks, route, DEFAULT_PLANNER_CONFIG);
-
-      // 6. Render instructions + explanation via Phase-2 renderers
-      const loadingInstructions = instructions(plan, blocks);
-      const explanation = planExplanation(plan, blocks, route, DEFAULT_PLANNER_CONFIG);
-
-      // 7. Map to the stable wire DTO
+      // 7. Map to the stable wire DTO (HUBQ-04: utilization is additive).
       const dto: TrailerPlanDto = {
         trailerId,
-        rearToNose: toRearToNose(plan),
-        instructions: loadingInstructions,
-        explanation,
+        rearToNose: plan.rearToNose,
+        instructions: plan.instructions,
+        explanation: plan.explanation,
+        utilization: plan.utilization,
       };
       return dto;
     },

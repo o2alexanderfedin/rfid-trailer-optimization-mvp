@@ -20,6 +20,7 @@ import { WebSocket, type RawData } from "ws";
 import type { SnapshotPayload, WsEnvelope } from "./envelope.js";
 import {
   attachSnapshotSocket,
+  driverBucketsPerHub,
   routeSlaRiskBucketFor,
   trailerStateFor,
   type SnapshotPayloadBuilder,
@@ -608,6 +609,46 @@ describe("FIX 9 — trailerStateFor (real signal: trailer implicated in open exc
     // An idle trailer sitting at a hub is not "in transit at risk" — preserve idle.
     const implicated = new Set<string>(["T1"]);
     expect(trailerStateFor("T1", "idle", implicated)).toBe("idle");
+  });
+});
+
+describe("HUBQ-08 — driverBucketsPerHub (trailer→driver join, per-hub duty tally)", () => {
+  it("counts drivers of trailers AT a hub, tallying on_break / resting subsets", () => {
+    const trailers = [
+      { current_hub_id: "MEM", driver_id: "D1" },
+      { current_hub_id: "MEM", driver_id: "D2" },
+      { current_hub_id: "MEM", driver_id: "D3" },
+      { current_hub_id: "DFW", driver_id: "D4" },
+    ];
+    const drivers = [
+      { driver_id: "D1", status: "driving" },
+      { driver_id: "D2", status: "on_break" },
+      { driver_id: "D3", status: "resting" },
+      { driver_id: "D4", status: "driving" },
+    ];
+    const map = driverBucketsPerHub(trailers, drivers);
+    expect(map.get("MEM")).toEqual({ driverCount: 3, onBreakCount: 1, restingCount: 1 });
+    expect(map.get("DFW")).toEqual({ driverCount: 1, onBreakCount: 0, restingCount: 0 });
+  });
+
+  it("skips trailers with no hub or no driver, and drivers with no status row", () => {
+    const trailers = [
+      { current_hub_id: null, driver_id: "D1" }, // no hub
+      { current_hub_id: "MEM", driver_id: null }, // no driver
+      { current_hub_id: "MEM", driver_id: "D-UNKNOWN" }, // driver with no status row
+      { current_hub_id: "MEM", driver_id: "D2" }, // counted
+    ];
+    const drivers = [{ driver_id: "D2", status: "driving" }];
+    const map = driverBucketsPerHub(trailers, drivers);
+    expect(map.get("MEM")).toEqual({ driverCount: 1, onBreakCount: 0, restingCount: 0 });
+  });
+
+  it("is empty when no trailer at any hub has a known bound driver", () => {
+    const map = driverBucketsPerHub(
+      [{ current_hub_id: "MEM", driver_id: null }],
+      [{ driver_id: "D1", status: "driving" }],
+    );
+    expect(map.size).toBe(0);
   });
 });
 

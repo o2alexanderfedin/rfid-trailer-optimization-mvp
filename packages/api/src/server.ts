@@ -7,6 +7,7 @@ import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
 import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
+import { registerHubDetailRoutes } from "./routes/hub-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
 import { registerScenarioRoutes } from "./routes/scenario.js";
@@ -115,6 +116,9 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   registerPlanRoutes(app);
   // Plan 05-04: GET /trailers/:id/plan (VIZ-05) + GET /trailers/:id/history (UI-02).
   registerPlanDetailRoutes(app, deps.db);
+  // Phase 14 (HUBQ-01..07): GET /hubs/:id/detail — trailers at a hub + load-plan
+  // summary + driver duty + arrival/ETA, reusing the shared reconstruction helper.
+  registerHubDetailRoutes(app, deps.db);
   // The rolling optimizer shell (OPT-04/05/06) + its read-only recommendations
   // endpoint. The service owns the ONE write path (PlanAccepted); the route reads.
   // The optimizer only appends to the event store, so it views the handle as the

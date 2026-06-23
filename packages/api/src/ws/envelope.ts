@@ -64,6 +64,20 @@ export interface HubState {
   readonly volumeBucket: number;
   readonly slaRiskBucket: number;
   readonly congestionBucket: number;
+  /**
+   * HUBQ-08 (v1.2) — small integer driver-duty buckets so the map can color hubs
+   * by driver availability, derived from `driver_status` joined to the trailers
+   * AT this hub. ADDITIVE + OPTIONAL: the envelope stays back-compatible (a v1
+   * client that predates these fields simply ignores them; an older server that
+   * omits them is read as 0 via `?? 0`). The production `buildSnapshotPayload`
+   * always sets all three.
+   *   - `driverCount`  — drivers currently assigned to trailers at the hub.
+   *   - `onBreakCount` — of those, drivers in the 30-min `on_break` state.
+   *   - `restingCount` — of those, drivers in the 10h/34h `resting` state.
+   */
+  readonly driverCount?: number;
+  readonly onBreakCount?: number;
+  readonly restingCount?: number;
 }
 
 /** VIZ-03 route/edge metrics. */
@@ -211,12 +225,17 @@ function trailerChanged(prev: TrailerKeyframe, next: TrailerKeyframe): boolean {
   );
 }
 
-/** True iff two `HubState`s differ in any bucket. */
+/** True iff two `HubState`s differ in any bucket (incl. HUBQ-08 driver buckets). */
 function hubChanged(prev: HubState, next: HubState): boolean {
   return (
     prev.volumeBucket !== next.volumeBucket ||
     prev.slaRiskBucket !== next.slaRiskBucket ||
-    prev.congestionBucket !== next.congestionBucket
+    prev.congestionBucket !== next.congestionBucket ||
+    // Optional driver buckets: treat absent as 0 so a back-compat payload that
+    // never sets them produces no spurious delta.
+    (prev.driverCount ?? 0) !== (next.driverCount ?? 0) ||
+    (prev.onBreakCount ?? 0) !== (next.onBreakCount ?? 0) ||
+    (prev.restingCount ?? 0) !== (next.restingCount ?? 0)
   );
 }
 

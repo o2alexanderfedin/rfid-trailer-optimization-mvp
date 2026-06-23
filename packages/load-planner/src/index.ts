@@ -47,6 +47,7 @@ export {
   rehandleBreakdown,
   rehandleScore,
   scorePlan,
+  utilizationFraction,
   utilizationScore,
 } from "./scoring.js";
 
