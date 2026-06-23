@@ -40,7 +40,7 @@
 - [x] **Phase 14: Hub-detail endpoint + ws driver buckets** — GET /api/hubs/:id/detail aggregation ✅ 2026-06-22
 - [x] **Phase 15: Optimizer HOS-aware** — consume driver status, soft restCost preference ✅ 2026-06-22
 - [x] **Phase 16: Optimizer HOS-enforced** — hard legal-drive gate, rest-as-serviceMin, relay recommendation ✅ 2026-06-22
-- [ ] **Phase 17: Hub Detail panel UI + map duty styling** — clickable hub → compact panel + click-through
+- [x] **Phase 17: Hub Detail panel UI + map duty styling** — clickable hub → compact panel + click-through ✅ 2026-06-22
 - [ ] **Phase 18: README features + screenshots** — supported-features list + live screenshots
 
 ## Phase Details (v1.2)
@@ -180,5 +180,5 @@
 | 14. Hub-detail endpoint + ws driver buckets | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 15. Optimizer HOS-aware | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 16. Optimizer HOS-enforced | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
-| 17. Hub Detail panel UI + map duty styling | v1.2 | 0/— | ⬜ Not started | — |
+| 17. Hub Detail panel UI + map duty styling | v1.2 | 1/1 | ✅ Complete | 2026-06-22 |
 | 18. README features + screenshots | v1.2 | 0/— | ⬜ Not started | — |

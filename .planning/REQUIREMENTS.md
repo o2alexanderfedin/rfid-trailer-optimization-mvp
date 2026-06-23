@@ -61,11 +61,11 @@
 
 ### Hub Detail panel UI (VIZ)
 
-- [ ] **VIZ-07**: Clicking a hub icon opens a Hub Detail panel in the right rail, mirroring the VIZ-05 trailer-selection flow, with hub name/id in the header.
-- [ ] **VIZ-08**: The panel lists each trailer at the hub in a compact row — operational status, dock door, live elapsed dwell (`simMs − arrivedAtMs`), utilization %, next hub + estimated ETA, and the assigned driver's duty status + remaining legal drive time (shown as both a number and a bucket).
-- [ ] **VIZ-09**: Expanding a trailer row (or click-through) shows its full rear→nose load order, loading instructions, and explanation, reusing the exact VIZ-05 `TrailerDetail` rendering.
-- [ ] **VIZ-10**: The panel shows open exceptions tied to each trailer (ws `exceptionsOpen` filtered by `entityId`) and hub-scoped exceptions via the detail endpoint.
-- [ ] **VIZ-11**: Hub markers on the map are styled by driver duty distribution from the ws buckets (e.g. a hub whose drivers are all resting reads distinctly).
+- [x] **VIZ-07**: Clicking a hub icon opens a Hub Detail panel in the right rail, mirroring the VIZ-05 trailer-selection flow, with hub name/id in the header.
+- [x] **VIZ-08**: The panel lists each trailer at the hub in a compact row — operational status, dock door, live elapsed dwell (`simMs − arrivedAtMs`), utilization %, next hub + estimated ETA, and the assigned driver's duty status + remaining legal drive time (shown as both a number and a bucket).
+- [x] **VIZ-09**: Expanding a trailer row (or click-through) shows its full rear→nose load order, loading instructions, and explanation, reusing the exact VIZ-05 `TrailerDetail` rendering.
+- [x] **VIZ-10**: The panel shows open exceptions tied to each trailer (ws `exceptionsOpen` filtered by `entityId`) and hub-scoped exceptions via the detail endpoint.
+- [x] **VIZ-11**: Hub markers on the map are styled by driver duty distribution from the ws buckets (e.g. a hub whose drivers are all resting reads distinctly).
 
 ### Documentation (DOC)
 
@@ -126,10 +126,10 @@
 | OPT-HOS-01 | 15 | Done |
 | OPT-HOS-02 | 16 | Done |
 | OPT-HOS-03 | 16 | Done |
-| VIZ-07 | 17 | Planned |
-| VIZ-08 | 17 | Planned |
-| VIZ-09 | 17 | Planned |
-| VIZ-10 | 17 | Planned |
-| VIZ-11 | 17 | Planned |
+| VIZ-07 | 17 | Done |
+| VIZ-08 | 17 | Done |
+| VIZ-09 | 17 | Done |
+| VIZ-10 | 17 | Done |
+| VIZ-11 | 17 | Done |
 | DOC-01 | 18 | Planned |
 | DOC-02 | 18 | Planned |
