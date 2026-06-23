@@ -21,7 +21,13 @@ export {
   PRODUCTION_DETECTION_CONFIG,
   DEMO_RFID_CONFIG,
   DEMO_OVER_CARRY_CONFIG,
+  resolveDemoHosEnabled,
 } from "./detection-config.js";
+// Phase 18: re-export the FMCSA HOS limits so downstream consumers (e.g. the
+// @mm/web real-e2e globalSetup, which does NOT depend on @mm/domain directly)
+// can drive the LIVE HOS-on demo path with the same default config as `main.ts`.
+export { DEFAULT_HOS_CONFIG } from "@mm/domain";
+export type { HosConfig } from "@mm/domain";
 export type { OverCarryConfig } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";

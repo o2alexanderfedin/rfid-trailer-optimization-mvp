@@ -7,10 +7,10 @@ last_updated: "2026-06-22T08:59:23.428Z"
 last_activity: 2026-06-22
 progress:
   total_phases: 10
-  completed_phases: 9
-  total_plans: 9
-  completed_plans: 9
-  percent: 90
+  completed_phases: 10
+  total_plans: 10
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: 18 (next) — Phases 9–17 ✅ complete
+Phase: — (all 10 phases complete) → milestone lifecycle (audit → complete → cleanup)
 Plan: —
-Status: Autonomous build in progress (9/10 phases). Phases 9–17 merged to develop. Hub Detail panel live. Only README+screenshots (Phase 18) remains.
-Last activity: 2026-06-22 — Phase 17 PASSED (Hub Detail panel UI + map duty styling, VIZ-07..11: clickable hub → compact rows w/ driver duty + remaining drive time, live dwell, click-through to VIZ-05; build 10/10, typecheck 0, lint 0, test:all 1465, browser 7/7)
+Status: v1.2 build COMPLETE (10/10 phases, 35/35 requirements). Phases 9–18 merged to develop. Live demo runs HOS-on; Hub Detail panel + screenshots shipped.
+Last activity: 2026-06-22 — Phase 18 PASSED (live-demo HOS_ENABLED on; README supported-features + 2 real screenshots; build 10/10, typecheck 0, lint 0, test:all 1472, browser 9). Determinism goldens byte-identical throughout.
 
 ## Performance Metrics
 
