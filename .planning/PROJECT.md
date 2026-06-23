@@ -20,9 +20,22 @@ rehandle** and continuously repair them as conditions change — demonstrated li
 over a simulated USA hub network. If everything else fails, the load planner + operational
 twin producing explainable plans must work.
 
-## Current Milestone: v1.1 shipped — Awaiting next milestone
+## Current Milestone: v1.2 Driver HOS & Hub Detail
 
-**v1.1 shipped 2026-06-22.** 7/7 requirements (OPT-09, OPT-10, TIME-01, TIME-02, VIZ-06, HRD-01, QA-01) live-wired and behavior-tested. Gate green: build 10/10 · typecheck 0 · lint 0 · unit 960 · ui 183 · integration 82/20. Archive: `milestones/v1.1-ROADMAP.md`, `milestones/v1.1-REQUIREMENTS.md`.
+**Goal:** Model driver Hours-of-Service (HOS) duty cycles end-to-end — **fully enforced** in both the deterministic simulation and the rolling-horizon optimizer, using the **full FMCSA** rule set, with **driver relay/swap at hubs** — and surface live hub operations through a **click-to-open Hub Detail panel**.
+
+**Target features:**
+- Driver entity + full-FMCSA HOS engine (11h drive / 14h window / 30-min break / 10h reset / 70h-8day cap / 34h restart / sleeper-berth 7-3 & 8-2 splits) as a pure, deterministic module **shared** by simulation and optimizer.
+- Driver **relay / swap at hubs** (per-hub driver pools, deterministic handoffs).
+- Simulation **enforces HOS** (drivers accrue duty time, take mandatory rest/breaks) + authoritative load/unload phase events (`UnloadStarted`/`LoadStarted`/`UnloadCompleted`).
+- Optimizer **enforces HOS** (rest-as-`serviceMin` feasibility, hard legal-drive gate reusing the Phase-2 LIFO validation pattern, insert-rest / relay recommendations via local repair).
+- Driver-status read model + `GET /api/hubs/:id/detail` endpoint + ws `HubState` driver buckets.
+- Compact **Hub Detail panel** (trucks at hub: status, dwell, util, next hub, driver duty + remaining legal drive time) with click-through to the existing VIZ-05 trailer plan; hub markers colored by driver duty distribution.
+- README supported-features list + screenshots.
+
+**Keystone constraint — determinism:** HOS-*off* must remain byte-identical to the pre-v1.2 golden replay; HOS-*on* adds a new golden. All HOS randomness flows through one new isolated seeded RNG substream. Detailed grounding: `.planning/research/v1.2-DRIVER-HOS-GROUNDING.md`, `.planning/research/v1.2-HUB-DETAIL-GROUNDING.md`.
+
+**Previously shipped:** v1.0 MVP (2026-06-20) and v1.1 Realistic Time Model + Hardening (2026-06-22) — see `MILESTONES.md`.
 
 ## Requirements
 
@@ -115,9 +128,17 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 
 ### Active
 
-<!-- Current scope. Building toward these. Detailed REQ-IDs live in REQUIREMENTS.md for the next milestone. -->
+<!-- Current scope (v1.2). Detailed REQ-IDs + acceptance live in REQUIREMENTS.md. -->
 
-*(v1.1 complete — no active requirements. Start /gsd-new-milestone to define v1.2.)*
+**v1.2 — Driver HOS & Hub Detail** (fully-enforced HOS · full FMCSA · driver relay):
+- [ ] Driver model + duty/phase events (DRV-*, EVT-*)
+- [ ] Full-FMCSA HOS clock engine, pure + shared sim/optimizer (HOS-*)
+- [ ] Simulation HOS enforcement + relay/swap + deterministic golden (SIM-HOS-*)
+- [ ] Driver-status projection + tables (PRJ-*)
+- [ ] Optimizer HOS awareness + hard enforcement (OPT-HOS-*)
+- [ ] Hub-detail read endpoint + ws driver buckets (HUBQ-*)
+- [ ] Hub Detail panel UI + map duty styling (VIZ-07..11)
+- [ ] README features + screenshots (DOC-*)
 
 ### Out of Scope
 
@@ -180,6 +201,11 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 | Transit scale = realistic-absolute (ORS `duration_s` / haversine fallback) + 120× sim-speed gauge for watchability | defensible time model is the v1.1 goal; lifecycle tests use DIP flat-timing override | ✓ Good |
 | Road geometry committed as static GeoJSON (RDP-simplified, hub-checksum drift guard) | preserves determinism; no live ORS in hot path | ✓ Good |
 | Timing-config plumbing to optimizer asymmetric (`RollingLoop` hardcodes DEFAULT) | acceptable for demo (both sides agree on default); document and thread in v1.2 | ⚠️ Revisit (v1.2 DRY cleanup) |
+| v1.2: driver HOS **fully enforced** (sim + optimizer), not display-only | HOS as a real constraint shaping routes is the demo value; aware-only would under-sell it | — Pending (v1.2) |
+| v1.2: **full FMCSA** rule set incl. sleeper-berth 7/3 & 8/2 splits | continues the v1.1 "realistic time model" direction; audience recognizes the rules | — Pending (v1.2; sleeper-berth is the highest-complexity element) |
+| v1.2: **driver relay/swap at hubs** (per-hub pools) over per-trip binding | matches real middle-mile relay ops; richer demo (fresh-driver-swap moment) | — Pending (v1.2; adds pool/handoff modeling) |
+| v1.2: single pure forward-labeling HOS engine in `@mm/domain`, shared by sim + optimizer | DRY; "rest-as-time" folds into existing `serviceMin` (no new graph edge kind) | — Pending (v1.2) |
+| v1.2: hub detail via new `GET /api/hubs/:id/detail` REST endpoint (not ws-extended) | ws can't carry the heavy DTO; matches VIZ-05 fetch-on-click pattern; keeps ticks small | — Pending (v1.2) |
 
 ## Evolution
 
@@ -199,4 +225,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-22 after v1.1 milestone (Realistic Time Model + Hardening)*
+*Last updated: 2026-06-22 — v1.2 milestone (Driver HOS & Hub Detail) defined*

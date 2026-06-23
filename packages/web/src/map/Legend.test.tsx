@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Legend } from "./Legend.js";
 import { HUB_BUCKET_LABELS, ROUTE_BUCKET_LABELS } from "./coloring.js";
+import { DUTY_BUCKET_LABELS } from "./dutyColoring.js";
 
 describe("Legend (jsdom ui lane)", () => {
   it("mounts the legend overlay with the accessible landmark", () => {
@@ -43,5 +44,15 @@ describe("Legend (jsdom ui lane)", () => {
     render(<Legend hubMetric="slaRisk" routeMetric="slaRisk" />);
     expect(screen.getByText("Hub SLA risk")).toBeInTheDocument();
     expect(screen.getByText("Route SLA risk")).toBeInTheDocument();
+  });
+
+  // VIZ-11: the driver-duty ramp is a permanent legend section so an operator can
+  // read the duty-colored hub markers (the v1.2 demo payoff).
+  it("renders the driver-duty section with one row per duty bucket", () => {
+    render(<Legend />);
+    expect(screen.getByText("Driver duty")).toBeInTheDocument();
+    for (const label of DUTY_BUCKET_LABELS) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
   });
 });

@@ -77,7 +77,9 @@ export function packageLocationReducer(
     // — the fused zone estimate is a separate read model (later Phase-3 plans).
     // Anti-P6: absence of an RFID read never changes a package's known location.
     // Phase-4 plan-lifecycle events (PlanGenerated/PlanAccepted, OPT-04) don't
-    // move packages, so they no-op here.
+    // move packages, so they no-op here. Phase-9 (v1.2) driver-lifecycle +
+    // load/unload phase events likewise carry no package location (driver-status
+    // is a separate read model added in a later phase), so they no-op too.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -89,6 +91,13 @@ export function packageLocationReducer(
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return state;
     default:
       return assertNeverEvent(event);

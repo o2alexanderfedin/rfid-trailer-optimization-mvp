@@ -9,7 +9,12 @@ import {
   type TrailerSlice,
 } from "@mm/domain";
 import { describe, expect, it } from "vitest";
-import { rehandleScore, scorePlan, utilizationScore } from "./scoring.js";
+import {
+  rehandleScore,
+  scorePlan,
+  utilizationFraction,
+  utilizationScore,
+} from "./scoring.js";
 import type { LoadPlan, ScoreResult } from "./types.js";
 
 /**
@@ -86,6 +91,44 @@ function linearRoute(hubCount: number): RouteStop[] {
   }
   return stops;
 }
+
+describe("utilizationFraction — Σ usedVolume / Σ capacityVolume (HUBQ-04)", () => {
+  it("sums used and capacity across ALL slices (zone-wise denominator)", () => {
+    const plan: LoadPlan = {
+      trailerId: "TR",
+      // 10/30 + 0/30 over two slices ⇒ 10 / 60 = 0.1666…
+      slices: [slice(0, ["LB-A"], 10, 30), slice(1, [], 0, 30)],
+      placements: [],
+    };
+    expect(utilizationFraction(plan)).toBeCloseTo(10 / 60, 10);
+  });
+
+  it("is exactly used/capacity for a single full slice", () => {
+    const plan: LoadPlan = {
+      trailerId: "TR",
+      slices: [slice(0, ["LB1"], 24, 30)],
+      placements: [],
+    };
+    expect(utilizationFraction(plan)).toBeCloseTo(0.8, 10);
+  });
+
+  it("returns 0 for a zero-capacity (empty) plan (no NaN)", () => {
+    const plan: LoadPlan = { trailerId: "TR", slices: [], placements: [] };
+    expect(utilizationFraction(plan)).toBe(0);
+  });
+
+  it("is the SAME fraction utilizationScore derives its band penalty from (DRY)", () => {
+    // Inside the [0.75, 0.90] band the penalty is 0 ⇒ the fraction is the band
+    // midpoint; this pins the two to one source.
+    const plan: LoadPlan = {
+      trailerId: "TR",
+      slices: [slice(0, ["LB1"], 80, 100)],
+      placements: [],
+    };
+    expect(utilizationFraction(plan)).toBeCloseTo(0.8, 10);
+    expect(utilizationScore(plan, config)).toBe(0); // 0.8 is inside [0.75, 0.90]
+  });
+});
 
 describe("utilizationScore — soft 75-90% band, quadratic BOTH sides (LOAD-07)", () => {
   // u = usedVolume / capacityVolume; we drive u precisely with a single slice.

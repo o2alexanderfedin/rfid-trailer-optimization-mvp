@@ -1,6 +1,11 @@
 import type { z } from "zod";
 import type {
+  driverAssignedToTripSchema,
+  driverDutyStateChangedSchema,
+  driverRegisteredSchema,
+  driverSwappedAtHubSchema,
   hubRegisteredSchema,
+  loadStartedSchema,
   missedUnloadDetectedSchema,
   packageArrivedAtHubSchema,
   packageCreatedSchema,
@@ -13,6 +18,8 @@ import type {
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
   trailerDockedSchema,
+  unloadCompletedSchema,
+  unloadStartedSchema,
   wrongTrailerDetectedSchema,
 } from "./schemas.js";
 
@@ -82,6 +89,31 @@ export type PlanGenerated = z.infer<typeof planGeneratedSchema>;
  */
 export type PlanAccepted = z.infer<typeof planAcceptedSchema>;
 
+// --- Phase-9 (v1.2) driver-lifecycle events (EVT-01) ------------------------
+
+/** A driver joined a hub's pool/roster (the renewable-resource registration). */
+export type DriverRegistered = z.infer<typeof driverRegisteredSchema>;
+/** A free driver was bound to a trip on dispatch. */
+export type DriverAssignedToTrip = z.infer<typeof driverAssignedToTripSchema>;
+/**
+ * A driver moved between duty states; carries the `reason` + an {@link HosClock}
+ * snapshot so the projection folds the authoritative clock (no recompute).
+ */
+export type DriverDutyStateChanged = z.infer<
+  typeof driverDutyStateChangedSchema
+>;
+/** A relay handoff — a trip's trailer was reassigned to a fresh hub-pool driver. */
+export type DriverSwappedAtHub = z.infer<typeof driverSwappedAtHubSchema>;
+
+// --- Phase-9 (v1.2) authoritative load/unload phase events (EVT-02) ---------
+
+/** Unloading began at a hub (after `TrailerDocked`). Identifiers + clock only. */
+export type UnloadStarted = z.infer<typeof unloadStartedSchema>;
+/** Loading began at a hub (before `TrailerDeparted`). Identifiers + clock only. */
+export type LoadStarted = z.infer<typeof loadStartedSchema>;
+/** Unloading finished (after the last unload scan). Identifiers + clock only. */
+export type UnloadCompleted = z.infer<typeof unloadCompletedSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -101,7 +133,16 @@ export type DomainEvent =
   | WrongTrailerDetected
   | MissedUnloadDetected
   | PlanGenerated
-  | PlanAccepted;
+  | PlanAccepted
+  // Phase-9 (v1.2) driver-lifecycle events (EVT-01).
+  | DriverRegistered
+  | DriverAssignedToTrip
+  | DriverDutyStateChanged
+  | DriverSwappedAtHub
+  // Phase-9 (v1.2) load/unload phase events (EVT-02).
+  | UnloadStarted
+  | LoadStarted
+  | UnloadCompleted;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

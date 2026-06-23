@@ -22,18 +22,30 @@ import type { EntityMaps } from "./map/wsClient.js";
  *  - All three consumers share the SAME socket, seq counter, and entity maps —
  *    eliminating the three-socket seq-gap/resync churn of the prior design.
  *
- * Map click wiring (VIZ-05):
- *  - MapView accepts an `onTrailerSelect` callback.
- *  - App manages `selectedTrailerId` as React state.
- *  - RightRail receives `selectedTrailerId` to drive TrailerDetail + AuditTimeline.
+ * Map click wiring (VIZ-05 / VIZ-07):
+ *  - MapView accepts `onTrailerSelect` and `onHubSelect` callbacks.
+ *  - App manages `selectedTrailerId` + `selectedHubId` as React state, kept
+ *    mutually exclusive (selecting one clears the other) so the right rail shows
+ *    a single detail at a time.
+ *  - RightRail receives both to drive TrailerDetail/AuditTimeline (VIZ-05) and
+ *    the new HubDetail panel (VIZ-07).
  */
 
 /** Inner shell — lives inside WsProvider so useWsEnvelope has context. */
 function AppInner(): React.JSX.Element {
   const [selectedTrailerId, setSelectedTrailerId] = useState<string | null>(null);
+  const [selectedHubId, setSelectedHubId] = useState<string | null>(null);
 
   const handleTrailerSelect = useCallback((id: string | null) => {
     setSelectedTrailerId(id);
+    // Selecting a trailer clears any hub selection (single active detail).
+    if (id !== null) setSelectedHubId(null);
+  }, []);
+
+  const handleHubSelect = useCallback((id: string | null) => {
+    setSelectedHubId(id);
+    // Selecting a hub clears any trailer selection (single active detail).
+    if (id !== null) setSelectedTrailerId(null);
   }, []);
 
   // --- Alert feed (UI-01) --------------------------------------------------
@@ -65,8 +77,15 @@ function AppInner(): React.JSX.Element {
     <div className="app">
       <header className="app__header">Middle-Mile Live Map</header>
       <div className="app__body">
-        <MapView onTrailerSelect={handleTrailerSelect} />
-        <RightRail feed={feed} selectedTrailerId={selectedTrailerId} />
+        <MapView
+          onTrailerSelect={handleTrailerSelect}
+          onHubSelect={handleHubSelect}
+        />
+        <RightRail
+          feed={feed}
+          selectedTrailerId={selectedTrailerId}
+          selectedHubId={selectedHubId}
+        />
       </div>
     </div>
   );

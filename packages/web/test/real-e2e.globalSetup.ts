@@ -30,6 +30,8 @@
 import {
   buildServer,
   DEMO_RFID_CONFIG,
+  DEMO_OVER_CARRY_CONFIG,
+  DEFAULT_HOS_CONFIG,
   driveSimulation,
   type ApiDb,
 } from "@mm/api";
@@ -109,11 +111,18 @@ export default async function globalSetup(): Promise<void> {
 
   // Drive the REAL demo path synchronously: populates every projection and
   // produces a non-empty ws snapshot for the very first browser connect.
+  // Phase 18: HOS ON (matching the live `main.ts` demo) + over-carry, so the
+  // driven stream carries driver-assignment + HOS + relay + load/unload events ⇒
+  // `driver_status` is populated ⇒ the Hub Detail panel + map duty coloring show
+  // real driver data for the DOC-02 screenshots and the live-path assertions.
   await driveSimulation({
     db,
     seed: SEED,
     durationTicks: DURATION,
     rfid: DEMO_RFID_CONFIG,
+    overCarry: DEMO_OVER_CARRY_CONFIG.rate,
+    hosEnabled: true,
+    hosConfig: DEFAULT_HOS_CONFIG,
     broadcast: built.broadcast,
     loop: built.loop,
   });

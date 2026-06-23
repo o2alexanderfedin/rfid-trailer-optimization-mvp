@@ -8,6 +8,7 @@ import type { HubDto, RouteDto } from "../api/client.js";
 import type { TrailerSnapshot } from "./useTrailerSnapshots.js";
 import type { HubState, RouteState, TrailerKeyframe } from "@mm/api";
 import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
+import { classifyDutyBucket } from "./dutyColoring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -202,6 +203,12 @@ export function applyHubBuckets(
     feature.set("volumeBucket", hub.volumeBucket);
     feature.set("slaRiskBucket", hub.slaRiskBucket);
     feature.set("congestionBucket", hub.congestionBucket);
+    // VIZ-11: derive the driver-duty bucket from the ws driver buckets and set it
+    // on the feature so `hubStyle` colors the hub by driver availability. When a
+    // hub carries no driver data the bucket is cleared (undefined) so the marker
+    // falls back to its volume coloring (nothing is fabricated).
+    const dutyBucket = classifyDutyBucket(hub);
+    feature.set("dutyBucket", dutyBucket ?? undefined);
   }
 }
 

@@ -197,13 +197,23 @@ export function auditTimelineReducer(
       };
 
     // -------------------------------------------------------------------------
-    // Non-entity events — no timeline row (no package or trailer named)
+    // Non-entity events — no timeline row (no package or trailer named).
+    // Phase-9 (v1.2) driver-lifecycle + load/unload phase events add no
+    // audit-timeline row in this phase (no behavior added); later phases may
+    // surface driver duty transitions here.
     // -------------------------------------------------------------------------
     case "HubRegistered":
     case "RouteRegistered":
     case "RfidObserved":
     case "WrongTrailerDetected":
     case "MissedUnloadDetected":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return null;
     default:
       return assertNeverAudit(event);

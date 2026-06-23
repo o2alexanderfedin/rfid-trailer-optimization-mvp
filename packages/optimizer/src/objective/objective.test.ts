@@ -162,3 +162,84 @@ describe("objective — §12 weighted sum (pure, no feasibility input)", () => {
     expect(objective).toHaveLength(2);
   });
 });
+
+/**
+ * OPT-HOS-01 — the SOFT driver-rest term (`restCost`) added in Phase 15.
+ *
+ * The objective gains an OPTIONAL `restPenalty` metric (a non-negative number that
+ * rises as the assigned driver has FEWER remaining legal drive minutes) weighted
+ * by an OPTIONAL `restCost` weight. The keystone regression guard: with the term
+ * NEUTRAL (weight 0 — the demo default — or the metric absent) the objective is
+ * BYTE-IDENTICAL to the pre-Phase-15 objective. Only a raised `restCost` shifts
+ * preference toward more-rested drivers (a smaller `restPenalty`).
+ */
+describe("objective — OPT-HOS-01 soft restCost term (neutral by default)", () => {
+  it("DEFAULT reproduces prior behavior: an absent restPenalty/restCost is a no-op", () => {
+    const m = metrics({ miles: 7, rehandleScore: 3 });
+    // The pre-Phase-15 objective over the SAME metrics with the legacy weight set
+    // (NO restCost key) — the byte-identical baseline.
+    const legacy = objective(m, UNIT_WEIGHTS);
+    // Same call (restPenalty absent, restCost absent) is identical.
+    expect(objective(m, UNIT_WEIGHTS)).toBe(legacy);
+    // Explicitly setting restCost but with restPenalty absent (treated as 0) is
+    // STILL byte-identical — the term contributes exactly 0.
+    expect(objective(m, { ...UNIT_WEIGHTS, restCost: 5 })).toBe(legacy);
+    // And a restPenalty present but restCost absent (treated as 0) is identical.
+    expect(objective(metrics({ miles: 7, rehandleScore: 3, restPenalty: 42 }), UNIT_WEIGHTS)).toBe(
+      legacy,
+    );
+    // The breakdown carries a `rest` field that is exactly 0 in the neutral case.
+    expect(objectiveBreakdown(m, UNIT_WEIGHTS).rest).toBe(0);
+  });
+
+  it("contributes exactly restPenalty × restCost (independent of every other term)", () => {
+    const base = metrics({ miles: 4 });
+    const baseCost = objective(base, UNIT_WEIGHTS);
+    const withRest = metrics({ miles: 4, restPenalty: 6 });
+    // restCost = 0 (UNIT_WEIGHTS has no restCost key) ⇒ no change.
+    expect(objective(withRest, UNIT_WEIGHTS)).toBe(baseCost);
+    // restCost = 3 ⇒ adds exactly 6 × 3 = 18 over the base, nothing else moves.
+    expect(objective(withRest, { ...UNIT_WEIGHTS, restCost: 3 })).toBeCloseTo(
+      baseCost + 18,
+      10,
+    );
+    // The breakdown's `rest` term equals the same product and still sums to total.
+    const b = objectiveBreakdown(withRest, { ...UNIT_WEIGHTS, restCost: 3 });
+    expect(b.rest).toBeCloseTo(18, 10);
+  });
+
+  it("PREFERENCE: raising restCost makes a LOW-remaining-hours driver cost MORE", () => {
+    // Two otherwise-identical candidates differing only by remaining hours: a
+    // RESTED driver (high remaining ⇒ low restPenalty) vs a TIRED one (low
+    // remaining ⇒ high restPenalty). With restCost > 0 the tired candidate scores
+    // HIGHER (worse), so the rested driver is soft-preferred.
+    const rested = metrics({ miles: 5, restPenalty: 1 });
+    const tired = metrics({ miles: 5, restPenalty: 50 });
+    const w = { ...UNIT_WEIGHTS, restCost: 2 };
+    expect(objective(tired, w)).toBeGreaterThan(objective(rested, w));
+    // Neutral default: the two are EQUAL (the soft term is off until weighted).
+    expect(objective(tired, UNIT_WEIGHTS)).toBe(objective(rested, UNIT_WEIGHTS));
+  });
+
+  it("breakdown still sums to the scalar objective WITH the rest term active", () => {
+    const m = metrics({ miles: 2, rehandleScore: 4, restPenalty: 9 });
+    const w = { ...UNIT_WEIGHTS, restCost: 4 };
+    const b = objectiveBreakdown(m, w);
+    const handSum =
+      b.miles +
+      b.driverTime +
+      b.fuel +
+      b.dockWait +
+      b.handling +
+      b.rehandle +
+      b.slaLateness +
+      b.lowUtil +
+      b.highUtil +
+      b.overCarry +
+      b.imbalance +
+      b.churn +
+      b.rest;
+    expect(b.total).toBeCloseTo(handSum, 10);
+    expect(b.total).toBeCloseTo(objective(m, w), 10);
+  });
+});

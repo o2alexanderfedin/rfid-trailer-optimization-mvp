@@ -37,6 +37,13 @@ function assertExhaustive(event: DomainEvent): void {
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return;
     default:
       assertNever(event);

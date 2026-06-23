@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DomainEvent } from "@mm/domain";
+import { DEFAULT_HOS_CONFIG } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
 import { simulate } from "@mm/simulation";
 import type * as EventStore from "@mm/event-store";
@@ -492,5 +493,78 @@ describe("driveSimulationPaced — loop body (interval, pause, determinism)", ()
       tickIntervalMs: 1,
     });
     expect(result.ticks).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 18 — LIVE driver-HOS wiring: `hosEnabled`/`hosConfig` flow through the
+// paced driver into `simulate`, so the live demo produces driver-assignment +
+// HOS + relay events that reach the optimizer (and thus `driver_status`).
+//
+// Hermetic: the heavy Postgres I/O is mocked (hoisted vi.mock above); the
+// REAL `@mm/simulation` engine runs, so these assertions are meaningful. A
+// longer horizon is used because driver events fire on dispatch/transit, not at
+// network setup. `tickIntervalMs:0` skips the inter-tick wait (no real pacing).
+// ---------------------------------------------------------------------------
+
+describe("driveSimulationPaced — live HOS wiring (hosEnabled flows into simulate)", () => {
+  beforeEach(() => {
+    appendSpy.mockClear();
+    readAllSpy.mockClear();
+    runCatchupSpy.mockClear();
+    runDetectionSpy.mockClear();
+  });
+
+  const HOS_SEED = 4242;
+  const HOS_DURATION = 600; // long enough for dispatch + driving accrual
+
+  async function driveCollectingEvents(
+    overrides: Partial<DriveSimulationPacedOptions>,
+  ): Promise<readonly DomainEvent[]> {
+    const { driveSimulationPaced } = await import("./driver.js");
+    const broadcasts: number[] = [];
+    const { loop, calls } = recordingLoop();
+    await driveSimulationPaced({
+      db: buildFakeDb(),
+      seed: HOS_SEED,
+      durationTicks: HOS_DURATION,
+      broadcast: recordingBroadcast(broadcasts),
+      loop,
+      tickIntervalMs: 0,
+      ...overrides,
+    });
+    return calls.flatMap((c) => c.events);
+  }
+
+  it("hosEnabled:true ⇒ driver-assignment + HOS events reach the optimizer loop", async () => {
+    const events = await driveCollectingEvents({
+      hosEnabled: true,
+      hosConfig: DEFAULT_HOS_CONFIG,
+    });
+    const types = new Set(events.map((e) => e.type));
+    // The HOS-on stream carries the driver lifecycle that populates driver_status.
+    expect(types.has("DriverRegistered")).toBe(true);
+    expect(types.has("DriverAssignedToTrip")).toBe(true);
+    expect(types.has("DriverDutyStateChanged")).toBe(true);
+  });
+
+  it("hosEnabled absent ⇒ NO driver events flow (the determinism-keystone default)", async () => {
+    const events = await driveCollectingEvents({});
+    const types = new Set(events.map((e) => e.type));
+    expect(types.has("DriverRegistered")).toBe(false);
+    expect(types.has("DriverAssignedToTrip")).toBe(false);
+    expect(types.has("DriverDutyStateChanged")).toBe(false);
+    // Non-vacuous: the OFF run DID drive a non-trivial operational stream.
+    expect(events.length).toBeGreaterThan(0);
+    expect(types.has("TrailerDeparted")).toBe(true);
+  });
+
+  it("the HOS flag is what flips driver output (on differs from off)", async () => {
+    const on = await driveCollectingEvents({ hosEnabled: true, hosConfig: DEFAULT_HOS_CONFIG });
+    const off = await driveCollectingEvents({ hosEnabled: false });
+    // Same seed, only the HOS flag differs ⇒ the stream length/content diverges.
+    expect(on.length).not.toBe(off.length);
+    expect(off.some((e) => e.type === "DriverRegistered")).toBe(false);
+    expect(on.some((e) => e.type === "DriverRegistered")).toBe(true);
   });
 });

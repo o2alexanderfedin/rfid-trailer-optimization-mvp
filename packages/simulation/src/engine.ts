@@ -1,6 +1,14 @@
 import type {
   DomainEvent,
+  DriverAssignedToTrip,
+  DriverDutyStateChanged,
+  DriverRegistered,
+  DriverSwappedAtHub,
+  DutyStatus,
+  HosClock,
+  HosConfig,
   Hub,
+  LoadStarted,
   PackageArrivedAtHub,
   PackageCreated,
   PackageScanned,
@@ -8,6 +16,16 @@ import type {
   TrailerArrivedAtHub,
   TrailerDeparted,
   TrailerDocked,
+  UnloadCompleted,
+  UnloadStarted,
+} from "@mm/domain";
+import {
+  DEFAULT_HOS_CONFIG,
+  applyDrivingLeg,
+  epochMinutesToIso,
+  isoToEpochMinutes,
+  mayDriveNow,
+  remainingLegalDriveMinutes,
 } from "@mm/domain";
 import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
 import { buildRoutes, buildTransitParamsByLeg, routeId } from "./network/routes.js";
@@ -31,6 +49,27 @@ import { DEFAULT_TIMING_CONFIG, sampleLogNormal, type TimingConfig } from "./tim
  * `Math.random()` anywhere in this module. The event queue is a min-heap-free
  * stable sort keyed by `(fireTick, insertionSeq)`, so ties break deterministically.
  */
+
+// --- Seeded RNG substream salts ---------------------------------------------
+//
+// Each opt-in feature draws from its OWN seeded substream (`seed XOR salt`) so
+// enabling one never perturbs the others — the byte-identical-replay keystone.
+// The salts are exported (not just inlined) so a salt-collision assertion test
+// can prove the five are pairwise distinct without re-typing the literals.
+
+/** SIM-03 RFID substream salt (verified existing constant). */
+export const RFID_RNG_SALT = 0x5f_1d_a7_c3;
+/** F-07 over-carry substream salt (verified existing constant). */
+export const OVER_CARRY_RNG_SALT = 0x3c_a7_1d_5f;
+/** DIP timing (dwell/transit) substream salt (verified existing constant). */
+export const TIMING_RNG_SALT = 0x00_00_77_17;
+/**
+ * SIM-HOS-01: the FIFTH substream salt for driver Hours-of-Service draws. A NEW,
+ * DISTINCT constant (asserted non-colliding with the three above) so enabling
+ * HOS never perturbs `rng`/`rfidRng`/`overCarryRng`/`timingRng`. Same seed +
+ * same `HosConfig` ⇒ byte-identical HOS stream.
+ */
+export const HOS_RNG_SALT = 0x10_51_09_01;
 
 // --- Public types -----------------------------------------------------------
 
@@ -82,6 +121,25 @@ export interface SimulateOptions {
    * reproducible per seed (same seed + same config ⇒ byte-identical timestamps).
    */
   readonly timing?: TimingConfig;
+  /**
+   * SIM-HOS-01/02/03/05: OPT-IN driver Hours-of-Service modeling. **DEFAULT
+   * FALSE** — the determinism keystone. When absent or `false`, the engine emits
+   * NO driver events, NO HOS breaks/rests, NO load/unload phase events, and makes
+   * ZERO `hosRng` draws ⇒ the stream is BYTE-IDENTICAL to the pre-v1.2 golden
+   * (the existing `determinism.unit.test.ts` baseline). When `true`, one driver
+   * is seeded per trailer, assigned per trip on dispatch, accrues driving minutes
+   * across the transit legs via the shared {@link applyDrivingLeg} engine, and
+   * parks (resting/on_break) when a clock would breach — all in deterministic
+   * event-queue order, drawing any HOS randomness from the fifth `hosRng`
+   * substream at deterministic evaluation time (never wall-clock).
+   */
+  readonly hosEnabled?: boolean;
+  /**
+   * DIP: override the FMCSA {@link HosConfig} limits. Only consulted when
+   * `hosEnabled` is `true`; defaults to {@link DEFAULT_HOS_CONFIG}. Same seed +
+   * same config ⇒ byte-identical HOS-on stream.
+   */
+  readonly hosConfig?: HosConfig;
 }
 
 /** Options for the store-driven run. */
@@ -103,6 +161,28 @@ const PACKAGE_INTERVAL_TICKS = 15;
 const MAX_PACKAGES_PER_BATCH = 3;
 /** Package size classes, in a fixed order (RNG picks an index). */
 const SIZE_CLASSES: readonly SizeClass[] = ["small", "medium", "large"];
+
+/**
+ * SIM-HOS-03: max extra whole-minute jitter added to EACH mandatory break/rest,
+ * drawn from the `hosRng` substream at deterministic evaluation time. Models the
+ * real-world slack in how long a parked driver actually rests beyond the legal
+ * minimum. `0..HOS_REST_JITTER_TICKS` inclusive; the draw order is the
+ * event-queue dispatch order, so it is fully reproducible per seed.
+ */
+const HOS_REST_JITTER_TICKS = 15;
+
+/**
+ * DRV-04: how many SPARE drivers each hub pool carries BEYOND the one-per-trailer
+ * primary roster. The center dispatch hub seeds `spokes.length` primary drivers
+ * (one bound to each trailer) PLUS this many spares, so when a trailer's assigned
+ * driver is out of legal hours at dispatch a FRESH legal driver is usually
+ * available for a relay/swap (SIM-HOS-04) — and the trailer departs on time
+ * instead of parking. A deterministic constant (no RNG): the pool size is a pure
+ * function of the network, so the seeded roster is byte-stable. When the pool is
+ * momentarily exhausted (every spare is tired/in-flight) the engine falls back to
+ * the Phase-11 park-while-resting behaviour.
+ */
+const RELAY_SPARE_DRIVERS = 6;
 
 // --- Internal event-queue --------------------------------------------------
 
@@ -155,10 +235,16 @@ class EventQueue {
  * the SINGLE source of truth shared by `simulate` and `runSimulation`.
  */
 function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid, overCarry, timing } = opts;
+  const { seed, durationTicks, rfid, overCarry, timing, hosEnabled, hosConfig } = opts;
   if (!Number.isInteger(durationTicks) || durationTicks < 0) {
     throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
   }
+
+  // SIM-HOS-01: driver HOS is OPT-IN and DEFAULT FALSE. Absent/false ⇒ the
+  // engine emits NO driver/HOS/load-unload events and NEVER draws `hosRng`, so
+  // the stream is byte-identical to the pre-v1.2 golden (the keystone).
+  const hosOn = hosEnabled === true;
+  const hosLimits: HosConfig = hosConfig ?? DEFAULT_HOS_CONFIG;
 
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
@@ -177,18 +263,25 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // enabling RFID never perturbs the operational rng — the non-RFID event order
   // is byte-identical with or without the rfid option, while the RFID stream is
   // still fully reproducible per seed.
-  const rfidRng = makeRng((seed ^ 0x5f_1d_a7_c3) >>> 0);
+  const rfidRng = makeRng((seed ^ RFID_RNG_SALT) >>> 0);
   // F-07: over-carry draws from its OWN seeded substream — a salt DISTINCT from
   // the RFID salt (0x5f1da7c3) so it never collides with / perturbs `rfidRng` or
   // `rng`. Same seed + same rate ⇒ byte-identical over-carry decisions.
-  const overCarryRng = makeRng((seed ^ 0x3c_a7_1d_5f) >>> 0);
+  const overCarryRng = makeRng((seed ^ OVER_CARRY_RNG_SALT) >>> 0);
   // Timing (dwell/transit) draws from its OWN seeded substream — a salt DISTINCT
   // from the RFID (0x5f1da7c3) and over-carry (0x3ca71d5f) salts — so the
   // log-normal timing variance is fully reproducible per seed yet NEVER perturbs
   // the operational `rng`, `rfidRng`, or `overCarryRng` draws. The draws happen
   // in deterministic event-queue order, so the timestamps are byte-identical for
   // a fixed seed + timing config.
-  const timingRng = makeRng((seed ^ 0x00_00_77_17) >>> 0);
+  const timingRng = makeRng((seed ^ TIMING_RNG_SALT) >>> 0);
+  // SIM-HOS-01: the FIFTH substream. HOS draws use a salt DISTINCT from the RFID
+  // (0x5f1da7c3), over-carry (0x3ca71d5f), and timing (0x00007717) salts (the
+  // salt-collision test asserts this), so HOS variance is fully reproducible per
+  // seed yet NEVER perturbs the other four streams. Constructing the generator is
+  // side-effect-free (independent state); it is only DRAWN when `hosOn`, so the
+  // HOS-off stream consumes ZERO `hosRng` values and stays byte-identical.
+  const hosRng = makeRng((seed ^ HOS_RNG_SALT) >>> 0);
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
   // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
   // the real great-circle (haversine) distance between its two hubs at an 80 km/h
@@ -263,6 +356,86 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     for (const read of reads) emit(`trailer-${trailerId}`, read);
   };
 
+  // --- SIM-HOS-02/03/04 + DRV-04: driver state + hub pool (active when `hosOn`)
+  //
+  // Phase 11 bound exactly ONE driver to each trailer for the whole sim. Phase 12
+  // (DRV-04, SIM-HOS-04) upgrades this to a per-hub driver POOL with RELAY: each
+  // driver carries its own integer-minute {@link HosClock}, advanced by the
+  // SHARED {@link applyDrivingLeg} engine (DRY — no HOS math is reimplemented).
+  // At each dispatch the engine asks whether the trailer's CURRENT driver can
+  // legally complete the NEXT leg (Phase-10 {@link remainingLegalDriveMinutes} /
+  // {@link mayDriveNow}); if not, it RELAYS the trailer to a fresh legal driver
+  // from the center pool (`DriverSwappedAtHub` + `DriverAssignedToTrip`) and the
+  // tired driver enters `resting` (a 10h reset) so the trailer departs on time.
+  // When the pool is momentarily exhausted the engine falls back to the Phase-11
+  // park-while-resting behaviour (mid-leg break/rest via `applyDrivingLeg`).
+
+  /** trailerId → the driver currently bound to it (mutated on a relay). */
+  const driverByTrailer = new Map<string, string>();
+  /** driverId → its live HOS clock (advanced by `applyDrivingLeg` / a reset). */
+  const clockByDriver = new Map<string, HosClock>();
+  /**
+   * driverId → the epoch-MINUTE the driver becomes available again. A driver that
+   * is in-flight or resting is `> now`; a free driver is `<= now`. The relay pool
+   * scan reads this (never wall-clock) so re-entry after a 10h reset is purely a
+   * function of the deterministic virtual clock + the driver's accrued state.
+   */
+  const availableAtMinByDriver = new Map<string, number>();
+  /**
+   * driverIds that are NOT bound to a trailer's primary slot — the SPARE pool the
+   * relay scan draws fresh drivers from. In a stable, seed-independent order
+   * (registration order) so the relay selection is byte-deterministic.
+   */
+  const sparePool: string[] = [];
+
+  /** A fresh, post-10h-reset HOS clock anchored at the current virtual instant. */
+  const freshHosClock = (nowIso: string): HosClock => ({
+    driveTodayMin: 0,
+    dutyWindowStartAt: nowIso,
+    sinceLastBreakMin: 0,
+    weeklyOnDutyMin: 0,
+    comeOnDutyAt: nowIso,
+    sleeperBerthLongMin: 0,
+    sleeperBerthShortMin: 0,
+  });
+
+  /** Emit a `DriverDutyStateChanged` with the authoritative clock snapshot. */
+  const emitDutyState = (
+    driverId: string,
+    dutyStatus: DutyStatus,
+    reason: string,
+    snapshot: HosClock,
+  ): void => {
+    const event: DriverDutyStateChanged = {
+      type: "DriverDutyStateChanged",
+      schemaVersion: 1,
+      payload: {
+        driverId,
+        dutyStatus,
+        reason,
+        clock: snapshot,
+        occurredAt: clock.nowIso(),
+      },
+    };
+    emit(`driver-${driverId}`, event);
+  };
+
+  /** Emit the trailer-scoped `LoadStarted` / `UnloadStarted` / `UnloadCompleted`. */
+  const emitPhase = (
+    type: "LoadStarted" | "UnloadStarted" | "UnloadCompleted",
+    trailerId: string,
+    hubId: string,
+    tripId: string,
+  ): void => {
+    const payload = { trailerId, hubId, tripId, occurredAt: clock.nowIso() };
+    const event: LoadStarted | UnloadStarted | UnloadCompleted = {
+      type,
+      schemaVersion: 1,
+      payload,
+    };
+    emit(`trailer-${trailerId}`, event);
+  };
+
   // --- Bootstrap: register every hub then every route, all at tick 0. -------
   for (const hub of hubs) {
     emit(`hub-${hub.hubId}`, hubRegisteredEvent(hub));
@@ -279,6 +452,44 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       },
     };
     emit(`route-${route.routeId}`, event);
+  }
+
+  // --- SIM-HOS-02 + DRV-04: seed the center driver POOL at bootstrap (tick 0).
+  // Mirrors how trailers are seeded one-per-spoke: a `DriverRegistered` per
+  // driver, rostered at the CENTER (the dispatch hub), each with a fresh
+  // post-reset HOS clock anchored at the epoch. The pool is the PRIMARY roster
+  // (one driver per trailer) PLUS `RELAY_SPARE_DRIVERS` spares — so a relay
+  // (SIM-HOS-04) usually finds a fresh legal driver. This runs ONLY when HOS is
+  // on, so the off-mode stream is byte-unchanged. Every registration precedes the
+  // first `DriverAssignedToTrip` (first dispatch is at tick 1). The pool size is a
+  // pure function of the network (no RNG) ⇒ the roster is byte-deterministic.
+  if (hosOn) {
+    const nowIso = clock.nowIso();
+    const nowMin = isoToEpochMinutes(nowIso);
+    const registerDriver = (driverId: string): void => {
+      clockByDriver.set(driverId, freshHosClock(nowIso));
+      availableAtMinByDriver.set(driverId, nowMin);
+      const registered: DriverRegistered = {
+        type: "DriverRegistered",
+        schemaVersion: 1,
+        payload: { driverId, homeHubId: center.hubId, occurredAt: nowIso },
+      };
+      emit(`driver-${driverId}`, registered);
+    };
+    // Primary roster: one driver bound to each trailer (D001…D00N).
+    spokes.forEach((_spoke, i) => {
+      const trailerId = `T${String(i + 1).padStart(3, "0")}`;
+      const driverId = `D${String(i + 1).padStart(3, "0")}`;
+      driverByTrailer.set(trailerId, driverId);
+      registerDriver(driverId);
+    });
+    // Spare pool: extra fresh drivers a relay hands a trailer to. Ids continue
+    // the sequence after the primary roster so they sort stably AFTER it.
+    for (let k = 0; k < RELAY_SPARE_DRIVERS; k += 1) {
+      const driverId = `D${String(spokes.length + k + 1).padStart(3, "0")}`;
+      registerDriver(driverId);
+      sparePool.push(driverId);
+    }
   }
 
   // --- Package generation: batches created at the center over time. ---------
@@ -326,6 +537,164 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     if (nextTick <= durationTicks) schedule(nextTick, () => createPackageBatch(nextTick));
   };
 
+  /**
+   * SIM-HOS-03: accrue one transit leg's DRIVING minutes through the SHARED
+   * forward-labeling engine ({@link applyDrivingLeg}) and inject any mandatory
+   * break/rest as ADDED queue time before the arrival fires (a parked trailer = a
+   * resting driver). Returns the EXTRA minutes the legal rests add to the leg's
+   * wall-clock (0 when the leg fits inside the driver's remaining hours). Emits
+   * the `DriverDutyStateChanged` transitions for each inserted break/rest and the
+   * recovering `driving` transition. ALL randomness is a `hosRng` jitter drawn
+   * HERE, at deterministic evaluation time, in event-queue order — never at the
+   * wall-clock instant the rest begins. No-op (and ZERO `hosRng` draws) unless
+   * `hosOn`.
+   *
+   * @param driverId   The driver bound to this trip.
+   * @param legMinutes Whole minutes of DRIVING this leg requires (the drawn transit).
+   * @param departIso  The ISO instant the leg begins (the `TrailerDeparted` time).
+   * @returns Extra minutes the inserted rests add to the leg (>= 0).
+   */
+  const accrueDrivingLeg = (
+    driverId: string,
+    legMinutes: number,
+    departIso: string,
+  ): number => {
+    const before = clockByDriver.get(driverId)!;
+    const result = applyDrivingLeg(before, hosLimits, legMinutes, departIso);
+    clockByDriver.set(driverId, result.clock);
+
+    // Sum the non-driving segments the engine inserted; each break/rest is a
+    // mandatory pause that pushes the arrival later. A small deterministic
+    // `hosRng` jitter (0..HOS_REST_JITTER_TICKS) is drawn PER inserted pause, in
+    // queue order, so two replays draw the same values in the same sequence.
+    let extra = 0;
+    for (const seg of result.segments) {
+      if (seg.kind === "drive") continue;
+      const jitter = hosRng.int(HOS_REST_JITTER_TICKS + 1); // 0..JITTER inclusive
+      extra += seg.minutes + jitter;
+      const status: DutyStatus = seg.kind === "break" ? "on_break" : "resting";
+      const reason =
+        seg.kind === "break" ? "30-min-break-due" : "10h-reset";
+      emitDutyState(driverId, status, reason, result.clock);
+    }
+    // If the leg required any pause, the driver resumes driving afterward.
+    if (extra > 0) {
+      emitDutyState(driverId, "driving", "rest-complete", result.clock);
+    }
+    return extra;
+  };
+
+  /**
+   * SIM-HOS-04: decide which driver dispatches the trailer's NEXT leg — the
+   * Phase-12 relay/swap-at-hub. The trailer's CURRENTLY-bound driver is checked
+   * against the Phase-10 HOS engine: it keeps the trailer iff it `mayDriveNow`
+   * AND has enough {@link remainingLegalDriveMinutes} to complete the whole leg
+   * with NO mandatory rest. Otherwise the engine RELAYS to a fresh legal driver
+   * from the center spare pool (DRV-04): it emits `DriverSwappedAtHub`, puts the
+   * tired driver into a 10h `resting` reset (so it re-enters the pool later), and
+   * rebinds the trailer to the fresh driver — so the trailer departs ON TIME
+   * instead of parking. When NO fresh legal driver is free, it returns the tired
+   * driver unchanged and the caller falls back to the Phase-11 park-while-resting
+   * path ({@link accrueDrivingLeg} injects the mid-leg rest). Pure deterministic
+   * selection — the spare scan is in STABLE registration order and reads only the
+   * virtual-clock `availableAtMin` map, never wall-clock; it makes ZERO `hosRng`
+   * draws (the relay adds duty events, not random durations).
+   *
+   * @returns The driverId that will drive the leg (post-swap when a relay fired).
+   */
+  const selectDriverForLeg = (
+    trailerId: string,
+    tripId: string,
+    legMinutes: number,
+    departIso: string,
+  ): string => {
+    const nowMin = isoToEpochMinutes(departIso);
+    const current = driverByTrailer.get(trailerId)!;
+    const currentClock = clockByDriver.get(current)!;
+
+    // Remaining legal drive minutes for a driver evaluated AT the dispatch
+    // instant (Phase-10 HOS-03). The bound driver keeps the trailer iff it can
+    // legally complete the WHOLE leg with no mandatory rest (so the trailer would
+    // not park). A driver whose clock is freshly anchored at `nowMin` has the
+    // full 11h/14h budget; one mid-cycle has less.
+    const remainingFor = (clock: HosClock): number =>
+      mayDriveNow(clock, hosLimits, nowMin)
+        ? remainingLegalDriveMinutes(clock, hosLimits, nowMin)
+        : 0;
+    const currentRemaining = remainingFor(currentClock);
+
+    // No relay when the bound driver can finish the leg outright (the common,
+    // short-leg case).
+    if (currentRemaining >= legMinutes) {
+      availableAtMinByDriver.set(current, nowMin); // confirm it is on-duty now.
+      return current;
+    }
+
+    // The bound driver cannot finish the leg → look for a FRESH relay driver from
+    // the spare pool. A spare is eligible iff it is free now (`availableAtMin <=
+    // now`); its clock is RE-ANCHORED to the dispatch instant when it comes on
+    // duty for the relay (it just took a ≥10h reset waiting in the pool), so a
+    // chosen spare has the full legal budget. We swap only when the fresh driver
+    // would legally drive STRICTLY MORE of the leg than the tired bound driver —
+    // i.e. the handoff actually moves freight further before any park. Scan in
+    // stable registration order; the FIRST eligible spare wins (deterministic).
+    const fullFreshBudget = remainingFor(freshHosClock(departIso));
+    let fresh: string | undefined;
+    if (fullFreshBudget > currentRemaining) {
+      for (const candidate of sparePool) {
+        if (candidate === current) continue;
+        if (availableAtMinByDriver.get(candidate)! > nowMin) continue; // busy.
+        fresh = candidate;
+        break;
+      }
+    }
+
+    if (fresh === undefined) {
+      // Pool exhausted (or a fresh driver would not help) — fall back to the
+      // Phase-11 park: keep the tired driver and let `accrueDrivingLeg` inject
+      // the mid-leg rest.
+      return current;
+    }
+
+    // RELAY (SIM-HOS-04). Emit the swap, rebind the trailer to the fresh driver
+    // (clock re-anchored at the dispatch instant), and put the tired driver into
+    // a 10h off-duty reset so it re-enters the pool later.
+    const swap: DriverSwappedAtHub = {
+      type: "DriverSwappedAtHub",
+      schemaVersion: 1,
+      payload: {
+        outgoingDriverId: current,
+        incomingDriverId: fresh,
+        hubId: center.hubId,
+        tripId,
+        trailerId,
+        occurredAt: departIso,
+      },
+    };
+    emit(`trailer-${trailerId}`, swap);
+
+    // The tired driver rests (a 10h reset anchored at the swap instant). Its
+    // per-shift clocks zero and it becomes available again after the reset
+    // elapses — re-entering the spare pool to relay a future trailer.
+    const restedClock: HosClock = {
+      ...freshHosClock(epochMinutesToIso(nowMin + hosLimits.resetOffDutyMin)),
+      weeklyOnDutyMin: currentClock.weeklyOnDutyMin,
+    };
+    clockByDriver.set(current, restedClock);
+    availableAtMinByDriver.set(current, nowMin + hosLimits.resetOffDutyMin);
+    emitDutyState(current, "resting", "relay-handoff", restedClock);
+    if (!sparePool.includes(current)) sparePool.push(current);
+    const idx = sparePool.indexOf(fresh);
+    if (idx >= 0) sparePool.splice(idx, 1);
+
+    // The fresh driver comes on duty NOW with a clock anchored at this instant
+    // (full legal budget for the leg).
+    driverByTrailer.set(trailerId, fresh);
+    clockByDriver.set(fresh, freshHosClock(departIso));
+    availableAtMinByDriver.set(fresh, nowMin);
+    return fresh;
+  };
+
   // --- Trailer trips: one trailer per spoke, looping center -> spoke -> center.
   const departTrailer = (trailerId: string, spoke: Hub, departTick: number): void => {
     tripCounter += 1;
@@ -343,6 +712,12 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       emit(`package-${packageId}`, loadScan);
     }
 
+    // SIM-HOS-05: LoadStarted is emitted BEFORE the TrailerDeparted (after the
+    // load scans), gated by `hosOn` so off-mode stays byte-identical.
+    if (hosOn) {
+      emitPhase("LoadStarted", trailerId, center.hubId, tripId);
+    }
+
     const departed: TrailerDeparted = {
       type: "TrailerDeparted",
       schemaVersion: 1,
@@ -356,16 +731,60 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     };
     emit(`trailer-${trailerId}`, departed);
 
+    // Per-departure seeded log-normal transit (right-skewed; same seed ⇒ same).
+    // TIME-01: the outbound leg is center→spoke, so transit is drawn from THAT
+    // leg's geography-derived per-leg params (a long coast leg dwarfs a short one).
+    // Drawn HERE (before the HOS dispatch decision) so the relay can ask whether
+    // the bound driver can legally complete THIS leg's minutes. No other timing
+    // draw is interleaved in this function, so the timing-substream draw ORDER is
+    // unchanged vs Phase 11 — the HOS-off stream stays byte-identical.
+    const transitTicks = drawTransitTicks(center.hubId, spoke.hubId);
+
+    // SIM-HOS-02/04: pick the dispatch driver — a relay/swap fires here when the
+    // bound driver is out of legal hours for the leg (DriverSwappedAtHub), else
+    // the bound driver keeps the trailer. Then open the driving shift for the
+    // CHOSEN driver. The driver↔trip linkage is carried by `DriverAssignedToTrip`
+    // (the `TrailerDeparted` payload is `.strict()` with no driver field — the
+    // assignment event is the single source of the binding, DRY with DRV-03).
+    let restTicks = 0;
+    if (hosOn) {
+      const driverId = selectDriverForLeg(
+        trailerId,
+        tripId,
+        transitTicks,
+        clock.nowIso(),
+      );
+      const assigned: DriverAssignedToTrip = {
+        type: "DriverAssignedToTrip",
+        schemaVersion: 1,
+        payload: { driverId, tripId, trailerId, occurredAt: clock.nowIso() },
+      };
+      emit(`driver-${driverId}`, assigned);
+      emitDutyState(driverId, "driving", "trip-dispatched", clockByDriver.get(driverId)!);
+    }
+
     // SIM-03: DOCK-PORTAL reads as the loaded packages cross the door. Strong
     // RSSI, one candidate read per tag, subject to missRate (drops are omitted).
     if (rfidEnabled && loaded.length > 0) {
       emitRfid("portal", trailerId, center.hubId, loaded);
     }
 
-    // Per-departure seeded log-normal transit (right-skewed; same seed ⇒ same).
-    // TIME-01: the outbound leg is center→spoke, so transit is drawn from THAT
-    // leg's geography-derived per-leg params (a long coast leg dwarfs a short one).
-    const arriveTick = departTick + drawTransitTicks(center.hubId, spoke.hubId);
+    // SIM-HOS-03: accrue the driving leg through the shared HOS engine and push
+    // the arrival later by any mandatory break/rest minutes. After a successful
+    // relay the dispatched driver is fresh, so the leg fits with no rest and the
+    // trailer departs ON TIME; only when the pool was exhausted (no swap) does
+    // the tired driver park mid-leg. ZERO `hosRng` draws when HOS is off.
+    if (hosOn) {
+      const driverId = driverByTrailer.get(trailerId)!;
+      restTicks = accrueDrivingLeg(driverId, transitTicks, clock.nowIso());
+      // The driver is in-flight until the leg (plus any park) completes, so it
+      // is unavailable for relay until then — re-entering the pool on arrival.
+      availableAtMinByDriver.set(
+        driverId,
+        isoToEpochMinutes(clock.nowIso()) + transitTicks + restTicks,
+      );
+    }
+    const arriveTick = departTick + transitTicks + restTicks;
     schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
   };
 
@@ -389,6 +808,11 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       payload: { trailerId, hubId: spoke.hubId, dockDoorId: `${spoke.hubId}-DOCK1` },
     };
     emit(`trailer-${trailerId}`, docked);
+
+    // SIM-HOS-05: UnloadStarted follows TrailerDocked (gated by `hosOn`).
+    if (hosOn) {
+      emitPhase("UnloadStarted", trailerId, spoke.hubId, tripId);
+    }
 
     // SIM-03: TRAILER-ANTENNA burst during the dwell window — multiple noisier,
     // zone-ish reads per carried tag so the fusion engine's dwell windowing is
@@ -429,6 +853,13 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
         payload: { packageId, hubId: spoke.hubId },
       };
       emit(`package-${packageId}`, atHub);
+    }
+
+    // SIM-HOS-05: UnloadCompleted follows the last unload scan at this spoke
+    // (gated by `hosOn`). The held-back over-carried package keeps riding, but
+    // the spoke's unload PHASE for the dropped packages is complete here.
+    if (hosOn) {
+      emitPhase("UnloadCompleted", trailerId, spoke.hubId, tripId);
     }
 
     // F-07: emit the SPOKE-ORIGIN return departure carrying the held-back

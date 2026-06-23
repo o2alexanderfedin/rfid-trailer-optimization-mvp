@@ -1,15 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Realistic Time Model + Hardening
-status: complete
-last_updated: "2026-06-22T00:00:00.000Z"
-last_activity: 2026-06-22
+milestone: v1.2
+milestone_name: Driver HOS & Hub Detail
+status: Awaiting next milestone
+stopped_at: v1.2 milestone close complete — awaiting next milestone.
+last_updated: "2026-06-22T04:12:01.801Z"
+last_activity: 2026-06-22 — Milestone v1.2 completed and archived
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 0
-  completed_plans: 0
+  total_phases: 10
+  completed_phases: 10
+  total_plans: 10
+  completed_plans: 10
   percent: 100
 ---
 
@@ -20,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-22)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** v1.1 shipped (2026-06-22). Awaiting next milestone — run /gsd-new-milestone to define v1.2.
+**Current focus:** v1.2 (Driver HOS & Hub Detail) shipped 2026-06-22 and archived. Awaiting the next milestone — run `/gsd-new-milestone` for v1.3.
 
 ## Current Position
 
-Phase: —
+Phase: Milestone v1.2 complete (Phases 9–18, 35/35 requirements) — shipped & archived 2026-06-22
 Plan: —
-Status: v1.1 milestone archived (2026-06-22). Awaiting next milestone.
-Last activity: 2026-06-22 — v1.1 milestone bookkeeping complete; archives created; REQUIREMENTS.md deleted; feature branch ready for git-flow merge by orchestrator.
+Status: Awaiting next milestone (run /gsd-new-milestone for v1.3)
+Last activity: 2026-06-22 — Milestone v1.2 completed and archived
 
 ## Performance Metrics
 
@@ -69,7 +70,7 @@ Recent decisions affecting current work:
 
 - [RESOLVED 2026-06-21] The `*.test.tsx`-never-run gap is FIXED (branch feature/test-coverage-90): added a jsdom (`ui`) + Browser-Mode (`browser`, Playwright/Chromium) Vitest project + RTL + MSW; `test:all` now runs the jsdom lane, `test:browser` runs the map. Plus the honest cross-package coverage fix (`pnpm coverage` + `vitest.coverage.config.ts` aliasing `@mm/*`→src). Result: 78%→**95.2% lines / 94.0% stmts / 95.5% fn**, every package ≥91.7%, web 19%→93.3%.
 - [optional follow-up] `wsClient.ts` raw-socket connect path still 56% (the WsProvider render test drives a test context, not a live socket), and overall **branch** coverage is 82% (lines/stmts/fn are 94–95%). A focused top-up would close both if a 90% *branch* bar is wanted.
-- [v1.1 candidate — "realistic time model"] Dwell + transit are now seeded **log-normal** (260621-j57), but: (a) the optimizer still does NOT consume dwell/transit (time-expanded graph uses 15-min steps; populate `serviceMin`/wait-edge weights from the timing draws); (b) no distinct CENTER-hub dwell site exists in the modeled cycle (center arrival is a terminal unload) — `dwellCenter` is wired but unused until a center re-dispatch is modeled; (c) transit is randomized around a median, not yet **distance-derived** (pairs with the ORS road-directions idea).
+- [RESOLVED v1.1 2026-06-22] The "realistic time model" candidate shipped: (a) optimizer now consumes expected dwell/transit (OPT-09/10), (b) distinct center-hub re-dispatch dwell modeled (TIME-02 `dwellCenter`), (c) transit distance-derived from ORS `duration_s` (TIME-01).
 
 ### Blockers/Concerns
 
@@ -92,12 +93,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-21 — three merges to develop: (1) UI speed-of-time gauge (quick task 260621-0fy); (2) test coverage 78%→95.2% lines (v8 attribution fix + jsdom/Browser-Mode/MSW web harness, 14 tests); (3) seeded log-normal dwell+transit timing (260621-j57) replacing fixed 10/30-tick constants — dedicated timing RNG keeps it orthogonal to RFID/over-carry; deterministic; scenario-reopt keystone re-baselined + strengthened. Gate green: 1149 tests / 117 files.
-Stopped at: log-normal timing merged to develop; between milestones; awaiting /gsd-new-milestone to scope v1.1 (realistic-time-model items queued in Pending Todos)
-Resumed: 2026-06-21 — /gsd-resume-work; verified clean between-milestones state (gate green, no incomplete work); presenting v1.1 scoping path.
-Resume file: .continue-here.md (root)
+Last session: 2026-06-22 — v1.2 (Driver HOS & Hub Detail) shipped and archived; 10 phases (9–18), 35/35 requirements; final gate green (test:all 1473/139).
+Stopped at: v1.2 milestone close complete — awaiting next milestone.
+Resume file: None
 
 ## Operator Next Steps
 
-- Orchestrator: merge feature/v1.1-realistic-time-model → develop via git-flow, tag v1.1.0
-- Then: /gsd-new-milestone to define v1.2
+- v1.2 shipped 2026-06-22; awaiting next milestone. Run /gsd-new-milestone for v1.3.

@@ -21,10 +21,26 @@ export {
   PRODUCTION_DETECTION_CONFIG,
   DEMO_RFID_CONFIG,
   DEMO_OVER_CARRY_CONFIG,
+  resolveDemoHosEnabled,
 } from "./detection-config.js";
+// Phase 18: re-export the FMCSA HOS limits so downstream consumers (e.g. the
+// @mm/web real-e2e globalSetup, which does NOT depend on @mm/domain directly)
+// can drive the LIVE HOS-on demo path with the same default config as `main.ts`.
+export { DEFAULT_HOS_CONFIG } from "@mm/domain";
+export type { HosConfig } from "@mm/domain";
 export type { OverCarryConfig } from "./detection-config.js";
 export { registerPlanRoutes } from "./routes/plan.js";
 export type { PlanResponseDto, ScoredPlanDto } from "./routes/plan.js";
+// Plan 05-04 (VIZ-05) / Phase 14 (HUBQ-04): trailer plan detail DTO.
+export { registerPlanDetailRoutes } from "./routes/plan-detail.js";
+export type { TrailerPlanDto, RearToNoseSlice } from "./routes/plan-detail.js";
+// Phase 14 (HUBQ-01..07): the hub-detail read endpoint + DTOs.
+export { registerHubDetailRoutes } from "./routes/hub-detail.js";
+export type {
+  HubDetailDto,
+  HubTrailerDto,
+  HubTrailerDriverDto,
+} from "./routes/hub-detail.js";
 export { registerOptimizerRoutes } from "./routes/optimizer.js";
 export type {
   OptimizerRecommendationsDto,

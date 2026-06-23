@@ -1,5 +1,31 @@
 # Milestones
 
+## v1.2 Driver HOS & Hub Detail (Shipped: 2026-06-22)
+
+**Phases completed:** 10 phases (Phases 9–18)
+
+**Status:** 35/35 v1.2 requirements shipped and validated. Final gate: build 10/10 · typecheck 0 · lint 0 · **test:all 1473 tests / 139 files** · browser 9 · glpk oracle + planner-vs-validator green.
+
+**Key accomplishments:**
+
+1. **Driver domain model + full-FMCSA `HosConfig` + 7 new closed-union events (Phase 9):** `Driver` entity and `HosClock` added; the event union grows 13→20 (driver lifecycle + authoritative load/unload phase events) with zod schemas and contract tests green.
+2. **Pure forward-labeling HOS engine, shared by sim + optimizer (Phase 10):** deterministic drive/break/rest sequencing — sleeper splits 7/3 & 8/2, 70h/8-day cap + 34h restart — as a pure `@mm/domain` module reused by both engines (DRY).
+3. **Sim HOS enforcement + driver relay/swap at hubs + load/unload events (Phases 11–12):** drivers assigned per trip, duty accrued, mandatory rest/breaks injected, and relay/swap to a fresh driver at the hub keeps freight moving — via a 5th seeded RNG substream (salt `0x10510901`). **HOS-off is byte-identical to the pre-v1.2 golden; a new HOS-on golden was captured.**
+4. **Driver-status projection + Hub Detail API + ws driver buckets (Phases 13–14):** live==rebuilt driver-status projection, `GET /api/hubs/:id/detail`, and ws driver buckets.
+5. **HOS-aware → hard-enforced optimizer (Phases 15–16):** first soft `restCost` (neutral default), then **hard-enforced** rest-as-`serviceMin` gate reusing the Phase-2 LIFO pattern, with `insertRest`/relay recommendations.
+6. **Clickable Hub Detail panel + map duty coloring (Phase 17):** driver duty + remaining legal drive time in a panel, with duty coloring on the map.
+7. **Live demo runs HOS-on + README (Phase 18):** `HOS_ENABLED` live demo path; README plus 2 real screenshots.
+8. **Adversarial milestone audit caught OPT-HOS-02/03 dark on the live path:** closed by persisting the full `HosClock` into the projection + twin-snapshot, proven by `optimizer-hos-live.int.test.ts`.
+
+**Determinism keystone held across all 10 phases.**
+
+**Known LOW debt carried (optional):**
+
+- Hub-scoped exceptions filter not implemented (only trailer-scoped on the client).
+- Screenshot capture uses fallback path (not chromium-real).
+
+---
+
 ## v1.0 MVP (Shipped: 2026-06-20)
 
 **Phases completed:** 5 phases, 34 plans, ~110–120 tasks across 34 plans
@@ -34,6 +60,7 @@
 **Gate numbers:** build 10/10 · typecheck 0 · lint 0 · unit 960 · ui 183 · integration 82/20
 
 **Known LOW debt carried to v1.2:**
+
 - Timing-config plumbing asymmetric: `RollingLoop`/`buildTwinSnapshot`/`runEpoch` hardcode `DEFAULT_TIMING_CONFIG` (harmless as shipped — both default agree; latent DRY break if non-default timing ever injected).
 - `DEFAULT_SPEED` literal duplicated in 3 places (`wsClient.ts`, `SpeedControl.tsx`, backend speed-controller) — future DRY cleanup.
 - `seq`/`simMs` accept `NaN` (`typeof === "number"`) — pre-existing.

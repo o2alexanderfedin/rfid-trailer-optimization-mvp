@@ -52,6 +52,26 @@ export {
   hubInventoryReducer,
 } from "./reducers/hub-inventory.js";
 
+// --- PRJ-01: driver duty status + HOS summary --------------------------------
+export type {
+  DriverStatus,
+  DriverStatusState,
+} from "./reducers/driver-status.js";
+export {
+  driverStatusReducer,
+  emptyDriverStatusState,
+} from "./reducers/driver-status.js";
+
+// --- PRJ-02: driver -> trip/trailer assignment -------------------------------
+export type {
+  DriverAssignment,
+  DriverAssignmentState,
+} from "./reducers/driver-assignment.js";
+export {
+  driverAssignmentReducer,
+  emptyDriverAssignmentState,
+} from "./reducers/driver-assignment.js";
+
 // --- SNS-02: tag -> package registry (inline, decision-critical) -------------
 export type { TagRegistryState } from "./reducers/tag-registry.js";
 export {
@@ -110,6 +130,10 @@ export type {
   PackageLocationTable,
   TrailerStateTable,
   HubInventoryTable,
+  DriverStatusTable,
+  DriverStatusRow,
+  DriverAssignmentTable,
+  DriverAssignmentRow,
   TagRegistryTable,
   TagRegistryRow,
   ZoneEstimateTable,

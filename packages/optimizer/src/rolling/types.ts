@@ -1,4 +1,11 @@
-import type { DomainEvent, PlanAccepted, PlanGenerated, TimingConfig } from "@mm/domain";
+import type {
+  DomainEvent,
+  HosClock,
+  HosConfig,
+  PlanAccepted,
+  PlanGenerated,
+  TimingConfig,
+} from "@mm/domain";
 
 import type { ObjectiveBreakdown, ObjectiveWeights } from "../objective/types.js";
 import type { OptimizerScope } from "../graph/types.js";
@@ -48,6 +55,40 @@ export interface TwinBlock {
 }
 
 /**
+ * OPT-HOS-01 (v1.2 Phase 15) — the assigned driver's HOS summary carried into the
+ * planning twin. `remainingDriveMinutes` is the Phase-10 HOS engine's headline
+ * `remainingLegalDriveMinutes`, read DETERMINISTICALLY from the Phase-13
+ * `driver_status` projection by the snapshot builder (NEVER recomputed off the
+ * wall clock). The optimizer SOFT-prefers trailers whose driver has more
+ * remaining minutes (a smaller {@link PlanMetrics.restPenalty}). OPTIONAL +
+ * additive on {@link TwinTrailer}: when absent, the trailer has no known driver
+ * and the rest term is 0 — prior plans reproduce byte-identically.
+ */
+export interface TwinDriver {
+  /** Stable id of the driver bound to this trailer's trip. */
+  readonly driverId: string;
+  /**
+   * Remaining legal drive minutes (HOS-03), clamped ≥ 0 — the projection's
+   * `remaining_drive_minutes`. Higher = more rested = soft-preferred.
+   */
+  readonly remainingDriveMinutes: number;
+  /**
+   * OPT-HOS-02 (Phase 16) — OPTIONAL full per-shift HOS clock (DRV-02), read
+   * DETERMINISTICALLY off the `driver_status` projection. When present (and ONLY
+   * then), the epoch runs the HARD HOS gate via the shared Phase-10 engine: a
+   * trailer whose assigned driver cannot legally complete its route is
+   * INFEASIBLE. Absent ⇒ the Phase-15 SOFT-only behavior (no hard gate) — every
+   * pre-Phase-16 twin reproduces its prior verdict byte-identically.
+   */
+  readonly hosClock?: HosClock;
+  /**
+   * OPT-HOS-02 — OPTIONAL FMCSA limits for the hard gate; defaults to
+   * `DEFAULT_HOS_CONFIG` when omitted (the demo full-rule set).
+   */
+  readonly hosConfig?: HosConfig;
+}
+
+/**
  * One trailer in the planning twin: its current hub, scheduled departure, the
  * remaining route it must service, and the load blocks currently assigned to it.
  * A departure within the freeze window makes it FROZEN — the epoch leaves its
@@ -66,6 +107,12 @@ export interface TwinTrailer {
   readonly route: readonly TwinStop[];
   /** Load blocks currently assigned to this trailer. */
   readonly blocks: readonly TwinBlock[];
+  /**
+   * OPT-HOS-01 — the assigned driver's HOS summary (remaining legal drive
+   * minutes). OPTIONAL + additive: absent when the trailer has no driver bound
+   * (back-compat — prior twins reproduce byte-identically with `restCost = 0`).
+   */
+  readonly driver?: TwinDriver;
 }
 
 /**

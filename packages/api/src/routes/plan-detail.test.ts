@@ -274,6 +274,10 @@ describe("GET /trailers/:id/plan (VIZ-05)", () => {
     expect(body["instructions"]).toBeDefined();
     expect(typeof body["explanation"]).toBe("string");
     expect((body["explanation"] as string).length).toBeGreaterThan(0);
+    // HUBQ-04 (additive): slice-aware utilization ratio in [0, 1].
+    expect(typeof body["utilization"]).toBe("number");
+    expect(body["utilization"] as number).toBeGreaterThan(0);
+    expect(body["utilization"] as number).toBeLessThanOrEqual(1);
   });
 
   it("rearToNose order has depth 0 at index 0 (rear first)", async () => {

@@ -132,10 +132,16 @@ export function rehandleScore(
 
 /**
  * Total used vs total capacity volume across all slices ⇒ the utilization
- * fraction `u`. A trailer with zero capacity has undefined utilization, treated
- * as 0 (it can hold nothing, so it is maximally under-utilized).
+ * fraction `u` (`Σ usedVolume / Σ capacityVolume`, in `[0, 1]`). A trailer with
+ * zero capacity has undefined utilization, treated as 0 (it can hold nothing, so
+ * it is maximally under-utilized).
+ *
+ * Exported (v1.2 HUBQ-04) as the SINGLE source of truth for the slice-aware
+ * utilization ratio: the hub-detail + trailer-plan read endpoints surface this
+ * exact fraction, and {@link utilizationScore} derives its band penalty from it —
+ * so the displayed ratio and the optimizer's penalty never diverge (DRY).
  */
-function utilizationFraction(plan: LoadPlan): number {
+export function utilizationFraction(plan: LoadPlan): number {
   let used = 0;
   let capacity = 0;
   for (const s of plan.slices) {

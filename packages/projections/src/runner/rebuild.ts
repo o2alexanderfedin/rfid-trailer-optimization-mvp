@@ -47,7 +47,7 @@ export async function rebuildProjections(
 ): Promise<void> {
   // 1. Drop derived state. CASCADE is unnecessary (no FKs into these tables);
   //    RESTART IDENTITY is moot (no identity columns) — kept simple (KISS).
-  await sql`TRUNCATE TABLE package_location, trailer_state, hub_inventory, tag_registry, zone_estimate, exceptions, exception_kpi`.execute(
+  await sql`TRUNCATE TABLE package_location, trailer_state, hub_inventory, driver_status, driver_assignment, tag_registry, zone_estimate, exceptions, exception_kpi`.execute(
     db,
   );
 
@@ -95,6 +95,7 @@ export function serializeTwin(twin: OperationalTwin): string {
       tripId: t.tripId,
       dockDoorId: t.dockDoorId,
       assignedPackageIds: [...t.assignedPackageIds],
+      driverId: t.driverId,
       lastEventAt: t.lastEventAt,
     }));
 
@@ -107,7 +108,40 @@ export function serializeTwin(twin: OperationalTwin): string {
       staged: [...h.staged],
     }));
 
-  return JSON.stringify({ packageLocation, trailerState, hubInventory });
+  const driverStatus = [...twin.driverStatus.values()]
+    .sort((a, b) => compare(a.driverId, b.driverId))
+    .map((d) => ({
+      driverId: d.driverId,
+      status: d.status,
+      remainingDriveMinutes: d.remainingDriveMinutes,
+      dutyWindowDeadline: d.dutyWindowDeadline,
+      totalDrivenMinutes: d.totalDrivenMinutes,
+      weeklyOnDutyMin: d.weeklyOnDutyMin,
+      // OPT-HOS-02: the full persisted clock joins the golden-replay surface so
+      // live==rebuilt now also covers `hos_clock` (object key order is fixed).
+      hosClock: d.hosClock,
+      currentHubId: d.currentHubId,
+      currentTripId: d.currentTripId,
+      lastEventAt: d.lastEventAt,
+    }));
+
+  const driverAssignment = [...twin.driverAssignment.values()]
+    .sort((a, b) => compare(a.driverId, b.driverId))
+    .map((a) => ({
+      driverId: a.driverId,
+      tripId: a.tripId,
+      trailerId: a.trailerId,
+      hubId: a.hubId,
+      lastEventAt: a.lastEventAt,
+    }));
+
+  return JSON.stringify({
+    packageLocation,
+    trailerState,
+    hubInventory,
+    driverStatus,
+    driverAssignment,
+  });
 }
 
 /** Total, stable string comparator (code-unit order) — locale-independent (P3). */

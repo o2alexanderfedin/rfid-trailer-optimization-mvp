@@ -46,9 +46,21 @@ function hubsOf(event: DomainEvent): readonly string[] {
       return [event.payload.hubId];
     // WrongTrailerDetected names no hub (trailer-vs-trailer disagreement); it
     // contributes via `trailersOf` only.
+    // Phase-9 (v1.2) driver-lifecycle + load/unload phase events contribute no
+    // hub to the affected scope in this phase (no optimizer HOS behavior yet —
+    // sim emission + optimizer awareness land in later phases). Classifying them
+    // as scope-neutral keeps the closed-union exhaustive + the rolling epoch
+    // unchanged until those phases wire them in.
     case "WrongTrailerDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return [];
     default: {
       // Exhaustiveness guard — a new event type must be classified here.

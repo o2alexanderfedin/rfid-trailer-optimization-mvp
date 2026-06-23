@@ -4,6 +4,7 @@
 
 - ✅ **v1.0 MVP** — Phases 1–5 (shipped 2026-06-20) — full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - ✅ **v1.1 Realistic Time Model + Hardening** — Phases 6–8 (shipped 2026-06-22) — full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
+- ✅ **v1.2 Driver HOS & Hub Detail** — Phases 9–18 (shipped 2026-06-22) — full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 
 ## Phases
 
@@ -27,15 +28,28 @@
 
 </details>
 
+<details>
+<summary>✅ v1.2 Driver HOS & Hub Detail (Phases 9–18) — SHIPPED 2026-06-22</summary>
+
+> **Keystone constraint:** determinism. HOS-*off* stays byte-identical to the pre-v1.2 golden replay; HOS-*on* adds a new golden. All HOS RNG flows through one new isolated seeded substream.
+
+- [x] Phase 9: Driver model + HOS config + duty/phase events ✅ 2026-06-22
+- [x] Phase 10: Pure forward-labeling HOS engine (shared sim + optimizer) ✅ 2026-06-22
+- [x] Phase 11: Sim HOS enforcement + load/unload events + determinism golden ✅ 2026-06-22
+- [x] Phase 12: Driver relay / swap at hubs ✅ 2026-06-22
+- [x] Phase 13: Driver-status projection + tables ✅ 2026-06-22
+- [x] Phase 14: Hub-detail endpoint + ws driver buckets ✅ 2026-06-22
+- [x] Phase 15: Optimizer HOS-aware ✅ 2026-06-22
+- [x] Phase 16: Optimizer HOS-enforced ✅ 2026-06-22
+- [x] Phase 17: Hub Detail panel UI + map duty styling ✅ 2026-06-22
+- [x] Phase 18: README features + screenshots ✅ 2026-06-22
+
+</details>
+
 ## Progress
 
-| Phase | Milestone | Plans Complete | Status | Completed |
-|-------|-----------|----------------|--------|-----------|
-| 1. Operational Data Foundation + Live Map Spike | v1.0 | 7/7 | ✅ Complete | 2026-06-19 |
-| 2. Load Planning | v1.0 | 6/6 | ✅ Complete | 2026-06-19 |
-| 3. RFID-Assisted Validation | v1.0 | 7/7 | ✅ Complete | 2026-06-19 |
-| 4. Rolling Optimizer | v1.0 | 6/6 | ✅ Complete | 2026-06-19 |
-| 5. Simulation + Visualization Wrapper | v1.0 | 8/8 | ✅ Complete | 2026-06-19 |
-| 6. Realistic Geography & Time Model | v1.1 | — | ✅ Complete | 2026-06-21 |
-| 7. Time-Aware Optimizer | v1.1 | — | ✅ Complete | 2026-06-21 |
-| 8. Client Hardening & Coverage | v1.1 | — | ✅ Complete | 2026-06-22 |
+| Milestone | Phases | Status | Shipped |
+|-----------|--------|--------|---------|
+| v1.0 MVP | 1–5 | ✅ Complete | 2026-06-20 |
+| v1.1 Realistic Time Model + Hardening | 6–8 | ✅ Complete | 2026-06-22 |
+| v1.2 Driver HOS & Hub Detail | 9–18 | ✅ Complete | 2026-06-22 |

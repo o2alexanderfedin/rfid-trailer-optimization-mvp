@@ -78,6 +78,34 @@ function docked(trailerId: string, hubId: string, dockDoorId: string): DomainEve
   };
 }
 
+function driverAssigned(
+  driverId: string,
+  tripId: string,
+  trailerId: string,
+  occurredAt: string,
+): DomainEvent {
+  return {
+    type: "DriverAssignedToTrip",
+    schemaVersion: 1,
+    payload: { driverId, tripId, trailerId, occurredAt },
+  };
+}
+
+function driverSwapped(
+  outgoingDriverId: string,
+  incomingDriverId: string,
+  hubId: string,
+  tripId: string,
+  trailerId: string,
+  occurredAt: string,
+): DomainEvent {
+  return {
+    type: "DriverSwappedAtHub",
+    schemaVersion: 1,
+    payload: { outgoingDriverId, incomingDriverId, hubId, tripId, trailerId, occurredAt },
+  };
+}
+
 function foldPackage(events: OccurredEvent[]) {
   return events.reduce(packageLocationReducer, emptyPackageLocationState);
 }
@@ -144,6 +172,7 @@ describe("trailerStateReducer (FND-06)", () => {
       tripId: "TRIP1",
       dockDoorId: null,
       assignedPackageIds: ["P1", "P2", "P3"], // sorted, order-stable
+      driverId: null,
       lastEventAt: at(0),
     });
   });
@@ -174,6 +203,54 @@ describe("trailerStateReducer (FND-06)", () => {
       dockDoorId: "DOCK7",
       tripId: "TRIP1",
     });
+  });
+
+  // PRJ-02: the assigned driver is stamped onto trailer_state (join-free hub
+  // detail) from DriverAssignedToTrip / DriverSwappedAtHub.
+  it("departure leaves driverId null until a driver is assigned", () => {
+    const state = foldTrailer([
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(0)),
+    ]);
+    expect(state.get("T1")?.driverId).toBeNull();
+  });
+
+  it("DriverAssignedToTrip stamps the driverId onto the trailer row", () => {
+    const state = foldTrailer([
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(0)),
+      evt(driverAssigned("D1", "TRIP1", "T1", at(1_000)), at(1_000)),
+    ]);
+    expect(state.get("T1")).toMatchObject({
+      trailerId: "T1",
+      status: "in_transit",
+      driverId: "D1",
+      lastEventAt: at(1_000),
+    });
+  });
+
+  it("DriverSwappedAtHub restamps the trailer's driverId to the incoming driver", () => {
+    const state = foldTrailer([
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(0)),
+      evt(driverAssigned("D1", "TRIP1", "T1", at(1_000)), at(1_000)),
+      evt(driverSwapped("D1", "D2", "DFW", "TRIP1", "T1", at(2_000)), at(2_000)),
+    ]);
+    expect(state.get("T1")?.driverId).toBe("D2");
+    expect(state.get("T1")?.lastEventAt).toBe(at(2_000));
+  });
+
+  it("the assigned driverId carries across subsequent lifecycle events", () => {
+    const state = foldTrailer([
+      evt(departed("T1", "MEM", "DFW", "TRIP1", ["P1"]), at(0)),
+      evt(driverAssigned("D1", "TRIP1", "T1", at(1_000)), at(1_000)),
+      evt(trailerArrived("T1", "DFW", "TRIP1"), at(2_000)),
+      evt(docked("T1", "DFW", "DOCK7"), at(3_000)),
+    ]);
+    expect(state.get("T1")?.driverId).toBe("D1");
+    expect(state.get("T1")?.status).toBe("docked");
+  });
+
+  it("a DriverAssignedToTrip for an unseen trailer creates the stamped row", () => {
+    const state = foldTrailer([evt(driverAssigned("D1", "TRIP1", "T9", at(0)), at(0))]);
+    expect(state.get("T9")?.driverId).toBe("D1");
   });
 });
 

@@ -26,8 +26,39 @@ import type { ObjectiveWeights, PlanMetrics } from "../objective/types.js";
  * blockId)` lexicographically so the ranking never thrashes (anti-P7).
  */
 
-/** The §17.4 recovery actions repair can recommend. */
-export type RepairKind = "split" | "reassign" | "hold" | "overCarry";
+/**
+ * The §17.4 recovery actions repair can recommend. The first four address LIFO /
+ * load-layout conflicts; `insertRest` and `relay` (OPT-HOS-03) address an
+ * HOS-infeasible leg — the load is fine but the assigned DRIVER cannot legally
+ * drive the leg.
+ */
+export type RepairKind =
+  | "split"
+  | "reassign"
+  | "hold"
+  | "overCarry"
+  | "insertRest"
+  | "relay";
+
+/**
+ * OPT-HOS-03 — the HOS-infeasible leg the OPT-HOS-02 hard gate rejected. When
+ * present on a {@link RepairScope}, `localRepair` surfaces an `insertRest`
+ * (mandatory 10h rest before the leg) and a `relay` (fresh-driver swap at the
+ * hub) recommendation, each explainable (driver + leg + why). All fields are pure
+ * data read off the gate verdict — no clock, no RNG.
+ */
+export interface HosInfeasibleLeg {
+  /** The assigned driver who cannot legally complete the leg. */
+  readonly driverId: string;
+  /** Origin hub of the rejected driving leg. */
+  readonly legFromHubId: string;
+  /** Destination hub of the rejected driving leg. */
+  readonly legToHubId: string;
+  /** Whole driving minutes the leg requires. */
+  readonly legMinutes: number;
+  /** The driver's remaining legal drive minutes (HOS-03) — why the leg is illegal. */
+  readonly remainingDriveMinutes: number;
+}
 
 /** One rear-to-nose load slice (the validator's independent input view). */
 export interface RepairSlice {
@@ -57,6 +88,13 @@ export interface RepairScope {
   readonly weights: ObjectiveWeights;
   /** Pure metrics of the base plan (each variant adjusts only the term it changes). */
   readonly baseMetrics: PlanMetrics;
+  /**
+   * OPT-HOS-03 — OPTIONAL: the HOS-infeasible leg the OPT-HOS-02 gate rejected.
+   * When present, repair ALSO emits `insertRest` + `relay` recommendations for
+   * the over-hours driver (in addition to any LIFO repairs). Absent ⇒ no HOS
+   * recommendations (pre-Phase-16 back-compat).
+   */
+  readonly hosInfeasible?: HosInfeasibleLeg;
 }
 
 /**
@@ -200,6 +238,65 @@ function variantsForBlock(scope: RepairScope, blockId: string): Variant[] {
   ];
 }
 
+/**
+ * OPT-HOS-03 — the HOS recovery variants for an over-hours driver. The load
+ * layout is UNCHANGED (the load itself is LIFO-feasible; only the driver's hours
+ * fail), so both variants reuse the scope's slices/blocks verbatim and therefore
+ * PASS the REUSED Phase-2 gate. Each rationale names the driver, the leg, and the
+ * legal/required minutes (explainable, anti-repudiation T-04-11):
+ *
+ *  - `insertRest` — insert the mandatory 10h off-duty rest before the leg so the
+ *    SAME driver completes it legally (rest-as-time; cheaper churn, higher SLA
+ *    lateness because the freight waits out the rest).
+ *  - `relay` — swap the trip to a FRESH driver in the hub's pool (Amazon-Relay
+ *    style), keeping the equipment moving (higher imbalance — work handed off —
+ *    but no SLA delay).
+ *
+ * Pure + deterministic: a function of `hosInfeasible` + base metrics only.
+ */
+function hosVariants(scope: RepairScope): Variant[] {
+  const hos = scope.hosInfeasible;
+  if (hos === undefined) return [];
+  // A stable synthetic block id for the gate/rationale provenance (the over-hours
+  // driver, not a load block). Keeps the layout view identical to the base.
+  const blockId = `hos:${hos.driverId}`;
+  const why =
+    `driver ${hos.driverId} has ${hos.remainingDriveMinutes} legal drive minutes left ` +
+    `but leg ${hos.legFromHubId}→${hos.legToHubId} needs ${hos.legMinutes} (HOS-infeasible)`;
+  return [
+    {
+      kind: "insertRest",
+      blockId,
+      slices: scope.slices,
+      blocks: scope.blocks,
+      metrics: {
+        ...scope.baseMetrics,
+        // The freight waits out the mandatory rest ⇒ SLA lateness; minimal churn.
+        slaLatenessMin: scope.baseMetrics.slaLatenessMin + 1,
+        churnVsPrevious: scope.baseMetrics.churnVsPrevious + 1,
+      },
+      rationale:
+        `Insert a mandatory rest stop before leg ${hos.legFromHubId}→${hos.legToHubId} so ` +
+        `driver ${hos.driverId} can legally complete it (${why}).`,
+    },
+    {
+      kind: "relay",
+      blockId,
+      slices: scope.slices,
+      blocks: scope.blocks,
+      metrics: {
+        ...scope.baseMetrics,
+        // Work is handed to a fresh driver ⇒ imbalance; minimal churn, no SLA hit.
+        imbalance: scope.baseMetrics.imbalance + 1,
+        churnVsPrevious: scope.baseMetrics.churnVsPrevious + 1,
+      },
+      rationale:
+        `Relay leg ${hos.legFromHubId}→${hos.legToHubId} to a fresh driver at ${hos.legFromHubId}, ` +
+        `swapping out driver ${hos.driverId} to rest (${why}).`,
+    },
+  ];
+}
+
 /** All offending block ids: those that are blocked under the current layout. */
 function offendingBlockIds(scope: RepairScope): readonly string[] {
   const verdict = validatePlan(
@@ -235,8 +332,14 @@ export function localRepair(scope: RepairScope): readonly Recommendation[] {
   const { config, route, weights } = scope;
 
   const variants: Variant[] = [];
-  for (const blockId of offendingBlockIds(scope)) {
-    variants.push(...variantsForBlock(scope, blockId));
+  // OPT-HOS-03 — HOS recovery variants FIRST (the load layout is unchanged), so a
+  // LIFO-feasible load whose only problem is the driver's hours still yields a
+  // recovery path. Layout (LIFO) repairs follow only when the layout is broken.
+  variants.push(...hosVariants(scope));
+  if (scope.hosInfeasible === undefined || !isFeasible(validatePlan({ slices: scope.slices }, scope.blocks, route, config))) {
+    for (const blockId of offendingBlockIds(scope)) {
+      variants.push(...variantsForBlock(scope, blockId));
+    }
   }
 
   const feasible: { readonly rec: Recommendation; readonly cost: number }[] = [];

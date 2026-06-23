@@ -1,5 +1,10 @@
 import {
+  applyDrivingLeg,
+  DEFAULT_HOS_CONFIG,
   DEFAULT_PLANNER_CONFIG,
+  epochMinutesToIso,
+  type HosClock,
+  type HosConfig,
   type LoadBlock,
   type PlannerConfig,
   type RouteStop,
@@ -9,7 +14,13 @@ import { isFeasible, validatePlan } from "@mm/load-planner";
 import { constructRoutes } from "./construct.js";
 import { feasibleArrivals, totalDemand } from "./feasibility.js";
 import { localSearch } from "./local-search.js";
-import type { RoutedStop, Stop, TrailerRoute, TravelModel } from "./types.js";
+import type {
+  DriverHosContext,
+  RoutedStop,
+  Stop,
+  TrailerRoute,
+  TravelModel,
+} from "./types.js";
 
 /**
  * `@mm/optimizer` — `routeTrailers`: the VRPTW pipeline entry (OPT-03, Task 3).
@@ -55,6 +66,14 @@ export interface RouteTrailersInput {
   readonly startMin?: number;
   /** Planner config for the reused HARD gate (default {@link DEFAULT_PLANNER_CONFIG}). */
   readonly config?: PlannerConfig;
+  /**
+   * OPT-HOS-02 — OPTIONAL assigned-driver HOS context. When present (and ONLY
+   * then), the HARD HOS gate runs: each driving leg is checked through the shared
+   * Phase-10 engine and a leg the driver cannot legally complete makes the route
+   * `hosFeasible: false` (folded into `feasible`). Absent ⇒ the gate is inactive
+   * and `hosFeasible` is `undefined` (pre-Phase-16 back-compat).
+   */
+  readonly driver?: DriverHosContext;
 }
 
 /**
@@ -131,6 +150,64 @@ function deriveEtas(
 }
 
 /**
+ * OPT-HOS-02 — the HARD HOS feasibility gate. Walks the ordered route's DRIVING
+ * legs (each `prev → stop` linehaul) through the SAME Phase-10 `applyDrivingLeg`
+ * engine the simulator uses (DRY — the optimizer owns NO HOS arithmetic of its
+ * own), advancing the assigned driver's {@link HosClock} leg-by-leg. A leg the
+ * driver CANNOT legally complete — the engine had to insert a 10h `rest`, a 34h
+ * restart, or a `sleeper` split to make it legal — fails the gate.
+ *
+ * Mirrors the Phase-2 LIFO HARD gate: a SEPARATE boolean verdict, checked
+ * independently of (and never folded into) any travel-cost objective (anti-P2). A
+ * 30-min `break` segment is NOT a failure — it folds in as `serviceMin` via
+ * `restMin` (rest-as-time), not an infeasibility (the leg is still completable).
+ *
+ * Pure + deterministic: the clock advances by integer minutes off the route's
+ * `startMin` (sim/event time), never the wall clock; the leg start instant is
+ * derived purely from `startMin + travelMin` accumulation. Returns `true` for an
+ * empty route (a driver who drives no legs is trivially legal).
+ *
+ * @param sequence  The improved stop sequence (service order).
+ * @param startHubId The route origin.
+ * @param travel    The pure travel oracle.
+ * @param startMin  The minute the trailer departs `startHubId` (sim/event time).
+ * @param driver    The assigned-driver HOS context (clock + FMCSA config).
+ */
+function hosLegsFeasible(
+  sequence: readonly Stop[],
+  startHubId: string,
+  travel: TravelModel,
+  startMin: number,
+  driver: DriverHosContext,
+): boolean {
+  const config: HosConfig = driver.config ?? DEFAULT_HOS_CONFIG;
+  let clock: HosClock = driver.hosClock;
+  let prevHubId = startHubId;
+  let legStartMin = startMin;
+
+  for (const stop of sequence) {
+    const legMinutes = travel.travelMin(prevHubId, stop.hubId);
+    if (legMinutes > 0) {
+      const result = applyDrivingLeg(clock, config, legMinutes, epochMinutesToIso(legStartMin));
+      // The leg is LEGAL with no relay iff the engine inserted no off-duty rest /
+      // restart / sleeper split — a `break` (30-min) is allowed (rest-as-time).
+      const requiresRest = result.segments.some(
+        (s) => s.kind === "rest" || s.kind === "sleeper",
+      );
+      if (requiresRest) return false;
+      clock = result.clock;
+    }
+    // Advance the leg-start clock by the FULL stop dwell (travel + service +
+    // any folded rest), so the next leg starts at its true departure minute. The
+    // 14h ABSOLUTE window keeps elapsing across the dwell (it does NOT pause).
+    legStartMin += legMinutes + stop.serviceMin + (stop.restMin ?? 0);
+    prevHubId = stop.hubId;
+  }
+
+  return true;
+}
+
+/**
  * Route one trailer end-to-end (see the module docstring). Returns the routed
  * sequence with ETAs, the utilization estimate, and the SEPARATE `feasible` flag
  * gated by the reused Phase-2 validator.
@@ -162,8 +239,17 @@ export function routeTrailers(input: RouteTrailersInput): TrailerRoute {
   const { plan, blocks, route } = buildLoadForGate(improved.sequence);
   const loadFeasible = isFeasible(validatePlan(plan, blocks, route, config));
 
+  // 5. OPT-HOS-02 — the HARD HOS gate (anti-P2: a SEPARATE verdict, run only when
+  //    an assigned-driver HOS context is supplied; undefined otherwise so every
+  //    pre-Phase-16 instance is byte-identical). Mirrors the Phase-2 LIFO gate.
+  const hosFeasible: boolean | undefined =
+    input.driver === undefined
+      ? undefined
+      : hosLegsFeasible(improved.sequence, startHubId, travel, startMin, input.driver);
+
   // Window+capacity feasibility (construction placed everything) AND ETAs verify
-  // AND the reused LIFO gate passes. All three are required.
+  // AND the reused LIFO gate passes AND (when present) the HOS gate passes. All
+  // are SEPARATE hard checks ANDed into `feasible` (never folded into cost).
   const windowOk = built.feasible && etas !== null && demand <= capacity;
 
   const sequence: readonly RoutedStop[] =
@@ -173,6 +259,7 @@ export function routeTrailers(input: RouteTrailersInput): TrailerRoute {
     trailerId,
     sequence,
     utilization,
-    feasible: windowOk && loadFeasible,
+    feasible: windowOk && loadFeasible && hosFeasible !== false,
+    ...(hosFeasible === undefined ? {} : { hosFeasible }),
   };
 }

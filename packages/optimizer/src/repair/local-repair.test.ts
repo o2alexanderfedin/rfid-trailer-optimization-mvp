@@ -154,3 +154,89 @@ describe("localRepair — ranked feasible split/reassign/hold/over-carry with ra
     expect(a).toEqual(b);
   });
 });
+
+// ---------------------------------------------------------------------------
+// OPT-HOS-03 — insertRest / driver-relay recommendation for an HOS-infeasible
+// assignment (Phase 16). When the optimizer's HARD HOS gate (OPT-HOS-02) rejects
+// a leg the assigned driver cannot legally complete, `localRepair` surfaces an
+// EXPLAINABLE recovery: `insertRest` (take the mandatory 10h rest before the leg)
+// and `relay` (swap to a fresh driver at the hub). The load layout is unchanged
+// (LIFO-feasible), so both pass the REUSED Phase-2 gate; the recommendation names
+// the driver, the leg, and WHY (anti-repudiation). Deterministic; no crash.
+// ---------------------------------------------------------------------------
+
+/** A LIFO-FEASIBLE base layout (the load is fine — only the DRIVER is over hours). */
+function hosScope(): RepairScope {
+  // bA unloads first at A (rear, depth 0); bB unloads later at B (depth 1) — a
+  // canonical LIFO-correct load that PASSES the validator (no layout repair needed).
+  const goodSlices = [
+    { depth: 0, loadBlockIds: ["bA"] },
+    { depth: 1, loadBlockIds: ["bB"] },
+  ];
+  return {
+    planId: "hos-base",
+    slices: goodSlices,
+    blocks,
+    route,
+    config: DEFAULT_PLANNER_CONFIG,
+    weights: DEFAULT_OBJECTIVE_WEIGHTS,
+    baseMetrics: {
+      miles: 100,
+      driverTimeMin: 60,
+      fuelUnits: 10,
+      dockWaitMin: 5,
+      handlingOps: 2,
+      rehandleScore: 0,
+      slaLatenessMin: 0,
+      utilization: 0.8,
+      overCarryUnits: 0,
+      imbalance: 0,
+      churnVsPrevious: 0,
+    },
+    // The OPT-HOS-02 gate rejected leg A→B for driver D7 (only 20 legal drive
+    // minutes left vs a 90-min leg).
+    hosInfeasible: {
+      driverId: "D7",
+      legFromHubId: "A",
+      legToHubId: "B",
+      legMinutes: 90,
+      remainingDriveMinutes: 20,
+    },
+  };
+}
+
+describe("localRepair — OPT-HOS-03 insertRest / driver-relay for an HOS-infeasible leg", () => {
+  it("surfaces an insertRest AND a relay recommendation", () => {
+    const kinds = new Set(localRepair(hosScope()).map((r) => r.kind));
+    expect(kinds.has("insertRest")).toBe(true);
+    expect(kinds.has("relay")).toBe(true);
+  });
+
+  it("every HOS recommendation is FEASIBLE (the load layout is unchanged + valid)", () => {
+    const recs = localRepair(hosScope());
+    expect(recs.length).toBeGreaterThanOrEqual(2);
+    for (const r of recs) expect(isFeasible(r.feasibility)).toBe(true);
+  });
+
+  it("the rationale NAMES the driver, the leg, and why (explainable / anti-repudiation)", () => {
+    const recs = localRepair(hosScope());
+    const insertRest = recs.find((r) => r.kind === "insertRest")!;
+    const relay = recs.find((r) => r.kind === "relay")!;
+    for (const r of [insertRest, relay]) {
+      expect(r.rationale).toContain("D7"); // driver
+      expect(r.rationale).toContain("A"); // leg from
+      expect(r.rationale).toContain("B"); // leg to
+    }
+  });
+
+  it("does NOT crash and yields recommendations even when the load layout is feasible", () => {
+    // The whole point of OPT-HOS-03: a LIFO-feasible load whose ONLY problem is the
+    // driver's hours still produces a recovery path (it would otherwise be empty).
+    expect(() => localRepair(hosScope())).not.toThrow();
+    expect(localRepair(hosScope()).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("is deterministic: same HOS-infeasible input ⇒ identical ranked recommendations", () => {
+    expect(localRepair(hosScope())).toEqual(localRepair(hosScope()));
+  });
+});

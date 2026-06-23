@@ -174,7 +174,8 @@ function applyEvent(
     // (tag registry) and trailer/hub lifecycle are projected separately —
     // detection is downstream and one-way (anti-P6). Phase-4 plan-lifecycle
     // events (PlanGenerated/PlanAccepted, OPT-04) carry no observation, so they
-    // no-op here too.
+    // no-op here too. Phase-9 (v1.2) driver-lifecycle + load/unload phase events
+    // carry no zone evidence either, so they no-op as well.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -187,6 +188,13 @@ function applyEvent(
     case "MissedUnloadDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
       return state;
     default:
       return assertNeverEvent(event);

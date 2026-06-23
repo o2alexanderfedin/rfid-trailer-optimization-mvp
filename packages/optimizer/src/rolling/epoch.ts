@@ -1,15 +1,25 @@
 import type { FeasibilityResult, LoadPlan, Violation } from "@mm/load-planner";
 import { scorePlan } from "@mm/load-planner";
 import type { LoadBlock, PlannerConfig, RouteStop, TimingConfig, TrailerSlice } from "@mm/domain";
-import { DEFAULT_PLANNER_CONFIG, DEFAULT_TIMING_CONFIG, expectedDwellMinutes } from "@mm/domain";
+import {
+  applyDrivingLeg,
+  DEFAULT_HOS_CONFIG,
+  DEFAULT_PLANNER_CONFIG,
+  DEFAULT_TIMING_CONFIG,
+  epochMinutesToIso,
+  expectedDwellMinutes,
+  type HosClock,
+  type HosConfig,
+  remainingLegalDriveMinutes,
+} from "@mm/domain";
 
 import { objective, objectiveBreakdown } from "../objective/objective.js";
 import { selectPlan } from "../objective/select-plan.js";
 import type { Candidate, ObjectiveWeights, PlanMetrics } from "../objective/types.js";
 import { localRepair } from "../repair/local-repair.js";
-import type { RepairScope } from "../repair/local-repair.js";
+import type { HosInfeasibleLeg, RepairScope } from "../repair/local-repair.js";
 import { routeTrailers } from "../vrptw/route-trailers.js";
-import type { Stop, TravelModel } from "../vrptw/types.js";
+import type { DriverHosContext, Stop, TravelModel } from "../vrptw/types.js";
 import { assignFreightForEpoch } from "../flow/freight-stage.js";
 import { detectAffectedScope } from "./scope.js";
 import { buildTwin } from "./twin.js";
@@ -263,6 +273,86 @@ function rehandleScoreFor(trailer: TwinTrailer, config: PlannerConfig): number {
   return scorePlan(plan, loadBlocks, route, config).rehandleScore;
 }
 
+/**
+ * OPT-HOS-01 — the SOFT driver-rest penalty for a trailer (Phase 15). A driver
+ * with FEWER remaining legal drive minutes is soft-penalized: the penalty is
+ * `max(0, maxDriveMin − remainingDriveMinutes)`, bounded by the FMCSA 11h drive
+ * ceiling (`DEFAULT_HOS_CONFIG.maxDriveMin`), so a fully-rested driver (remaining
+ * = 660) ⇒ penalty 0 and a depleted driver (remaining = 0) ⇒ penalty 660. The
+ * remaining minutes are read DETERMINISTICALLY off the Phase-13 `driver_status`
+ * projection via `trailer.driver` (NEVER recomputed off the clock); the value is
+ * clamped non-negative and rounded to a whole minute (anti-P12).
+ *
+ * Returns 0 when the trailer has no driver bound — so a driverless twin (every
+ * pre-Phase-15 snapshot) reproduces the prior `restPenalty: 0` exactly. With the
+ * default `restCost = 0` weight this whole term is a no-op (byte-identical plans).
+ */
+function restPenaltyFor(trailer: TwinTrailer): number {
+  if (trailer.driver === undefined) return 0;
+  const remaining = toNonNegIntMinutes(trailer.driver.remainingDriveMinutes);
+  return Math.max(0, DEFAULT_HOS_CONFIG.maxDriveMin - remaining);
+}
+
+/**
+ * OPT-HOS-02 — build the {@link DriverHosContext} that ACTIVATES the hard HOS
+ * gate in `routeTrailers`, or `undefined` when the trailer has no driver OR the
+ * driver carries no full `hosClock` (the Phase-15 soft-only case — the gate stays
+ * off so prior verdicts reproduce byte-identically).
+ */
+function driverHosContextFor(trailer: TwinTrailer): DriverHosContext | undefined {
+  const driver = trailer.driver;
+  if (driver === undefined || driver.hosClock === undefined) return undefined;
+  return driver.hosConfig === undefined
+    ? { driverId: driver.driverId, hosClock: driver.hosClock }
+    : { driverId: driver.driverId, hosClock: driver.hosClock, config: driver.hosConfig };
+}
+
+/**
+ * OPT-HOS-03 — find the FIRST driving leg of the trailer's ordered route the
+ * assigned driver cannot legally complete, walking the SAME Phase-10 engine the
+ * hard gate uses (DRY). Returns the {@link HosInfeasibleLeg} (driver + leg + why)
+ * for `localRepair`, or `undefined` if every leg is legal. Pure + deterministic:
+ * the clock advances by integer minutes off the trailer's `departureMin`.
+ *
+ * The route is read in `stopIndex` order; each `prev → stop` linehaul whose
+ * travel minutes the engine cannot satisfy without inserting a rest/sleeper is
+ * the offending leg. Reuses {@link remainingLegalDriveMinutes} for the "why".
+ */
+function firstHosInfeasibleLeg(
+  trailer: TwinTrailer,
+  travel: TravelModel,
+  driverCtx: DriverHosContext,
+): HosInfeasibleLeg | undefined {
+  const config: HosConfig = driverCtx.config ?? DEFAULT_HOS_CONFIG;
+  let clock: HosClock = driverCtx.hosClock;
+  let prevHubId = trailer.currentHubId;
+  let legStartMin = trailer.departureMin;
+
+  const ordered = [...trailer.route].sort((a, b) => a.stopIndex - b.stopIndex);
+  for (const stop of ordered) {
+    const legMinutes = travel.travelMin(prevHubId, stop.hubId);
+    if (legMinutes > 0) {
+      const result = applyDrivingLeg(clock, config, legMinutes, epochMinutesToIso(legStartMin));
+      const requiresRest = result.segments.some(
+        (s) => s.kind === "rest" || s.kind === "sleeper",
+      );
+      if (requiresRest) {
+        return {
+          driverId: driverCtx.driverId,
+          legFromHubId: prevHubId,
+          legToHubId: stop.hubId,
+          legMinutes,
+          remainingDriveMinutes: remainingLegalDriveMinutes(clock, config, legStartMin),
+        };
+      }
+      clock = result.clock;
+    }
+    legStartMin += legMinutes;
+    prevHubId = stop.hubId;
+  }
+  return undefined;
+}
+
 /** Build the pure §12 metrics bag for a routed trailer (deterministic, integer-sourced). */
 function metricsFor(
   trailer: TwinTrailer,
@@ -285,6 +375,9 @@ function metricsFor(
     // Churn anchored to 0 — a fresh epoch has no prior plan to diverge from in the
     // pure core; the shell folds in cross-epoch churn when it has the prior plan.
     churnVsPrevious: 0,
+    // OPT-HOS-01 — the SOFT driver-rest penalty (0 when no driver / fully rested).
+    // Weighted by the default-0 `restCost`, so neutral until an operator raises it.
+    restPenalty: restPenaltyFor(trailer),
   };
 }
 
@@ -299,6 +392,7 @@ function repairScopeFor(
   metrics: PlanMetrics,
   weights: ObjectiveWeights,
   config: PlannerConfig,
+  hosInfeasible?: HosInfeasibleLeg,
 ): RepairScope {
   const loadBlocks = trailer.blocks.map(twinBlockToLoadBlock);
   const route = twinRouteToStops(trailer);
@@ -315,6 +409,9 @@ function repairScopeFor(
     config,
     weights,
     baseMetrics: metrics,
+    // OPT-HOS-03 — present only when the HARD HOS gate rejected a leg; drives the
+    // insertRest/relay recommendations. Omitted ⇒ LIFO-only repair (back-compat).
+    ...(hosInfeasible === undefined ? {} : { hosInfeasible }),
   };
 }
 
@@ -411,6 +508,9 @@ export function runEpoch(
       continue;
     }
 
+    // OPT-HOS-02 — supply the assigned driver's HOS context to ACTIVATE the hard
+    // gate (only when a full `hosClock` is present; soft-only drivers leave it off).
+    const driverCtx = driverHosContextFor(trailer);
     const route = routeTrailers({
       trailerId: trailer.trailerId,
       capacity: trailer.capacity,
@@ -418,17 +518,27 @@ export function runEpoch(
       startHubId: trailer.currentHubId,
       travel,
       startMin: trailer.departureMin,
+      ...(driverCtx === undefined ? {} : { driver: driverCtx }),
     });
     const miles = routeMiles(trailer.currentHubId, route.sequence, travel);
     const metrics = metricsFor(trailer, miles, route.utilization, DEFAULT_PLANNER_CONFIG);
     const breakdown = objectiveBreakdown(metrics, weights);
     const feasibility = feasibilityOf(trailer.trailerId, route.feasible);
 
-    // FIX 1 (OPT-07): for INFEASIBLE trailers, run localRepair to surface ranked
-    // split/reassign/hold/over-carry recommendations on the live path.
+    // OPT-HOS-03 — when the HARD HOS gate rejected the route, locate the offending
+    // leg so localRepair surfaces an explainable insertRest/relay recovery.
+    const hosLeg =
+      driverCtx !== undefined && route.hosFeasible === false
+        ? firstHosInfeasibleLeg(trailer, travel, driverCtx)
+        : undefined;
+
+    // FIX 1 (OPT-07) + OPT-HOS-03: for INFEASIBLE trailers, run localRepair to
+    // surface ranked split/reassign/hold/over-carry (LIFO) AND insertRest/relay
+    // (HOS) recommendations on the live path. A trailer infeasible ONLY for HOS
+    // (no load blocks) still recovers via the HOS leg — never crashes the epoch.
     let repairRecommendations: readonly EpochRepairRec[] | undefined;
-    if (!route.feasible && trailer.blocks.length > 0) {
-      const scope = repairScopeFor(trailer, planId, metrics, weights, DEFAULT_PLANNER_CONFIG);
+    if (!route.feasible && (trailer.blocks.length > 0 || hosLeg !== undefined)) {
+      const scope = repairScopeFor(trailer, planId, metrics, weights, DEFAULT_PLANNER_CONFIG, hosLeg);
       const recs = localRepair(scope);
       if (recs.length > 0) {
         repairRecommendations = recs.map((r): EpochRepairRec => ({

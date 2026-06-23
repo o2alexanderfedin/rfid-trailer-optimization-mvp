@@ -21,6 +21,8 @@
  * construction heuristic + bounded local search.
  */
 
+import type { HosClock, HosConfig } from "@mm/domain";
+
 /**
  * A stop the trailer must service: a hub, the time it takes to service there,
  * the `[windowStart, windowEnd]` minutes during which service may BEGIN, and the
@@ -42,6 +44,37 @@ export interface Stop {
   readonly windowEndMin: number;
   /** Integer freight units this stop adds to the trailer (≥ 0). */
   readonly demand: number;
+  /**
+   * OPT-HOS-02 — OPTIONAL driver-rest minutes the Phase-10 HOS engine says must
+   * be taken before/within servicing this stop (e.g. a 30-min break). Folded
+   * into `serviceMin` ("rest-as-time" — NO new graph edge kind), so a rest pushes
+   * the departure (and the next leg's arrival) out by exactly `restMin`. Window
+   * feasibility is checked on ARRIVAL only, so rest never changes when service may
+   * BEGIN. Defaults to 0 (back-compat: omitting it is byte-identical to `0`).
+   */
+  readonly restMin?: number;
+}
+
+/**
+ * OPT-HOS-02 — the assigned driver's Hours-of-Service context for the HARD
+ * feasibility gate. Supplying it (and ONLY then) activates the gate: each driving
+ * leg of the route is walked through the SHARED Phase-10 `applyDrivingLeg` engine
+ * the simulator uses (DRY), and a leg the driver cannot legally complete without a
+ * 10h rest / 34h restart / sleeper split is rejected as HOS-infeasible. Absent ⇒
+ * the gate never fires (every pre-Phase-16 instance reports its prior verdict
+ * unchanged).
+ */
+export interface DriverHosContext {
+  /** Stable id of the driver bound to this trailer's trip (provenance). */
+  readonly driverId: string;
+  /**
+   * The driver's full per-shift HOS clock (DRV-02) at the route's start minute —
+   * read DETERMINISTICALLY off the projection, never recomputed from the wall
+   * clock. The gate advances it leg-by-leg via the Phase-10 engine.
+   */
+  readonly hosClock: HosClock;
+  /** The FMCSA limits (HOS-01); defaults to {@link DEFAULT_HOS_CONFIG} when omitted. */
+  readonly config?: HosConfig;
 }
 
 /**
@@ -90,8 +123,20 @@ export interface TrailerRoute {
   readonly sequence: readonly RoutedStop[];
   /** `totalDemand / capacity`, clamped to `[0, 1]`. */
   readonly utilization: number;
-  /** Window + capacity + reused-LIFO HARD feasibility (separate from cost). */
+  /**
+   * Window + capacity + reused-LIFO HARD feasibility, AND (when a driver HOS
+   * context is supplied) the HOS gate — all SEPARATE from cost (anti-P2).
+   */
   readonly feasible: boolean;
+  /**
+   * OPT-HOS-02 — the SEPARATE HARD HOS verdict, mirroring the Phase-2 LIFO gate:
+   * `true` ⟺ the assigned driver can legally complete EVERY driving leg of the
+   * route without an inserted 10h rest / 34h restart / sleeper split. `undefined`
+   * when no {@link DriverHosContext} was supplied (the gate did not run —
+   * back-compat). Kept distinct from `feasible` so an audit can see WHY a route
+   * was rejected (window/LIFO vs HOS), and never folded into any cost objective.
+   */
+  readonly hosFeasible?: boolean;
 }
 
 /**
