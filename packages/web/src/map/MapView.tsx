@@ -69,9 +69,16 @@ interface MapViewProps {
    * an empty area (deselects any current selection).
    */
   readonly onTrailerSelect?: ((trailerId: string | null) => void) | undefined;
+  /**
+   * VIZ-07: called when the user clicks a HUB feature on the map. Receives the
+   * hubId string, or null when the click lands on an empty area (deselects).
+   * Mirrors `onTrailerSelect` — a hub click takes priority over a (rarely
+   * co-located) trailer hit so the Hub Detail panel opens reliably.
+   */
+  readonly onHubSelect?: ((hubId: string | null) => void) | undefined;
 }
 
-export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Element {
+export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
   const trailerSourceRef = useRef<VectorSource | null>(null);
@@ -104,6 +111,12 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
     onTrailerSelect,
   );
   onTrailerSelectRef.current = onTrailerSelect;
+
+  /** Stable ref for the VIZ-07 hub-select callback (same discipline as above). */
+  const onHubSelectRef = useRef<((id: string | null) => void) | undefined>(
+    onHubSelect,
+  );
+  onHubSelectRef.current = onHubSelect;
 
   /** Leak guard counters. */
   const mapInstancesRef = useRef(0);
@@ -161,23 +174,41 @@ export function MapView({ onTrailerSelect }: MapViewProps = {}): React.JSX.Eleme
     );
     animationHandleRef.current = handle;
 
-    // VIZ-05: wire map click → trailer selection via forEachFeatureAtPixel.
-    // The handler reads onTrailerSelectRef.current so a changing callback
-    // never requires re-registering the listener (one listener for the map lifetime).
+    // VIZ-05 + VIZ-07: wire map click → trailer / hub selection via
+    // forEachFeatureAtPixel. The handler reads the *Ref.current callbacks so a
+    // changing closure never requires re-registering the listener (one listener
+    // for the map lifetime). A HUB hit takes priority over a trailer hit so the
+    // Hub Detail panel opens reliably; an empty-area click deselects both.
     const clickHandler = (evt: MapBrowserEvent<PointerEvent>): void => {
-      const cb = onTrailerSelectRef.current;
-      if (cb === undefined) return;
+      const trailerCb = onTrailerSelectRef.current;
+      const hubCb = onHubSelectRef.current;
+      if (trailerCb === undefined && hubCb === undefined) return;
 
-      let selectedId: string | null = null;
+      let hubId: string | null = null;
+      let trailerId: string | null = null;
       map.forEachFeatureAtPixel(evt.pixel, (feature) => {
+        const hid = feature.get("hubId") as string | undefined;
+        if (typeof hid === "string") {
+          hubId = hid;
+          return true; // hub takes priority — stop on the first hub hit
+        }
         const tid = feature.get("trailerId") as string | undefined;
-        if (typeof tid === "string") {
-          selectedId = tid;
-          return true; // stop iterating — take first hit
+        if (typeof tid === "string" && trailerId === null) {
+          trailerId = tid; // remember the first trailer hit, keep scanning for a hub
         }
         return false;
       });
-      cb(selectedId);
+
+      // VIZ-07: a hub hit opens the Hub Detail panel (and clears any trailer
+      // selection); otherwise a trailer hit opens the trailer plan. An empty
+      // click deselects both panels.
+      if (hubId !== null) {
+        hubCb?.(hubId);
+        trailerCb?.(null);
+      } else {
+        trailerCb?.(trailerId);
+        hubCb?.(null);
+      }
     };
     map.on("click", clickHandler as (evt: MapBrowserEvent) => void);
 

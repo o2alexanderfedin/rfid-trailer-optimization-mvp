@@ -483,6 +483,35 @@ describe("applyHubBuckets", () => {
     const f = asSource(source).getFeatureById("hub:MEM");
     expect(f?.get("volumeBucket")).toBe(0);
   });
+
+  // VIZ-11: derive + set the driver-duty bucket from the ws driver buckets.
+  it("derives a dutyBucket from the driver buckets (all resting → all-out bucket 3)", () => {
+    const { source } = createHubLayer([hub("MEM", -90, 35)]);
+    applyHubBuckets(source, [
+      hubState({ driverCount: 2, onBreakCount: 0, restingCount: 2 }),
+    ]);
+    const f = asSource(source).getFeatureById("hub:MEM");
+    expect(f?.get("dutyBucket")).toBe(3);
+  });
+
+  it("sets dutyBucket 0 when drivers are present and all available", () => {
+    const { source } = createHubLayer([hub("MEM", -90, 35)]);
+    applyHubBuckets(source, [
+      hubState({ driverCount: 3, onBreakCount: 0, restingCount: 0 }),
+    ]);
+    const f = asSource(source).getFeatureById("hub:MEM");
+    expect(f?.get("dutyBucket")).toBe(0);
+  });
+
+  it("clears dutyBucket (undefined) when a hub has no driver data (falls back to volume)", () => {
+    const { source } = createHubLayer([hub("MEM", -90, 35)]);
+    // First set a duty bucket, then send a payload with no driver data.
+    applyHubBuckets(source, [hubState({ driverCount: 1, restingCount: 1 })]);
+    applyHubBuckets(source, [hubState({ volumeBucket: 2 })]);
+    const f = asSource(source).getFeatureById("hub:MEM");
+    expect(f?.get("dutyBucket")).toBeUndefined();
+    expect(f?.get("volumeBucket")).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
