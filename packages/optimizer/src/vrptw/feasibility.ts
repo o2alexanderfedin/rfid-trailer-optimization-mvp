@@ -45,10 +45,16 @@ export function feasibleArrivals(
   for (const stop of sequence) {
     const arrivalMin = clock + travel.travelMin(prevHubId, stop.hubId);
     // WINDOW HARD CHECK (anti-P2: feasibility first, never folded into cost):
-    // arriving after the window closes can never be repaired by waiting.
+    // arriving after the window closes can never be repaired by waiting. NOTE the
+    // window is checked on ARRIVAL only, so an inserted rest (`restMin`) never
+    // shifts when service may BEGIN — it only delays departure.
     if (arrivalMin > stop.windowEndMin) return null;
     const serviceStart = Math.max(arrivalMin, stop.windowStartMin);
-    const departureMin = serviceStart + stop.serviceMin;
+    // OPT-HOS-02 — fold the optional driver-rest minutes into the service time
+    // ("rest-as-time", NO new graph edge kind): `departure = serviceStart +
+    // serviceMin + restMin`, so a rest pushes the next leg's arrival out by
+    // exactly `restMin`. Omitted ⇒ 0 (byte-identical to the pre-Phase-16 fold).
+    const departureMin = serviceStart + stop.serviceMin + (stop.restMin ?? 0);
     routed.push({ hubId: stop.hubId, arrivalMin, departureMin });
     prevHubId = stop.hubId;
     clock = departureMin;
