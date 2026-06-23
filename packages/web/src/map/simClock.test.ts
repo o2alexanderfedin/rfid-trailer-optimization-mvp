@@ -131,11 +131,13 @@ describe("makeSimClock", () => {
     return Math.abs(serverSim - clockSim);
   }
 
-  it("RED: simSpeed=1 lags the 120× server cadence by a huge margin after ~30 ticks", () => {
+  it("tracks the server cadence within ~one tick even when simSpeed is mistuned (snap)", () => {
+    // The clock no longer depends on simSpeed matching the cadence: a per-tick
+    // correction beyond the nudge tolerance is real progress and is SNAPPED, so
+    // even a badly-mistuned simSpeed=1 clock stays within ~one tick's jump of the
+    // server — NOT the unbounded >1,000,000ms lag the old clamp-only clock had.
     const lag = replayCadenceLag(1, 30);
-    // The server has advanced 31 × 60_000 = 1_860_000 sim-ms. A simSpeed=1 clock
-    // recovers at most ~1000 sim-ms/tick → it is behind by well over a million ms.
-    expect(lag).toBeGreaterThan(1_000_000);
+    expect(lag).toBeLessThanOrEqual(60_000 + 1_000); // ≈ one TICK_SIM of residual
   });
 
   it("GREEN: simSpeed=120 tracks the same cadence within a small tolerance", () => {
@@ -150,43 +152,23 @@ describe("makeSimClock", () => {
     return 1000;
   }
 
-  it("setSpeed(120) HALTS the unbounded lag growth that simSpeed=1 suffers", () => {
-    // Start mistuned at simSpeed=1, then correct to 120 — as MapView does on the
-    // first envelope. The defining property: once retuned, the lag STOPS growing
-    // (per-tick advance now matches the server jump), whereas at simSpeed=1 it
-    // grows by ~59_000/tick forever.
-    const TICK_WALL = 500;
-    const TICK_SIM = 60_000;
+  it("snaps a large initial correction so a simMs:0 anchor converges to the epoch tick stream", () => {
+    // REGRESSION (live-demo trailer animation): the initial ws snapshot anchors
+    // the clock at simMs:0, but the tick stream carries absolute-epoch simMs
+    // (~1.775e12, matching each trailer's departMs/etaMs). The old clamp-only
+    // clock could correct at most maxNudge (500ms) per tick, so it never caught
+    // up — every trailer stayed frozen at fraction 0 (its route origin), which the
+    // [0,0] routeId bug then hid off-screen. The clock must SNAP to the
+    // authoritative epoch on the first corrective tick so trailers actually tween.
+    const clock = makeSimClock({ simSpeed: 120 });
     const wall0 = 1_700_000_000_000;
-
-    function lagAfter(setSpeedTo120: boolean): number {
-      const clock = makeSimClock({ simSpeed: 1 });
-      let serverSim = 0;
-      let wall = wall0;
-      // 5 mistuned ticks accumulate a fixed lag.
-      for (let i = 0; i < 5; i++) {
-        clock.fromFrameTime(wall);
-        clock.resync(wall, serverSim);
-        wall += TICK_WALL;
-        serverSim += TICK_SIM;
-      }
-      if (setSpeedTo120) clock.setSpeed(120);
-      // 30 more ticks: at 120 the lag holds/shrinks; at 1 it keeps growing.
-      for (let i = 0; i < 30; i++) {
-        clock.fromFrameTime(wall);
-        clock.resync(wall, serverSim);
-        wall += TICK_WALL;
-        serverSim += TICK_SIM;
-      }
-      return Math.abs(serverSim - clock.fromFrameTime(wall));
-    }
-
-    const lagRetuned = lagAfter(true);
-    const lagStuck = lagAfter(false);
-    // Retuning to 120 keeps the lag near the small residual from the 5 mistuned
-    // ticks; leaving it at 1 lets the lag balloon by another ~30 × 59_000.
-    expect(lagRetuned).toBeLessThan(lagStuck);
-    expect(lagStuck - lagRetuned).toBeGreaterThan(1_000_000);
+    clock.resync(wall0, 0); // initial snapshot: simMs = 0 (wrong basis)
+    const epoch = 1_775_000_000_000; // first tick: absolute-epoch sim clock
+    clock.resync(wall0 + 100, epoch);
+    const simNow = clock.fromFrameTime(wall0 + 100);
+    // Snapped to the epoch (within a frame's drift) — NOT crawling up from 0.
+    expect(simNow).toBeGreaterThanOrEqual(epoch);
+    expect(simNow).toBeLessThan(epoch + 1_000_000);
   });
 
   it("setSpeed(0) freezes the clock: fromFrameTime stays constant as wall time elapses", () => {

@@ -38,6 +38,15 @@ async function main(): Promise<void> {
   await sql.raw(PROJECTIONS_SCHEMA_SQL).execute(db);
 
   const durationTicks = Number(process.env.SIM_TICKS ?? 120);
+  // Demo richness: trailers (each with a primary driver) per spoke. Default 3 so
+  // the live map shows ~3× the trucks at once; set FLEET_PER_SPOKE=1 for the lean
+  // (golden-equivalent) single-trailer-per-spoke run. Threaded to the sim engine.
+  const fleetPerSpoke = Math.max(1, Math.floor(Number(process.env.FLEET_PER_SPOKE ?? 3)));
+  // Run the rolling optimizer every Nth tick (not every tick) so the heavier
+  // per-tick optimization of a larger fleet doesn't block event generation /
+  // freeze the trailer animation. Default 8; set OPTIMIZER_EVERY_TICKS=1 for the
+  // strict per-tick re-opt (lean fleet).
+  const optimizerEveryTicks = Math.max(1, Math.floor(Number(process.env.OPTIMIZER_EVERY_TICKS ?? 8)));
   const { app, broadcast, loop, speedController } = await buildServer({
     db,
     simSeed: seed,
@@ -85,6 +94,7 @@ async function main(): Promise<void> {
   // directly with the default (HOS-off) config and never read HOS_ENABLED.
   const hosEnabled = resolveDemoHosEnabled();
   app.log.info(`driver HOS ${hosEnabled ? "ENABLED" : "disabled"} on live demo`);
+  app.log.info(`fleet: ${fleetPerSpoke} trailer(s) per spoke`);
 
   // Drive the sim AFTER listen so every connected client receives live ticks.
   // Enable seeded RFID emission so the WHOLE Phase-3 pipeline fires end-to-end
@@ -99,6 +109,8 @@ async function main(): Promise<void> {
     overCarry: DEMO_OVER_CARRY_CONFIG.rate,
     hosEnabled,
     hosConfig: DEFAULT_HOS_CONFIG,
+    fleetPerSpoke,
+    optimizerEveryTicks,
     broadcast,
     loop,
     tickIntervalMs,

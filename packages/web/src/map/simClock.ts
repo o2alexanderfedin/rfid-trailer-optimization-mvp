@@ -117,23 +117,23 @@ export function makeSimClock(opts: SimClockOptions = {}): SimClock {
     // Correction = server says − we think.
     const rawCorrection = serverSimMs - localSimMs;
 
-    // Clamp the correction (both directions) to avoid lurching.
-    const clamped =
-      rawCorrection > maxNudgeMs
-        ? maxNudgeMs
-        : rawCorrection < -maxNudgeMs
-          ? -maxNudgeMs
-          : rawCorrection;
+    // A correction LARGER than the anti-lurch tolerance is genuine sim progress
+    // (or a wrong / zero initial anchor) — NOT sub-second jitter — so we SNAP to
+    // the server's authoritative value and track it. The realistic time model's
+    // tick stream is absolute-epoch with large, irregular gaps (a tick can jump
+    // many sim-minutes), and the initial snapshot anchors at simMs:0; clamping
+    // such corrections to maxNudge/tick (the old behaviour) left the clock
+    // crawling forever — freezing every trailer at its route origin. Within the
+    // tolerance the delta is small and applied in full (no visible lurch). Either
+    // branch converges to serverSimMs; the threshold documents the two regimes.
+    const beyondTolerance =
+      rawCorrection > maxNudgeMs || rawCorrection < -maxNudgeMs;
+    const nudgedSimMs = beyondTolerance ? serverSimMs : localSimMs + rawCorrection;
 
-    // Apply nudge: re-anchor at the current wall time with the nudged sim value.
-    const nudgedSimMs = localSimMs + clamped;
+    // Re-anchor at the current wall time. Monotonic guard: never anchor below the
+    // last reading (no backward animation on a stale server anchor).
     anchorWallMs = wallMs;
-    anchorSimMs = nudgedSimMs;
-
-    // Monotonic guard: if the nudge pushed us backward, hold the last value.
-    if (nudgedSimMs < lastSimMs) {
-      anchorSimMs = lastSimMs;
-    }
+    anchorSimMs = nudgedSimMs < lastSimMs ? lastSimMs : nudgedSimMs;
   }
 
   function setSpeed(nextSpeed: number): void {

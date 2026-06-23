@@ -35,15 +35,15 @@ describe("slider ⇆ multiplier (log2 mapping)", () => {
     expect(sliderToMultiplier(0)).toBe(1);
   });
 
-  it("maps the bounds onto the slider domain [-2, 3]", () => {
+  it("maps the bounds onto the slider domain [-2, 6]", () => {
     expect(SLIDER_MIN).toBe(-2); // log2(0.25)
-    expect(SLIDER_MAX).toBe(3); //  log2(8)
+    expect(SLIDER_MAX).toBe(6); //  log2(64)
     expect(sliderToMultiplier(SLIDER_MIN)).toBeCloseTo(MIN_MULTIPLIER);
-    expect(sliderToMultiplier(SLIDER_MAX)).toBeCloseTo(MAX_MULTIPLIER);
+    expect(sliderToMultiplier(SLIDER_MAX)).toBeCloseTo(MAX_MULTIPLIER); // 64×
   });
 
   it("round-trips a multiplier through the slider value", () => {
-    for (const m of [0.25, 0.5, 1, 2, 4, 8]) {
+    for (const m of [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64]) {
       expect(sliderToMultiplier(multiplierToSlider(m))).toBeCloseTo(m);
     }
   });

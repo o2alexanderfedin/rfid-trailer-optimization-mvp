@@ -18,7 +18,7 @@
  *
  * Threat model:
  *  - Tampering: the schema validates a closed `{ multiplier?, paused? }` shape;
- *    unknown fields rejected, `multiplier` bounded to [0.25, 8].
+ *    unknown fields rejected, `multiplier` bounded to [0.25, 64].
  *  - DoS: the bounded multiplier maps onto a clamped, non-zero tick interval
  *    ([62, 2000] ms) — no busy spin, no pathological pacing.
  */
@@ -46,7 +46,7 @@ export interface SimSpeedControllerPort {
 
 /**
  * Strict, closed body schema. `additionalProperties: false` rejects unknown
- * fields; `multiplier` is bounded to the locked [0.25, 8] range (the controller
+ * fields; `multiplier` is bounded to the locked [0.25, 64] range (the controller
  * clamps too, but rejecting at the boundary gives a clear 400). `minProperties: 1`
  * requires at least one of `multiplier` / `paused`.
  */
@@ -55,7 +55,7 @@ const SIM_SPEED_BODY_SCHEMA = {
   additionalProperties: false,
   minProperties: 1,
   properties: {
-    multiplier: { type: "number", minimum: 0.25, maximum: 8 },
+    multiplier: { type: "number", minimum: 0.25, maximum: 64 },
     paused: { type: "boolean" },
   },
 } as const;

@@ -208,6 +208,142 @@ export function trailerStateFor(
   return implicatedTrailerIds.has(trailerId) ? "slaRisk" : baseState;
 }
 
+/**
+ * The `/api/routes` DTO id for a directed leg (`route-FROM-TO`).
+ *
+ * VIZ-02 LIVE-PATH CONTRACT: this MUST equal the routeId the client keys its
+ * route LineString geometry by (`fetchRoutes()` → `routeDtos.get(routeId)` in
+ * `MapView._upsertTrailerAnim`). A trailer keyframe whose `routeId` is anything
+ * else (e.g. the tripId) fails that lookup, so the trailer never gets a route to
+ * tween along and stays frozen at its `[0,0]` stub geometry — invisible on the map.
+ */
+export function legRouteId(fromHubId: string, toHubId: string): string {
+  return `route-${fromHubId}-${toHubId}`;
+}
+
+/** Great-circle km between two `[lon, lat]` points (haversine). */
+function haversineKm(a: readonly [number, number], b: readonly [number, number]): number {
+  const R = 6371;
+  const toRad = (d: number): number => (d * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Estimated transit minutes for a leg from its route polyline length / an average
+ * HGV speed. Used to set a realistic `etaMs` for an IN-TRANSIT trailer (one with a
+ * depart keyframe but no arrive keyframe yet), so the client tween glides the truck
+ * across the WHOLE route over the real leg duration instead of snapping it to the
+ * destination after a flat 1-hour guess (which left trucks parked on top of the hub
+ * markers for most of each leg). When the arrive keyframe arrives, the real arrival
+ * time supersedes this estimate. Pure + deterministic.
+ */
+export function legTransitMinutes(
+  geometry: readonly (readonly [number, number])[],
+  avgSpeedKmh = 80,
+): number {
+  let km = 0;
+  for (let i = 1; i < geometry.length; i++) {
+    const prev = geometry[i - 1];
+    const cur = geometry[i];
+    if (prev !== undefined && cur !== undefined) km += haversineKm(prev, cur);
+  }
+  return avgSpeedKmh > 0 ? (km / avgSpeedKmh) * 60 : 0;
+}
+
+/** Geo keyframe fields used to bound a tween leg (structural subset of GeoKeyframe). */
+interface LegKeyframe {
+  readonly trailerId: string;
+  readonly tripId: string;
+  readonly kind: "depart" | "arrive";
+  readonly t: string;
+}
+
+/** An in-flight trip's directed leg (structural subset of the geo_inflight_trip row). */
+interface InflightLeg {
+  readonly trip_id: string;
+  readonly from_hub_id: string;
+  readonly to_hub_id: string;
+}
+
+/**
+ * Assemble one `TrailerKeyframe` per trailer from geo-track keyframes, using the
+ * LATEST depart + earliest arrive to bound the tween leg (idle when only an
+ * arrive keyframe exists).
+ *
+ * CRITICAL VIZ-02 live-path fix: `routeId` is resolved to the `/api/routes`
+ * geometry key (`route-FROM-TO`) via the trip's in-flight leg — NOT the tripId.
+ * Emitting the tripId (the prior behaviour) made every client route lookup miss,
+ * so trailers stayed frozen at `[0,0]` and never appeared on the map. The
+ * hermetic e2e fed fixtures where routeId already matched, so it never exercised
+ * this live mismatch.
+ *
+ * Pure + deterministic (no I/O, no Date.now) — unit-tested.
+ */
+export function buildTrailerKeyframes(
+  keyframes: readonly LegKeyframe[],
+  inflightTrips: readonly InflightLeg[],
+  implicatedTrailerIds: ReadonlySet<string>,
+  /** routeId → estimated leg transit MINUTES (from route length), for in-transit etaMs. */
+  legMinutesByRoute: ReadonlyMap<string, number> = new Map(),
+): TrailerKeyframe[] {
+  // tripId → `route-FROM-TO` for every currently in-flight leg.
+  const routeIdByTrip = new Map<string, string>();
+  for (const trip of inflightTrips) {
+    routeIdByTrip.set(trip.trip_id, legRouteId(trip.from_hub_id, trip.to_hub_id));
+  }
+
+  const departures = new Map<string, { tripId: string; ms: number }>();
+  const arrivals = new Map<string, { tripId: string; ms: number }>();
+  for (const k of keyframes) {
+    const ms = isoToMs(k.t);
+    if (k.kind === "depart") {
+      const prev = departures.get(k.trailerId);
+      if (prev === undefined || ms > prev.ms) departures.set(k.trailerId, { tripId: k.tripId, ms });
+    } else {
+      const prev = arrivals.get(k.trailerId);
+      if (prev === undefined || ms < prev.ms) arrivals.set(k.trailerId, { tripId: k.tripId, ms });
+    }
+  }
+
+  const allIds = new Set<string>(keyframes.map((k) => k.trailerId));
+  return [...allIds]
+    .map((id): TrailerKeyframe => {
+      const dep = departures.get(id);
+      const arr = arrivals.get(id);
+      if (dep !== undefined) {
+        const routeId = routeIdByTrip.get(dep.tripId) ?? "";
+        // In-transit ETA: prefer a real arrive keyframe; else estimate the leg
+        // duration from its route length so the truck glides the WHOLE route
+        // (falls back to 1h only when the leg length is unknown).
+        const estMinutes = legMinutesByRoute.get(routeId);
+        const fallbackEtaMs =
+          dep.ms + (estMinutes !== undefined && estMinutes > 0 ? estMinutes * 60_000 : 3_600_000);
+        return {
+          id,
+          routeId,
+          departMs: dep.ms,
+          etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : fallbackEtaMs,
+          state: trailerStateFor(id, "onTime", implicatedTrailerIds),
+        };
+      }
+      // Only an arrive keyframe → trailer is idle at a hub (positional, not risk).
+      return {
+        id,
+        routeId: arr !== undefined ? routeIdByTrip.get(arr.tripId) ?? "" : "",
+        departMs: arr?.ms ?? 0,
+        etaMs: arr?.ms ?? 0,
+        state: "idle",
+      };
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /** Per-hub driver-duty tally (HUBQ-08): total + the on_break / resting subsets. */
 export interface DriverDutyBuckets {
   readonly driverCount: number;
@@ -328,30 +464,6 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     proj.selectFrom("driver_status").select(["driver_id", "status"]).execute(),
   ]);
 
-  // Build TrailerKeyframes: one per trailer, from the LATEST depart + earliest
-  // arrive keyframe so we have a departMs/etaMs leg range for tweening.
-  // Trailers with only an "arrive" keyframe (already at a hub) are shown as idle.
-  const departures = new Map<string, { routeId: string; ms: number }>();
-  const arrivals = new Map<string, { routeId: string; ms: number }>();
-
-  for (const k of keyframes) {
-    const ms = isoToMs(k.t);
-    if (k.kind === "depart") {
-      const prev = departures.get(k.trailerId);
-      if (prev === undefined || ms > prev.ms) {
-        departures.set(k.trailerId, { routeId: k.tripId, ms });
-      }
-    } else {
-      const prev = arrivals.get(k.trailerId);
-      if (prev === undefined || ms < prev.ms) {
-        arrivals.set(k.trailerId, { routeId: k.tripId, ms });
-      }
-    }
-  }
-
-  // Collect all trailer ids (from both depart + arrive keyframes)
-  const allIds = new Set<string>(keyframes.map((k) => k.trailerId));
-
   // FIX 9: the set of trailers implicated in any OPEN exception (the detector
   // names the observed trailerId on every wrong-trailer / missed-unload row).
   // This is the REAL signal that drives an in-transit trailer's SLA `state`.
@@ -359,31 +471,26 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     openExceptions.map((ex) => ex.trailerId),
   );
 
-  const trailers: TrailerKeyframe[] = [...allIds]
-    .map((id): TrailerKeyframe => {
-      const dep = departures.get(id);
-      const arr = arrivals.get(id);
-      if (dep !== undefined) {
-        // FIX 9: base state is "onTime"; escalate to "slaRisk" when the detector
-        // has flagged this trailer (real signal, not a hardcoded constant).
-        return {
-          id,
-          routeId: dep.routeId,
-          departMs: dep.ms,
-          etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : dep.ms + 3_600_000, // 1hr fallback
-          state: trailerStateFor(id, "onTime", implicatedTrailerIds),
-        };
-      }
-      // Only arrive keyframe → trailer is idle at a hub (positional, not risk).
-      return {
-        id,
-        routeId: arr?.routeId ?? "",
-        departMs: arr?.ms ?? 0,
-        etaMs: arr?.ms ?? 0,
-        state: "idle",
-      };
-    })
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // Estimated transit minutes per leg (from each route's polyline length) so an
+  // in-transit trailer's etaMs reflects the real leg duration and the client tween
+  // glides it across the WHOLE route rather than snapping to the destination.
+  const legMinutesByRoute = new Map<string, number>();
+  for (const row of geoRouteRows) {
+    legMinutesByRoute.set(
+      legRouteId(row.from_hub_id, row.to_hub_id),
+      legTransitMinutes(row.geometry),
+    );
+  }
+
+  // Build TrailerKeyframes (one per trailer). routeId is resolved to the
+  // `/api/routes` geometry key (`route-FROM-TO`) from the in-flight leg so the
+  // client can tween the trailer along its route polyline. See buildTrailerKeyframes.
+  const trailers: TrailerKeyframe[] = buildTrailerKeyframes(
+    keyframes,
+    inflightTripRows,
+    implicatedTrailerIds,
+    legMinutesByRoute,
+  );
 
   // FIX 3 — Hub states: compute real integer buckets from hub_inventory + exceptions.
   // volumeBucket = quantized total package count (inbound+outbound+staged).

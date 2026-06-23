@@ -9,9 +9,9 @@
  *
  * Speed model (locked — see CLAUDE.md / PLAN.md):
  *   - default `tickIntervalMs = 500` ⇒ multiplier **1×** (= 120× sim compression).
- *   - multiplier `m`: `tickIntervalMs = round(defaultIntervalMs / m)`, with
- *     `m` clamped to `[0.25, 8]` and the resulting interval clamped to
- *     `[minIntervalMs, maxIntervalMs]` (= `[62, 2000]`) so it is NEVER 0.
+ *   - multiplier `m`: `tickIntervalMs = defaultIntervalMs / m`, with
+ *     `m` clamped to `[0.25, 64]` and the resulting interval clamped to
+ *     `[minIntervalMs, maxIntervalMs]` (= `[5, 2000]`) so it is NEVER 0.
  *   - `simSpeed = msPerTick / tickIntervalMs` (= 120 at the default), but **0
  *     while paused** so the frontend trailer tween freezes.
  *   - reported `multiplier = defaultIntervalMs / tickIntervalMs`.
@@ -25,7 +25,7 @@ import type { SimSpeedState } from "../ws/envelope.js";
 
 /** Speed-multiplier bounds (relative to the default 1×). */
 const MIN_MULTIPLIER = 0.25;
-const MAX_MULTIPLIER = 8;
+const MAX_MULTIPLIER = 64;
 
 /** Options for {@link makeSpeedController}. */
 export interface SpeedControllerOptions {
@@ -37,7 +37,7 @@ export interface SpeedControllerOptions {
   readonly msPerTick?: number;
   /** The 1× wall-clock tick interval. Default: 500ms (⇒ 120× compression). */
   readonly defaultIntervalMs?: number;
-  /** Floor for the tick interval (8× clamp). Default: 62ms (never 0). */
+  /** Floor for the tick interval (supports up to the 64× clamp). Default: 5ms (never 0). */
   readonly minIntervalMs?: number;
   /** Ceiling for the tick interval (0.25× clamp). Default: 2000ms. */
   readonly maxIntervalMs?: number;
@@ -60,7 +60,7 @@ export interface SpeedController {
   getSimSpeed(): number;
   /** Immutable snapshot of the full speed state (the wire/route contract). */
   snapshot(): SimSpeedState;
-  /** Set the speed multiplier (clamped to [0.25, 8]); fires `onChange`. */
+  /** Set the speed multiplier (clamped to [0.25, 64]); fires `onChange`. */
   setMultiplier(multiplier: number): void;
   /** Set the paused flag; fires `onChange`. */
   setPaused(paused: boolean): void;
@@ -84,7 +84,7 @@ export function makeSpeedController(
 ): SpeedController {
   const msPerTick = opts.msPerTick ?? 60_000;
   const defaultIntervalMs = opts.defaultIntervalMs ?? 500;
-  const minIntervalMs = opts.minIntervalMs ?? 62;
+  const minIntervalMs = opts.minIntervalMs ?? 5;
   const maxIntervalMs = opts.maxIntervalMs ?? 2000;
   const onChange = opts.onChange;
 
@@ -95,7 +95,10 @@ export function makeSpeedController(
   /** Map a multiplier onto a clamped, non-zero tick interval. */
   function intervalForMultiplier(multiplier: number): number {
     const m = clamp(multiplier, MIN_MULTIPLIER, MAX_MULTIPLIER);
-    const raw = Math.round(defaultIntervalMs / m);
+    // Not rounded to an integer: at the 64× cap the exact interval is 500/64 =
+    // 7.8125ms, and rounding would report 62.5× instead of a clean 64×. setTimeout
+    // accepts fractional ms; the interval floor still guards against a busy spin.
+    const raw = defaultIntervalMs / m;
     return clamp(raw, minIntervalMs, maxIntervalMs);
   }
 
