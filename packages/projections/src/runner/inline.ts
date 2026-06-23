@@ -214,6 +214,7 @@ async function applyDriverStatus(
           r.duty_window_deadline === null ? null : toIso(r.duty_window_deadline),
         totalDrivenMinutes: r.total_driven_minutes,
         weeklyOnDutyMin: r.weekly_on_duty_min,
+        hosClock: r.hos_clock,
         currentHubId: r.current_hub_id,
         currentTripId: r.current_trip_id,
         lastEventAt: toIso(r.last_event_at),
@@ -223,6 +224,9 @@ async function applyDriverStatus(
   const next = driverStatusReducer(state, toOccurred(replay));
   if (next === state) return; // non-driver event ⇒ nothing to persist
   for (const d of next.values()) {
+    // OPT-HOS-02: the full clock is JSONB — serialize on write (null stays null),
+    // mirroring zone_estimate.posterior. Read back parsed (see readOperationalTwin).
+    const hosClockJson = d.hosClock === null ? null : JSON.stringify(d.hosClock);
     await db
       .insertInto("driver_status")
       .values({
@@ -232,6 +236,7 @@ async function applyDriverStatus(
         duty_window_deadline: d.dutyWindowDeadline,
         total_driven_minutes: d.totalDrivenMinutes,
         weekly_on_duty_min: d.weeklyOnDutyMin,
+        hos_clock: hosClockJson,
         current_hub_id: d.currentHubId,
         current_trip_id: d.currentTripId,
         last_event_at: d.lastEventAt,
@@ -243,6 +248,7 @@ async function applyDriverStatus(
           duty_window_deadline: d.dutyWindowDeadline,
           total_driven_minutes: d.totalDrivenMinutes,
           weekly_on_duty_min: d.weeklyOnDutyMin,
+          hos_clock: hosClockJson,
           current_hub_id: d.currentHubId,
           current_trip_id: d.currentTripId,
           last_event_at: d.lastEventAt,
@@ -638,6 +644,7 @@ export async function readOperationalTwin(
                 : toIso(r.duty_window_deadline),
             totalDrivenMinutes: r.total_driven_minutes,
             weeklyOnDutyMin: r.weekly_on_duty_min,
+            hosClock: r.hos_clock,
             currentHubId: r.current_hub_id,
             currentTripId: r.current_trip_id,
             lastEventAt: toIso(r.last_event_at),

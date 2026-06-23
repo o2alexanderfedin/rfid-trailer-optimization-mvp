@@ -1,7 +1,7 @@
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import type { ProjectionDb } from "@mm/projections";
-import type { Hub, LonLat, TimingConfig } from "@mm/domain";
+import type { Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
 import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes } from "@mm/domain";
 import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
@@ -316,14 +316,15 @@ export async function buildTwinSnapshot(
   // 3. Read operational projections. OPT-HOS-01: also read the Phase-13
   //    `driver_status` projection (driver → remaining legal drive minutes, already
   //    computed by the Phase-10 HOS engine at projection time) so the optimizer can
-  //    SOFT-prefer more-rested drivers. Read deterministically — no recompute,
-  //    no clock, no RNG.
+  //    SOFT-prefer more-rested drivers. OPT-HOS-02 (GAP-1 fix): ALSO read the full
+  //    `hos_clock` JSONB so the optimizer's HARD HOS gate can re-walk every driving
+  //    leg. Read deterministically — no recompute, no clock, no RNG.
   const [trailerRows, hubInventoryRows, driverStatusRows] = await Promise.all([
     db.selectFrom("trailer_state").selectAll().execute(),
     db.selectFrom("hub_inventory").selectAll().execute(),
     db
       .selectFrom("driver_status")
-      .select(["driver_id", "remaining_drive_minutes"])
+      .select(["driver_id", "remaining_drive_minutes", "hos_clock"])
       .execute(),
   ]);
 
@@ -333,8 +334,14 @@ export async function buildTwinSnapshot(
   // `driver` field — so a driverless twin reproduces the pre-Phase-15 snapshot
   // byte-identically.
   const remainingMinByDriver = new Map<string, number>();
+  // OPT-HOS-02 (GAP-1 fix): driverId → full per-shift HosClock (or null pre-duty).
+  // This is THE link the milestone audit found missing: with it set, `epoch.ts`
+  // `driverHosContextFor` builds a real context and the OPT-HOS-02 hard gate +
+  // OPT-HOS-03 insertRest/relay recovery fire on the LIVE optimizer path.
+  const hosClockByDriver = new Map<string, HosClock | null>();
   for (const row of driverStatusRows) {
     remainingMinByDriver.set(row.driver_id, Math.trunc(row.remaining_drive_minutes));
+    hosClockByDriver.set(row.driver_id, row.hos_clock);
   }
 
   // 4. Build the outbound/staged index: hub → [pkgId, ...]
@@ -375,12 +382,22 @@ export async function buildTwinSnapshot(
       // trip is bound to a driver AND that driver has a `driver_status` row.
       // Otherwise the field is omitted (additive, back-compatible — driverless
       // trailers reproduce the prior snapshot exactly).
+      //
+      // OPT-HOS-02 (GAP-1 fix): when the driver has a full persisted `hos_clock`
+      // (i.e. a duty transition has carried one), attach it to `hosClock` so the
+      // epoch's HARD HOS gate activates on the live path. A driver with no clock
+      // yet (null) keeps the Phase-15 soft-only shape (no `hosClock`), reproducing
+      // its prior verdict byte-identically. `hosConfig` is omitted so the gate uses
+      // the demo-default `DEFAULT_HOS_CONFIG` (the same full rule-set the sim runs).
       const driverId = r.driver_id;
       const remainingDriveMinutes =
         driverId !== null ? remainingMinByDriver.get(driverId) : undefined;
+      const hosClock = driverId !== null ? hosClockByDriver.get(driverId) ?? null : null;
       const driver: TwinDriver | undefined =
         driverId !== null && remainingDriveMinutes !== undefined
-          ? { driverId, remainingDriveMinutes }
+          ? hosClock !== null
+            ? { driverId, remainingDriveMinutes, hosClock }
+            : { driverId, remainingDriveMinutes }
           : undefined;
 
       const trailer: TwinTrailer = {

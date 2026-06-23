@@ -117,6 +117,9 @@ export function serializeTwin(twin: OperationalTwin): string {
       dutyWindowDeadline: d.dutyWindowDeadline,
       totalDrivenMinutes: d.totalDrivenMinutes,
       weeklyOnDutyMin: d.weeklyOnDutyMin,
+      // OPT-HOS-02: the full persisted clock joins the golden-replay surface so
+      // live==rebuilt now also covers `hos_clock` (object key order is fixed).
+      hosClock: d.hosClock,
       currentHubId: d.currentHubId,
       currentTripId: d.currentTripId,
       lastEventAt: d.lastEventAt,
