@@ -140,6 +140,17 @@ export interface SimulateOptions {
    * same config ⇒ byte-identical HOS-on stream.
    */
   readonly hosConfig?: HosConfig;
+  /**
+   * Demo richness knob: how many trailers (and one primary driver each) to run
+   * PER SPOKE. **DEFAULT 1** — the determinism keystone: at 1 the roster, driver
+   * pool, package volume, and schedule are byte-identical to the pre-fleet golden
+   * stream. At N>1 the engine seeds `spokes.length × N` trailers (extra fleet
+   * slots' first departures are staggered so they spread along the routes),
+   * scales the relay spare pool and the per-batch package volume by N, and is
+   * still fully deterministic (same seed + N ⇒ byte-identical). Used by the live
+   * demo to put more trucks on the map at once; the goldens never set it.
+   */
+  readonly fleetPerSpoke?: number;
 }
 
 /** Options for the store-driven run. */
@@ -321,6 +332,45 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   const spokes = hubs.slice(1);
   const routes = buildRoutes(hubs);
 
+  // Demo richness knob (DEFAULT 1 ⇒ byte-identical golden stream).
+  const fleetPerSpoke = Math.max(1, Math.floor(opts.fleetPerSpoke ?? 1));
+  // Initial-departure stagger (ticks) for extra fleet slots so they spread along
+  // a route instead of bunching at the center. Slot 0 keeps the tick-1 departure
+  // (so fleetPerSpoke=1 is unchanged); slot s departs at 1 + s·STAGGER.
+  const TRAILER_STAGGER_TICKS = 7;
+  // Per-batch package volume scales with the fleet so the extra trailers have
+  // freight to carry (×1 ⇒ the unchanged golden draw `rng.int(3)`).
+  const maxPackagesPerBatch = MAX_PACKAGES_PER_BATCH * fleetPerSpoke;
+
+  /**
+   * Trailer roster: trailerId ⇆ primary driverId ⇆ spoke ⇆ initial-departure
+   * tick. Slot 0 reproduces the legacy one-per-spoke roster EXACTLY (T001…T00N,
+   * D001…D00N, depart tick 1), so fleetPerSpoke=1 is byte-identical; slots ≥1
+   * append further trailers (continuing the id sequence) with staggered starts.
+   */
+  interface TrailerRosterEntry {
+    readonly trailerId: string;
+    readonly driverId: string;
+    readonly spoke: Hub;
+    readonly departTick: number;
+  }
+  const trailerRoster: TrailerRosterEntry[] = [];
+  {
+    let n = 0;
+    for (let slot = 0; slot < fleetPerSpoke; slot += 1) {
+      for (const spoke of spokes) {
+        n += 1;
+        const id = String(n).padStart(3, "0");
+        trailerRoster.push({
+          trailerId: `T${id}`,
+          driverId: `D${id}`,
+          spoke,
+          departTick: slot === 0 ? 1 : 1 + slot * TRAILER_STAGGER_TICKS,
+        });
+      }
+    }
+  }
+
   // Monotonic id counters — stable ids make the stream reproducible.
   let packageCounter = 0;
   let tripCounter = 0;
@@ -476,17 +526,18 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       };
       emit(`driver-${driverId}`, registered);
     };
-    // Primary roster: one driver bound to each trailer (D001…D00N).
-    spokes.forEach((_spoke, i) => {
-      const trailerId = `T${String(i + 1).padStart(3, "0")}`;
-      const driverId = `D${String(i + 1).padStart(3, "0")}`;
-      driverByTrailer.set(trailerId, driverId);
-      registerDriver(driverId);
-    });
-    // Spare pool: extra fresh drivers a relay hands a trailer to. Ids continue
-    // the sequence after the primary roster so they sort stably AFTER it.
-    for (let k = 0; k < RELAY_SPARE_DRIVERS; k += 1) {
-      const driverId = `D${String(spokes.length + k + 1).padStart(3, "0")}`;
+    // Primary roster: one driver bound to each trailer (from `trailerRoster`;
+    // D001…D00N at fleetPerSpoke=1, continuing the sequence for extra slots).
+    for (const entry of trailerRoster) {
+      driverByTrailer.set(entry.trailerId, entry.driverId);
+      registerDriver(entry.driverId);
+    }
+    // Spare pool: extra fresh drivers a relay hands a trailer to, scaled by the
+    // fleet so more concurrent trailers still usually find a fresh legal driver.
+    // Ids continue the sequence after the primary roster so they sort stably AFTER it.
+    const spareCount = RELAY_SPARE_DRIVERS * fleetPerSpoke;
+    for (let k = 0; k < spareCount; k += 1) {
+      const driverId = `D${String(trailerRoster.length + k + 1).padStart(3, "0")}`;
       registerDriver(driverId);
       sparePool.push(driverId);
     }
@@ -500,7 +551,7 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   for (const s of spokes) pendingBySpoke.set(s.hubId, []);
 
   const createPackageBatch = (tick: number): void => {
-    const count = 1 + rng.int(MAX_PACKAGES_PER_BATCH); // 1..MAX
+    const count = 1 + rng.int(maxPackagesPerBatch); // 1..(MAX × fleetPerSpoke)
     for (let i = 0; i < count; i += 1) {
       packageCounter += 1;
       const packageId = `P${String(packageCounter).padStart(5, "0")}`;
@@ -973,10 +1024,11 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // First package batch at tick 0; one trailer per spoke departs at tick 1 so
   // the first batch is available to load (deterministic, fixed offsets).
   schedule(0, () => createPackageBatch(0));
-  spokes.forEach((spoke, i) => {
-    const trailerId = `T${String(i + 1).padStart(3, "0")}`;
-    schedule(1, () => departTrailer(trailerId, spoke, 1));
-  });
+  for (const entry of trailerRoster) {
+    schedule(entry.departTick, () =>
+      departTrailer(entry.trailerId, entry.spoke, entry.departTick),
+    );
+  }
 
   // --- Drive the queue to completion ----------------------------------------
   for (;;) {

@@ -181,6 +181,12 @@ export interface DriveSimulationOptions {
    * across runs for a byte-identical HOS-on stream.
    */
   readonly hosConfig?: HosConfig;
+  /**
+   * Demo richness knob: trailers (and one primary driver each) PER SPOKE.
+   * Default 1 (byte-identical golden stream); the live demo raises it to put more
+   * trucks on the map at once. Threaded straight through to `simulate`.
+   */
+  readonly fleetPerSpoke?: number;
 }
 
 /**
@@ -216,6 +222,16 @@ export interface DriveSimulationPacedOptions extends DriveSimulationOptions {
    * without affecting the deterministic event stream. Presentation only.
    */
   readonly isPaused?: () => boolean;
+  /**
+   * Run the rolling optimizer every Nth paced tick instead of every tick.
+   * **Default 1** (every tick — unchanged). The per-tick optimizer (min-cost-flow
+   * + VRPTW) blocks the sim loop and its cost grows with the trailer count, so on
+   * a richer demo (more trucks) running it every tick freezes event generation —
+   * trucks stop moving. Batching its events and firing it every N ticks keeps the
+   * sim (and the trailer animation) fluid while still re-optimizing live. Pure
+   * presentation/throughput pacing — the deterministic event STREAM is untouched.
+   */
+  readonly optimizerEveryTicks?: number;
 }
 
 /** Poll interval (ms) used while holding for an external pause flag. */
@@ -427,6 +443,7 @@ export async function driveSimulation(
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
     ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -460,6 +477,7 @@ export async function driveSimulationPaced(
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
     ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
   });
   const ticks = intoTicks(stream);
 
@@ -480,6 +498,11 @@ export async function driveSimulationPaced(
   let cursor = 0n;
 
   let driven = 0;
+  // Optimizer cadence: run it every `optEvery` ticks, batching the intervening
+  // ticks' events so a richer/faster demo isn't blocked by per-tick optimization.
+  const optEvery = Math.max(1, Math.floor(opts.optimizerEveryTicks ?? 1));
+  let ticksSinceOpt = 0;
+  let pendingOptEvents: SimulatedEvent["event"][] = [];
   for (const tick of ticks) {
     // (0) Honor an external pause BEFORE advancing this tick. While paused the
     //     driver holds — it does NOT append/project/broadcast — so both the
@@ -550,10 +573,18 @@ export async function driveSimulationPaced(
     // (e) Catch-up projections (audit timeline + geo-track).
     await runCatchup(catchupView(opts.db), replayReadAll);
 
-    // (f) Rolling optimizer per tick (live re-opt).
+    // (f) Rolling optimizer — every `optEvery` ticks (live re-opt). Each tick's
+    //     events accumulate; on the Nth tick (or the final tick) the optimizer
+    //     fires once on the batch. At optEvery=1 this is the original per-tick
+    //     behaviour; at N>1 it keeps the sim loop fluid with many trucks.
     const tickMs = new Date(tick[0]!.occurredAt).getTime();
-    const tickEvents = tick.map((i) => i.event);
-    await runner(tickEvents, tickMs);
+    for (const i of tick) pendingOptEvents.push(i.event);
+    ticksSinceOpt += 1;
+    if (ticksSinceOpt >= optEvery || driven >= ticks.length - 1) {
+      await runner(pendingOptEvents, tickMs);
+      pendingOptEvents = [];
+      ticksSinceOpt = 0;
+    }
 
     // (g) Broadcast ONE snapshot per tick (presentation layer).
     if (opts.broadcast !== undefined) {
@@ -608,6 +639,7 @@ export async function driveSimulationWithScenario(
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
   });
 
   // 2. Apply the scenario knobs (seeded, deterministic).

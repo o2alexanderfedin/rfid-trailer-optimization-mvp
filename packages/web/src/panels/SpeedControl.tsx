@@ -1,7 +1,7 @@
 /**
  * SpeedControl — the "speed of time" gauge (live sim-speed control).
  *
- * A log-scale range slider (0.25×–8× of the default) + a `sim-min/real-sec`
+ * A log-scale range slider (0.25×–64× of the default) + a `sim-min/real-sec`
  * readout + a Pause/Resume button. Dragging the slider POSTs `/api/sim/speed`
  * (debounced); the server retunes the paced driver's tick interval live and
  * echoes the effective speed on every ws envelope. The component reflects the
@@ -29,11 +29,11 @@ import type { SimSpeedState } from "../api/client.js";
 
 /** Multiplier bounds (relative to the default 1×) — mirror the server clamp. */
 export const MIN_MULTIPLIER = 0.25;
-export const MAX_MULTIPLIER = 8;
+export const MAX_MULTIPLIER = 64;
 
-/** Slider domain in log2 space: log2(0.25)=-2 … log2(8)=3. */
+/** Slider domain in log2 space: log2(0.25)=-2 … log2(64)=6. */
 export const SLIDER_MIN = Math.log2(MIN_MULTIPLIER); // -2
-export const SLIDER_MAX = Math.log2(MAX_MULTIPLIER); // 3
+export const SLIDER_MAX = Math.log2(MAX_MULTIPLIER); // 6
 /** 0.05 ≈ ~3.5% multiplier steps — smooth without flooding the server. */
 export const SLIDER_STEP = 0.05;
 
