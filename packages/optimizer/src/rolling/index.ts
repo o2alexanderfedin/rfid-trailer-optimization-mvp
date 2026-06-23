@@ -32,6 +32,7 @@ export type {
   EpochRecommendation,
   EpochResult,
   TwinBlock,
+  TwinDriver,
   TwinRoute,
   TwinSnapshot,
   TwinStop,

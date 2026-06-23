@@ -64,6 +64,10 @@ export function objectiveBreakdown(
   const overCarry = metrics.overCarryUnits * weights.overCarry;
   const imbalance = metrics.imbalance * weights.imbalance;
   const churn = metrics.churnVsPrevious * weights.churn;
+  // OPT-HOS-01 — the SOFT driver-rest term. Both the metric and the weight default
+  // to 0 (`?? 0`) so the product is EXACTLY 0 in the neutral case ⇒ `total` is
+  // byte-identical to the pre-Phase-15 objective (the regression keystone).
+  const rest = (metrics.restPenalty ?? 0) * (weights.restCost ?? 0);
 
   const total =
     miles +
@@ -77,7 +81,8 @@ export function objectiveBreakdown(
     highUtil +
     overCarry +
     imbalance +
-    churn;
+    churn +
+    rest;
 
   return {
     miles,
@@ -92,6 +97,7 @@ export function objectiveBreakdown(
     overCarry,
     imbalance,
     churn,
+    rest,
     total,
   };
 }

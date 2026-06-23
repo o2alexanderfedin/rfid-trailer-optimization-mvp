@@ -30,6 +30,13 @@ export const DEFAULT_OBJECTIVE_WEIGHTS: ObjectiveWeights = {
   // Anti-P7: a non-trivial anchor to the previous plan so equivalent re-plans do
   // not oscillate (small churn must be cheaper than any real improvement it buys).
   churn: 3,
+  // OPT-HOS-01 (v1.2 Phase 15) — SOFT driver-HOS awareness, NEUTRAL BY DEFAULT.
+  // `0` makes the rest term contribute exactly 0, so the demo objective + selected
+  // plans are byte-identical to pre-Phase-15 (the glpk LP oracle cross-check + the
+  // planner-vs-validator property tests stay green). Operators raise this to soft-
+  // prefer drivers with more remaining legal drive minutes; the HARD HOS gate is
+  // Phase 16 (OPT-HOS-02).
+  restCost: 0,
 };
 
 /**

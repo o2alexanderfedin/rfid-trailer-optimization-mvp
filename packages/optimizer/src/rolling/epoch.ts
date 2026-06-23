@@ -1,7 +1,12 @@
 import type { FeasibilityResult, LoadPlan, Violation } from "@mm/load-planner";
 import { scorePlan } from "@mm/load-planner";
 import type { LoadBlock, PlannerConfig, RouteStop, TimingConfig, TrailerSlice } from "@mm/domain";
-import { DEFAULT_PLANNER_CONFIG, DEFAULT_TIMING_CONFIG, expectedDwellMinutes } from "@mm/domain";
+import {
+  DEFAULT_HOS_CONFIG,
+  DEFAULT_PLANNER_CONFIG,
+  DEFAULT_TIMING_CONFIG,
+  expectedDwellMinutes,
+} from "@mm/domain";
 
 import { objective, objectiveBreakdown } from "../objective/objective.js";
 import { selectPlan } from "../objective/select-plan.js";
@@ -263,6 +268,26 @@ function rehandleScoreFor(trailer: TwinTrailer, config: PlannerConfig): number {
   return scorePlan(plan, loadBlocks, route, config).rehandleScore;
 }
 
+/**
+ * OPT-HOS-01 — the SOFT driver-rest penalty for a trailer (Phase 15). A driver
+ * with FEWER remaining legal drive minutes is soft-penalized: the penalty is
+ * `max(0, maxDriveMin − remainingDriveMinutes)`, bounded by the FMCSA 11h drive
+ * ceiling (`DEFAULT_HOS_CONFIG.maxDriveMin`), so a fully-rested driver (remaining
+ * = 660) ⇒ penalty 0 and a depleted driver (remaining = 0) ⇒ penalty 660. The
+ * remaining minutes are read DETERMINISTICALLY off the Phase-13 `driver_status`
+ * projection via `trailer.driver` (NEVER recomputed off the clock); the value is
+ * clamped non-negative and rounded to a whole minute (anti-P12).
+ *
+ * Returns 0 when the trailer has no driver bound — so a driverless twin (every
+ * pre-Phase-15 snapshot) reproduces the prior `restPenalty: 0` exactly. With the
+ * default `restCost = 0` weight this whole term is a no-op (byte-identical plans).
+ */
+function restPenaltyFor(trailer: TwinTrailer): number {
+  if (trailer.driver === undefined) return 0;
+  const remaining = toNonNegIntMinutes(trailer.driver.remainingDriveMinutes);
+  return Math.max(0, DEFAULT_HOS_CONFIG.maxDriveMin - remaining);
+}
+
 /** Build the pure §12 metrics bag for a routed trailer (deterministic, integer-sourced). */
 function metricsFor(
   trailer: TwinTrailer,
@@ -285,6 +310,9 @@ function metricsFor(
     // Churn anchored to 0 — a fresh epoch has no prior plan to diverge from in the
     // pure core; the shell folds in cross-epoch churn when it has the prior plan.
     churnVsPrevious: 0,
+    // OPT-HOS-01 — the SOFT driver-rest penalty (0 when no driver / fully rested).
+    // Weighted by the default-0 `restCost`, so neutral until an operator raises it.
+    restPenalty: restPenaltyFor(trailer),
   };
 }
 

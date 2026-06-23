@@ -370,6 +370,157 @@ describe("runEpoch FIX 2 — real rehandleScore (not hardcoded 0) in epoch metri
 // the OPTIONAL `freightAssignment` field WITHOUT changing the selectPlan winner,
 // so every prior determinism/feasibility/selectPlan test stays green.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OPT-HOS-01 — SOFT driver-HOS awareness in the live epoch (Phase 15).
+//
+// `TwinTrailer` gains an OPTIONAL `driver` field carrying the assigned driver's
+// remaining legal drive minutes (read deterministically from the Phase-13
+// `driver_status` projection by the snapshot builder). The epoch derives a
+// `restPenalty` metric from it (lower remaining ⇒ higher penalty) weighted by the
+// new SOFT `restCost` weight. KEYSTONE: with the demo default
+// (`restCost === 0`) the epoch output is BYTE-IDENTICAL to a snapshot WITHOUT
+// driver info — prior plans/objective reproduce exactly. Only a raised `restCost`
+// shifts preference toward the more-rested driver.
+// ---------------------------------------------------------------------------
+
+/** A two-trailer snapshot: T_RESTED has more remaining hours than T_TIRED. */
+function twoDriverSnapshot(restedMin: number, tiredMin: number): TwinSnapshot {
+  return {
+    hubs: ["H1", "H2", "H3"],
+    routes: [
+      { routeId: "R1", fromHubId: "H1", toHubId: "H2", travelMin: 30, capacity: 20 },
+      { routeId: "R2", fromHubId: "H2", toHubId: "H3", travelMin: 40, capacity: 20 },
+    ],
+    trailers: [
+      {
+        trailerId: "T_RESTED",
+        currentHubId: "H1",
+        departureMin: 300,
+        capacity: 20,
+        route: [{ hubId: "H2", stopIndex: 0 }],
+        blocks: [{ blockId: "BR", nextUnloadHubId: "H2", volume: 6 }],
+        driver: { driverId: "D_RESTED", remainingDriveMinutes: restedMin },
+      },
+      {
+        trailerId: "T_TIRED",
+        currentHubId: "H1",
+        departureMin: 300,
+        capacity: 20,
+        route: [{ hubId: "H2", stopIndex: 0 }],
+        blocks: [{ blockId: "BT", nextUnloadHubId: "H2", volume: 6 }],
+        driver: { driverId: "D_TIRED", remainingDriveMinutes: tiredMin },
+      },
+    ],
+  };
+}
+
+describe("runEpoch OPT-HOS-01 — soft driver-HOS awareness (neutral by DEFAULT)", () => {
+  const EPOCH_HOS: Epoch = { epochId: "e-hos", nowMin: 100, freezeWindowMin: 15 };
+  const events: readonly DomainEvent[] = [
+    departed("T_RESTED", "H1", "H2"),
+    departed("T_TIRED", "H1", "H2"),
+  ];
+
+  it("KEYSTONE: at the default weight, attaching driver info does NOT change the plan output", () => {
+    // SAME snapshot, once WITHOUT driver info and once WITH (rested vs tired). With
+    // the demo default weights (restCost defaults to 0) the PLAN OUTPUT — the
+    // generated/accepted payloads + every per-trailer objective cost + breakdown —
+    // must be IDENTICAL. (The idempotency `scopeHash` legitimately differs because
+    // the attached driver IS part of the serialized snapshot input; what must
+    // reproduce byte-identically is the PLAN, which is what the regression guards
+    // protect.) The `rest` breakdown term is exactly 0 in both cases.
+    const withDriver = runEpoch(
+      EPOCH_HOS,
+      { events, twinSnapshot: twoDriverSnapshot(600, 30) },
+      DEFAULT_OBJECTIVE_WEIGHTS,
+    );
+    const noDriver = runEpoch(
+      EPOCH_HOS,
+      {
+        events,
+        twinSnapshot: {
+          ...twoDriverSnapshot(600, 30),
+          trailers: twoDriverSnapshot(600, 30).trailers.map((t) => ({
+            trailerId: t.trailerId,
+            currentHubId: t.currentHubId,
+            departureMin: t.departureMin,
+            capacity: t.capacity,
+            route: t.route,
+            blocks: t.blocks,
+          })),
+        },
+      },
+      DEFAULT_OBJECTIVE_WEIGHTS,
+    );
+    // The plan the shell would persist reproduces byte-identically MODULO the
+    // idempotency memo key (`scopeHash`/`planId` derive from the serialized
+    // snapshot, which legitimately differs when driver info is attached). The
+    // plan-bearing fields — objective cost, feasibility, winner, clock — match.
+    const planFields = (g: NonNullable<ReturnType<typeof runEpoch>["generated"]>) => ({
+      trailerId: g.trailerId,
+      objectiveCost: g.objectiveCost,
+      feasible: g.feasible,
+      occurredAt: g.occurredAt,
+    });
+    expect(planFields(withDriver.generated!)).toEqual(planFields(noDriver.generated!));
+    // The accepted plan picks the SAME winning trailer at the same clock.
+    expect(withDriver.accepted!.trailerId).toBe(noDriver.accepted!.trailerId);
+    expect(withDriver.accepted!.occurredAt).toBe(noDriver.accepted!.occurredAt);
+    // Every trailer's objective cost + breakdown reproduces exactly; rest term = 0.
+    const recById = (r: ReturnType<typeof runEpoch>, id: string) =>
+      r.recommendations.find((x) => x.trailerId === id)!;
+    for (const id of ["T_RESTED", "T_TIRED"]) {
+      expect(recById(withDriver, id).objectiveCost).toBe(recById(noDriver, id).objectiveCost);
+      expect(JSON.stringify(recById(withDriver, id).breakdown)).toBe(
+        JSON.stringify(recById(noDriver, id).breakdown),
+      );
+      expect(recById(withDriver, id).breakdown.rest).toBe(0);
+    }
+  });
+
+  it("KEYSTONE: every trailer's objective is identical for rested vs tired at the default weight", () => {
+    const restedHigh = runEpoch(
+      EPOCH_HOS,
+      { events, twinSnapshot: twoDriverSnapshot(600, 600) },
+      DEFAULT_OBJECTIVE_WEIGHTS,
+    );
+    const tiredLow = runEpoch(
+      EPOCH_HOS,
+      { events, twinSnapshot: twoDriverSnapshot(30, 30) },
+      DEFAULT_OBJECTIVE_WEIGHTS,
+    );
+    // Default weight ⇒ remaining-hours difference has ZERO objective effect.
+    const costOf = (r: ReturnType<typeof runEpoch>, id: string) =>
+      r.recommendations.find((x) => x.trailerId === id)!.objectiveCost;
+    expect(costOf(restedHigh, "T_RESTED")).toBe(costOf(tiredLow, "T_RESTED"));
+  });
+
+  it("PREFERENCE: raising restCost makes the TIRED driver's trailer cost MORE than the RESTED one", () => {
+    // Both trailers are otherwise identical (same route/blocks/capacity); they
+    // differ ONLY by remaining drive minutes. With restCost > 0 the tired trailer
+    // must score strictly higher (worse) — the soft preference is active.
+    const weights = { ...DEFAULT_OBJECTIVE_WEIGHTS, restCost: 1 };
+    const result = runEpoch(
+      EPOCH_HOS,
+      { events, twinSnapshot: twoDriverSnapshot(600, 30) },
+      weights,
+    );
+    const rested = result.recommendations.find((r) => r.trailerId === "T_RESTED")!;
+    const tired = result.recommendations.find((r) => r.trailerId === "T_TIRED")!;
+    expect(tired.objectiveCost).toBeGreaterThan(rested.objectiveCost);
+    // The breakdown surfaces the rest term explicitly (explainability).
+    expect(tired.breakdown.rest).toBeGreaterThan(rested.breakdown.rest);
+  });
+
+  it("PURITY: identical inputs (with driver info + raised restCost) ⇒ byte-identical result", () => {
+    const weights = { ...DEFAULT_OBJECTIVE_WEIGHTS, restCost: 2 };
+    const inp = (): EpochInput => ({ events, twinSnapshot: twoDriverSnapshot(540, 90) });
+    const a = runEpoch(EPOCH_HOS, inp(), weights);
+    const b = runEpoch(EPOCH_HOS, inp(), weights);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
 describe("runEpoch F-06/OPT-02 — min-cost-flow freight assignment wired into the live epoch", () => {
   it("RED: freightAssignment is defined with a feasible, non-empty assignment for the routable T1 fixture", () => {
     const result = runEpoch(EPOCH, input(), DEFAULT_OBJECTIVE_WEIGHTS);
