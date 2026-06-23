@@ -18,6 +18,7 @@
  */
 import { Style, Fill, Stroke, Circle as CircleStyle, Text } from "ol/style.js";
 import type { FeatureLike } from "ol/Feature.js";
+import { DUTY_COLORS } from "./dutyColoring.js";
 
 // ---------------------------------------------------------------------------
 // Emoji glyph markers — drawn ON the colored disc. The disc keeps the
@@ -84,14 +85,46 @@ const HUB_STYLE_DEFAULT = new Style({
   text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
 });
 
+// ---------------------------------------------------------------------------
+// VIZ-11 — driver-duty hub overlay
+//
+// `dutyBucket` (0..3, driven by `classifyDutyBucket` over the ws HubState driver
+// buckets) takes PRECEDENCE over the volume bucket when present, so a hub reads
+// its DRIVER AVAILABILITY at a glance (the v1.2 payoff). Colors come from
+// `DUTY_COLORS` (the dutyColoring.ts single source of truth). One pre-allocated
+// Style per duty bucket — same zero-per-frame discipline as the volume cache.
+// When `dutyBucket` is absent/out-of-range the hub falls through to volume color.
+// ---------------------------------------------------------------------------
+
+const HUB_DUTY_STYLE_CACHE: readonly Style[] = DUTY_COLORS.map(
+  (color) =>
+    new Style({
+      image: new CircleStyle({
+        radius: MARKER_RADIUS,
+        fill: new Fill({ color }),
+        stroke: new Stroke({ color: "#ffffff", width: 2 }),
+      }),
+      text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+    }),
+);
+
 /**
  * Zero-allocation `StyleFunction` for hub features.
  *
- * Reads `feature.get("volumeBucket")` (an integer set via `feature.set`) and
- * returns the corresponding cached `Style` reference. Returns `HUB_STYLE_DEFAULT`
- * for any missing or out-of-range value — no new `Style` ever allocated here.
+ * VIZ-11: a hub with a `dutyBucket` (driver-duty distribution) is colored from
+ * `HUB_DUTY_STYLE_CACHE` so the driver-availability signal is visible; otherwise
+ * it falls back to its `volumeBucket` color, then to `HUB_STYLE_DEFAULT`. Every
+ * path returns a pre-allocated cached `Style` reference — no new `Style` here.
  */
 export function hubStyle(feature: FeatureLike): Style {
+  const duty: unknown = feature.get("dutyBucket");
+  if (
+    typeof duty === "number" &&
+    duty >= 0 &&
+    duty < HUB_DUTY_STYLE_CACHE.length
+  ) {
+    return HUB_DUTY_STYLE_CACHE[duty] as Style;
+  }
   const b: unknown = feature.get("volumeBucket");
   if (typeof b === "number" && b >= 0 && b < HUB_STYLE_CACHE.length) {
     return HUB_STYLE_CACHE[b] as Style;

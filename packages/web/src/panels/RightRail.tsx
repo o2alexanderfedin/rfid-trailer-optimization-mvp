@@ -14,10 +14,11 @@
  *
  * The RightRail is a pure layout component — no data-fetching.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertFeed } from "./AlertFeed.js";
 import { TrailerDetail } from "./TrailerDetail.js";
 import { AuditTimeline } from "./AuditTimeline.js";
+import { HubDetail } from "./HubDetail.js";
 import { KpiDashboard } from "./KpiDashboard.js";
 import { MoneySlide } from "./MoneySlide.js";
 import { SpeedControl } from "./SpeedControl.js";
@@ -27,13 +28,15 @@ import type { FeedEntry } from "./AlertFeed.js";
 // Types
 // ---------------------------------------------------------------------------
 
-type DetailTab = "plan" | "history" | "kpis" | "money";
+type DetailTab = "plan" | "history" | "hub" | "kpis" | "money";
 
 interface RightRailProps {
   /** The sorted realtime exception feed (from useAlertFeed). */
   readonly feed: readonly FeedEntry[];
   /** The currently selected trailer id (from map click), or null. */
   readonly selectedTrailerId: string | null;
+  /** VIZ-07: the currently selected hub id (from a hub map click), or null. */
+  readonly selectedHubId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,8 +56,19 @@ interface RightRailProps {
 export function RightRail({
   feed,
   selectedTrailerId,
+  selectedHubId = null,
 }: RightRailProps): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<DetailTab>("kpis");
+
+  // VIZ-07: when a hub is clicked on the map, auto-focus the Hub tab; when a
+  // trailer is clicked, auto-focus the Plan tab — mirroring how a selection
+  // surfaces its detail without an extra click.
+  useEffect(() => {
+    if (selectedHubId !== null) setActiveTab("hub");
+  }, [selectedHubId]);
+  useEffect(() => {
+    if (selectedTrailerId !== null) setActiveTab("plan");
+  }, [selectedTrailerId]);
 
   return (
     <aside className="right-rail" data-testid="right-rail" aria-label="Operator panels">
@@ -89,9 +103,13 @@ export function RightRail({
               ? "Live KPIs"
               : activeTab === "money"
                 ? "vs Baseline"
-                : selectedTrailerId !== null
-                  ? `Trailer: ${selectedTrailerId}`
-                  : "Trailer Detail"}
+                : activeTab === "hub"
+                  ? selectedHubId !== null
+                    ? `Hub: ${selectedHubId}`
+                    : "Hub Detail"
+                  : selectedTrailerId !== null
+                    ? `Trailer: ${selectedTrailerId}`
+                    : "Trailer Detail"}
           </h2>
           <div className="right-rail__tabs" role="tablist">
             {/* KPI Dashboard tab (always visible) */}
@@ -114,6 +132,18 @@ export function RightRail({
             >
               vs Baseline
             </button>
+            {/* Hub detail tab (VIZ-07 — only when a hub is selected) */}
+            {selectedHubId !== null && (
+              <button
+                className={`right-rail__tab${activeTab === "hub" ? " right-rail__tab--active" : ""}`}
+                role="tab"
+                aria-selected={activeTab === "hub"}
+                data-testid="tab-hub"
+                onClick={() => setActiveTab("hub")}
+              >
+                Hub
+              </button>
+            )}
             {/* Plan detail tabs (only when trailer is selected) */}
             {selectedTrailerId !== null && (
               <>
@@ -143,6 +173,8 @@ export function RightRail({
             <KpiDashboard />
           ) : activeTab === "money" ? (
             <MoneySlide />
+          ) : activeTab === "hub" ? (
+            <HubDetail hubId={selectedHubId} />
           ) : activeTab === "plan" || selectedTrailerId === null ? (
             <TrailerDetail trailerId={selectedTrailerId} />
           ) : (

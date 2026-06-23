@@ -166,6 +166,48 @@ describe("hubStyle", () => {
 });
 
 // ---------------------------------------------------------------------------
+// VIZ-11: hubStyle prefers the driver-DUTY bucket when present, falling back to
+// the VOLUME bucket otherwise (so existing volume-only features are unchanged).
+// ---------------------------------------------------------------------------
+
+describe("hubStyle (VIZ-11 driver-duty coloring)", () => {
+  it("colors a hub by its dutyBucket when set (NOT the volume style)", async () => {
+    const { DUTY_COLORS } = await import("./dutyColoring.js");
+    // Same volumeBucket, but dutyBucket present → must NOT collapse to the volume
+    // style (otherwise the driver-availability signal is invisible on the map).
+    const volumeOnly = makeFeature({ volumeBucket: 1 }) as FeatureLike;
+    const withDuty = makeFeature({ volumeBucket: 1, dutyBucket: 3 }) as FeatureLike;
+    expect(hubStyle(withDuty)).not.toBe(hubStyle(volumeOnly));
+    // And the disc fill tracks the duty color, not the volume color.
+    const s = shape(hubStyle(withDuty));
+    expect(s.opts.image?.opts.fill.opts.color).toBe(DUTY_COLORS[3]);
+  });
+
+  it("returns the same cached duty Style ref for the same dutyBucket (zero alloc)", () => {
+    const f = makeFeature({ volumeBucket: 0, dutyBucket: 2 }) as FeatureLike;
+    expect(hubStyle(f)).toBe(hubStyle(f));
+  });
+
+  it("distinct dutyBuckets → distinct cached styles", () => {
+    const a = makeFeature({ dutyBucket: 0 }) as FeatureLike;
+    const b = makeFeature({ dutyBucket: 3 }) as FeatureLike;
+    expect(hubStyle(a)).not.toBe(hubStyle(b));
+  });
+
+  it("falls back to the volume style when dutyBucket is out of range", () => {
+    const oob = makeFeature({ volumeBucket: 2, dutyBucket: 999 }) as FeatureLike;
+    const volumeOnly = makeFeature({ volumeBucket: 2 }) as FeatureLike;
+    expect(hubStyle(oob)).toBe(hubStyle(volumeOnly));
+  });
+
+  it("still renders the hub emoji on the duty-colored disc", () => {
+    const s = shape(hubStyle(makeFeature({ dutyBucket: 1 }) as FeatureLike));
+    expect(s.opts.text?.opts.text).toBe(HUB_EMOJI);
+    expect(s.opts.image?.opts.radius).toBe(16);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // routeStyle: zero-allocation StyleFunction
 // ---------------------------------------------------------------------------
 

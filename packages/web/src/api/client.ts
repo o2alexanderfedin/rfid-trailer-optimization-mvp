@@ -53,6 +53,50 @@ export interface TrailerPlanDto {
   readonly explanation: string;
 }
 
+/**
+ * The assigned driver's live duty summary for a trailer at a hub (HUBQ-01).
+ * Mirrors the server `HubTrailerDriverDto` in `packages/api/src/routes/hub-detail.ts`;
+ * kept here so the web package never imports a server-side module directly.
+ */
+export interface HubTrailerDriverDto {
+  readonly driverId: string;
+  /** FMCSA duty status (`driving | on_break | resting | off_duty`). */
+  readonly dutyStatus: string;
+  /** Remaining legal drive minutes from the HOS clock (≥ 0). */
+  readonly remainingDriveMinutes: number;
+}
+
+/** One trailer currently at a hub, fully described for the Hub Detail panel (HUBQ-01..07). */
+export interface HubTrailerDto {
+  readonly trailerId: string;
+  /** Coarse operational state (`in_transit | arrived | docked`). */
+  readonly status: string;
+  /** The dock door the trailer is docked at; `null` when not docked. */
+  readonly dockDoorId: string | null;
+  readonly assignedPackageIds: readonly string[];
+  /** The bound driver's duty summary; `null` when no driver is assigned. */
+  readonly driver: HubTrailerDriverDto | null;
+  /** HUBQ-03: rear→nose load plan (depth 0 = rear); `[]` when no plan derives. */
+  readonly rearToNose: readonly RearToNoseSlice[];
+  /** HUBQ-04: slice-aware utilization ratio in `[0, 1]`; `null` when no plan. */
+  readonly utilization: number | null;
+  /** HUBQ-06: the next destination hub; `null` when none derives. */
+  readonly nextHubId: string | null;
+  /** HUBQ-05: arrival sim-clock ms at THIS hub; `null` when no arrival on record. */
+  readonly arrivedAtMs: number | null;
+  /** HUBQ-07: ESTIMATED time-to-depart sim-clock ms for a parked trailer; `null` otherwise. */
+  readonly estimatedEtaMs: number | null;
+  /** HUBQ-07 honesty flag: `true` ⇒ `estimatedEtaMs` is an ESTIMATE, not a schedule. */
+  readonly etaIsEstimate: boolean;
+}
+
+/** The `GET /api/hubs/:id/detail` response (HUBQ-01..07 / VIZ-07..09). */
+export interface HubDetailDto {
+  readonly hubId: string;
+  /** Trailers at the hub, sorted by `trailerId` for a stable panel. */
+  readonly trailers: readonly HubTrailerDto[];
+}
+
 /** One entry from `GET /api/trailers/:id/history` or `GET /api/packages/:id/history` (UI-02). */
 export interface TrailerHistoryEntryDto {
   readonly globalSeq: string;
@@ -114,6 +158,29 @@ export async function fetchTrailerPlan(
     throw new Error(`GET /api/trailers/${trailerId}/plan failed: ${res.status}`);
   }
   return (await res.json()) as TrailerPlanDto;
+}
+
+/**
+ * `GET /api/hubs/:id/detail` (HUBQ-01..07 / VIZ-07) — the trailers currently AT a
+ * hub with per-trailer status, dock door, driver duty, load-plan summary,
+ * utilization, next hub, arrival time, and an estimated ETA.
+ *
+ * An unseen / empty hub is a valid answer (`{ hubId, trailers: [] }`), never a
+ * 404 — so this helper does not special-case a 404 the way `fetchTrailerPlan`
+ * does. A non-2xx is a genuine error.
+ */
+export async function fetchHubDetail(
+  hubId: string,
+  signal?: AbortSignal,
+): Promise<HubDetailDto> {
+  const res = await fetch(
+    `/api/hubs/${encodeURIComponent(hubId)}/detail`,
+    signal ? { signal } : {},
+  );
+  if (!res.ok) {
+    throw new Error(`GET /api/hubs/${hubId}/detail failed: ${res.status}`);
+  }
+  return (await res.json()) as HubDetailDto;
 }
 
 /**

@@ -32,6 +32,7 @@ import VectorSource from "ol/source/Vector.js";
 import VectorLayer from "ol/layer/Vector.js";
 import Point from "ol/geom/Point.js";
 import type OlMap from "ol/Map.js";
+import type Feature from "ol/Feature.js";
 import type { WsEnvelope } from "@mm/api";
 import type * as AnimateModule from "./animate.js";
 import { MapView } from "./MapView.js";
@@ -115,6 +116,18 @@ function findTrailerFeature(map: OlMap, trailerId: string): Point | null {
     if (feature === null) continue;
     const geom = feature.getGeometry();
     return geom instanceof Point ? geom : null;
+  }
+  return null;
+}
+
+/** Find the static hub feature by id across the captured map's layers (VIZ-07/11). */
+function findHubFeature(map: OlMap, hubId: string): Feature | null {
+  for (const layer of map.getLayers().getArray()) {
+    if (!(layer instanceof VectorLayer)) continue;
+    const src: unknown = layer.getSource();
+    if (!(src instanceof VectorSource)) continue;
+    const feature = src.getFeatureById(`hub:${hubId}`);
+    if (feature !== null) return feature;
   }
   return null;
 }
@@ -365,6 +378,115 @@ describe("MapView (browser behaviour)", () => {
     await vi.waitFor(() => {
       expect(selections.length).toBeGreaterThan(before);
       expect(selections[selections.length - 1]).toBeNull();
+    });
+  });
+
+  it("VIZ-07: a click over a hub marker selects its hubId (and clears any trailer)", async () => {
+    const host = makeHost();
+    const ctx = makeTestWsContext();
+    const hubSelections: Array<string | null> = [];
+    const trailerSelections: Array<string | null> = [];
+
+    const screen = await render(
+      <WsContext.Provider value={ctx}>
+        <MapView
+          onHubSelect={(id) => hubSelections.push(id)}
+          onTrailerSelect={(id) => trailerSelections.push(id)}
+        />
+      </WsContext.Provider>,
+      { container: host },
+    );
+
+    const el = screen.getByTestId("map").element();
+    await vi.waitFor(() => {
+      expect(capturedMap).not.toBeNull();
+      // Hub source is populated by the MSW geo fetch (3 hubs).
+      expect(el.getAttribute("data-hub-count")).toBe("3");
+    });
+    const map = capturedMap;
+    if (map === null) throw new Error("map not captured");
+
+    // Resolve the DFW hub's pixel from its (static) coordinate, inside the viewport.
+    let hubPixel: readonly [number, number] | null = null;
+    await vi.waitFor(() => {
+      const feature = findHubFeature(map, "DFW");
+      expect(feature).not.toBeNull();
+      const geom = feature?.getGeometry();
+      const coord = geom instanceof Point ? geom.getCoordinates() : null;
+      expect(coord).not.toBeNull();
+      const px = map.getPixelFromCoordinate(coord ?? [0, 0]);
+      expect(px).not.toBeNull();
+      expect(px[0]).toBeGreaterThanOrEqual(0);
+      expect(px[0]).toBeLessThanOrEqual(640);
+      expect(px[1]).toBeGreaterThanOrEqual(0);
+      expect(px[1]).toBeLessThanOrEqual(480);
+      hubPixel = [px[0] ?? 0, px[1] ?? 0];
+    });
+    if (hubPixel === null) throw new Error("hub pixel not resolved");
+
+    // Click ON the hub → forEachFeatureAtPixel finds its hubId → selects "DFW".
+    clickAtPixel(map, hubPixel);
+    await vi.waitFor(() => {
+      expect(hubSelections).toContain("DFW");
+    });
+    // A hub click clears any trailer selection (single active detail).
+    expect(trailerSelections[trailerSelections.length - 1] ?? null).toBeNull();
+
+    // An empty-area click deselects the hub.
+    const before = hubSelections.length;
+    clickAtPixel(map, [3, 3]);
+    await vi.waitFor(() => {
+      expect(hubSelections.length).toBeGreaterThan(before);
+      expect(hubSelections[hubSelections.length - 1]).toBeNull();
+    });
+  });
+
+  it("VIZ-11: a snapshot with driver buckets styles the hub markers by duty (dutyBucket set)", async () => {
+    const host = makeHost();
+    const ctx = makeTestWsContext();
+
+    const screen = await render(
+      <WsContext.Provider value={ctx}>
+        <MapView />
+      </WsContext.Provider>,
+      { container: host },
+    );
+
+    const el = screen.getByTestId("map").element();
+    await vi.waitFor(() => {
+      expect(capturedMap).not.toBeNull();
+      expect(el.getAttribute("data-hub-count")).toBe("3");
+    });
+    const map = capturedMap;
+    if (map === null) throw new Error("map not captured");
+
+    // Drive a snapshot carrying driver buckets: DFW all-resting (→ all-out bucket
+    // 3); LAX all available (→ bucket 0); ORD no driver data (→ no duty bucket).
+    const dutySnapshot: WsEnvelope = {
+      v: 1,
+      type: "snapshot",
+      seq: 1,
+      simMs: 10_000,
+      speed: WS_SNAPSHOT.speed,
+      payload: {
+        trailers: [],
+        hubs: [
+          { id: "DFW", volumeBucket: 2, slaRiskBucket: 0, congestionBucket: 1, driverCount: 2, onBreakCount: 0, restingCount: 2 },
+          { id: "LAX", volumeBucket: 3, slaRiskBucket: 1, congestionBucket: 2, driverCount: 3, onBreakCount: 0, restingCount: 0 },
+          { id: "ORD", volumeBucket: 1, slaRiskBucket: 0, congestionBucket: 0 },
+        ],
+        routes: WS_SNAPSHOT.payload.routes ?? [],
+        exceptionsOpen: [],
+      },
+    };
+    dispatchEnvelope(ctx, dutySnapshot);
+
+    // The duty bucket is derived + set on each hub feature (drives hubStyle).
+    await vi.waitFor(() => {
+      expect(findHubFeature(map, "DFW")?.get("dutyBucket")).toBe(3); // all out
+      expect(findHubFeature(map, "LAX")?.get("dutyBucket")).toBe(0); // all available
+      // ORD has no driver data → no duty bucket → falls back to volume coloring.
+      expect(findHubFeature(map, "ORD")?.get("dutyBucket")).toBeUndefined();
     });
   });
 

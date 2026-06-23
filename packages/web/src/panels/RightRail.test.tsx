@@ -27,7 +27,7 @@ import { server } from "../../test/msw/server.js";
 import { RightRail } from "./RightRail.js";
 import { WsProvider } from "../map/WsProvider.js";
 import type { FeedEntry } from "./AlertFeed.js";
-import type { TrailerPlanDto, KpiComparison } from "../api/client.js";
+import type { TrailerPlanDto, KpiComparison, HubDetailDto } from "../api/client.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -78,14 +78,41 @@ const COMPARISON: KpiComparison = {
   deltas: { rehandleScore: -60, utilizationScore: 0.11 },
 };
 
+/** A hub-detail DTO the per-test `/api/hubs/:id/detail` override returns. */
+function makeHubDetail(hubId: string): HubDetailDto {
+  return {
+    hubId,
+    trailers: [
+      {
+        trailerId: "TRL-014",
+        status: "docked",
+        dockDoorId: "D3",
+        assignedPackageIds: ["P-1", "P-2"],
+        driver: { driverId: "D003", dutyStatus: "resting", remainingDriveMinutes: 0 },
+        rearToNose: [{ depth: 0, loadBlockIds: ["P-1"] }],
+        utilization: 0.78,
+        nextHubId: "ATL",
+        arrivedAtMs: 60_000,
+        estimatedEtaMs: 1_200_000,
+        etaIsEstimate: true,
+      },
+    ],
+  };
+}
+
 /** Render the rail under a real WsProvider (so SpeedControl behaves normally). */
 function renderRail(props: {
   feed: readonly FeedEntry[];
   selectedTrailerId: string | null;
+  selectedHubId?: string | null;
 }): void {
   render(
     <WsProvider>
-      <RightRail feed={props.feed} selectedTrailerId={props.selectedTrailerId} />
+      <RightRail
+        feed={props.feed}
+        selectedTrailerId={props.selectedTrailerId}
+        selectedHubId={props.selectedHubId ?? null}
+      />
     </WsProvider>,
   );
 }
@@ -162,11 +189,37 @@ describe("<RightRail /> (jsdom ui lane)", () => {
   it("hides the Plan + History tabs when no trailer is selected", () => {
     renderRail({ feed: POPULATED_FEED, selectedTrailerId: null });
 
-    // Only the two always-visible tabs exist; no Plan/History tabs.
+    // Only the two always-visible tabs exist; no Plan/History/Hub tabs.
     expect(screen.getByRole("tab", { name: "KPIs" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "vs Baseline" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Plan" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "History" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Hub" })).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // VIZ-07: hub selected → Hub tab appears, auto-focuses, and HubDetail renders
+  // -------------------------------------------------------------------------
+
+  it("shows the Hub tab and renders the HubDetail panel when a hub is selected", async () => {
+    const hubId = "DAL";
+    server.use(
+      http.get("/api/hubs/:id/detail", () => HttpResponse.json(makeHubDetail(hubId))),
+    );
+
+    renderRail({ feed: [], selectedTrailerId: null, selectedHubId: hubId });
+
+    // The Hub tab appears and is auto-focused (effect on selectedHubId).
+    const hubTab = screen.getByRole("tab", { name: "Hub" });
+    expect(hubTab).toBeInTheDocument();
+    expect(hubTab).toHaveAttribute("aria-selected", "true");
+    expect(
+      screen.getByRole("heading", { name: `Hub: ${hubId}` }),
+    ).toBeInTheDocument();
+
+    // The HubDetail panel mounts and the fetched trailer row renders.
+    expect(screen.getByTestId("hub-detail")).toBeInTheDocument();
+    expect(await screen.findByText("TRL-014")).toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------

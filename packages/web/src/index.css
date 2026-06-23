@@ -453,6 +453,174 @@ body,
 }
 
 /* ==========================================================================
+   HubDetail (VIZ-07..11) — compact trailers-at-hub rows
+   ========================================================================== */
+
+.hub-detail {
+  padding: 0.75rem;
+}
+
+.hub-detail__prompt,
+.hub-detail__loading,
+.hub-detail__error,
+.hub-detail__empty {
+  padding: 0.5rem 0;
+  color: #475569;
+  font-size: 0.8rem;
+  text-align: center;
+  font-style: italic;
+}
+
+.hub-detail__error {
+  color: #f87171;
+  font-style: normal;
+}
+
+.hub-detail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.hub-detail__id {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.hub-detail__count {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.hub-detail__back {
+  background: none;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.hub-detail__back:hover {
+  background: #1e293b;
+}
+
+.hub-detail__hint,
+.hub-detail__footnote {
+  font-size: 0.66rem;
+  color: #64748b;
+  font-style: italic;
+  margin-bottom: 0.4rem;
+}
+
+.hub-detail__footnote {
+  margin-top: 0.4rem;
+  margin-bottom: 0;
+}
+
+.hub-detail__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.hub-detail__row-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #111c30;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.hub-detail__row-btn:hover {
+  background: #16233b;
+  border-color: #334155;
+}
+
+.hub-detail__row-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.2rem;
+}
+
+.hub-detail__trailer-id {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.hub-detail__status {
+  font-size: 0.66rem;
+  color: #93c5fd;
+  text-transform: capitalize;
+}
+
+.hub-detail__dwell {
+  font-size: 0.66rem;
+  color: #94a3b8;
+  margin-left: auto;
+}
+
+.hub-detail__exceptions {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: #fca5a5;
+  background: rgba(220, 38, 38, 0.15);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.hub-detail__row-mid {
+  font-size: 0.7rem;
+  color: #cbd5e1;
+  margin-bottom: 0.2rem;
+}
+
+.hub-detail__row-driver {
+  font-size: 0.7rem;
+}
+
+/* Driver duty hero datum — colored dot by duty bucket (matches map duty ramp). */
+.hub-detail__duty {
+  color: #cbd5e1;
+}
+
+.hub-detail__duty--none {
+  color: #64748b;
+  font-style: italic;
+}
+
+.hub-detail__duty[data-duty-bucket="0"] .hub-detail__duty-dot {
+  color: #22c55e;
+}
+
+.hub-detail__duty[data-duty-bucket="1"] .hub-detail__duty-dot {
+  color: #eab308;
+}
+
+.hub-detail__duty[data-duty-bucket="2"] .hub-detail__duty-dot {
+  color: #f97316;
+}
+
+.hub-detail__duty[data-duty-bucket="3"] .hub-detail__duty-dot {
+  color: #64748b;
+}
+
+/* ==========================================================================
    AuditTimeline (UI-02)
    ========================================================================== */
 

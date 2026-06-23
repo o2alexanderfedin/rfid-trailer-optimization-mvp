@@ -21,6 +21,7 @@ import {
   ROUTE_COLORS,
   ROUTE_BUCKET_LABELS,
 } from "./coloring.js";
+import { DUTY_COLORS, DUTY_BUCKET_LABELS } from "./dutyColoring.js";
 
 /** Which metric the hub layer currently displays. */
 export type HubMetric = "volume" | "slaRisk" | "congestion";
@@ -146,6 +147,14 @@ export function Legend({
         title={HUB_METRIC_LABELS[hubMetric]}
         colors={HUB_COLORS}
         labels={HUB_BUCKET_LABELS}
+      />
+      <div style={styles.divider} role="separator" />
+      {/* VIZ-11: driver-duty ramp — hub markers color by driver availability when
+          driver data is present (the v1.2 demo payoff), else by volume above. */}
+      <LegendSection
+        title="Driver duty"
+        colors={DUTY_COLORS}
+        labels={DUTY_BUCKET_LABELS}
       />
       <div style={styles.divider} role="separator" />
       <LegendSection
