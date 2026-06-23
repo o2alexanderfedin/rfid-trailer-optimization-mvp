@@ -93,10 +93,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-22 — v1.2 (Driver HOS & Hub Detail) shipped and archived; 10 phases (9–18), 35/35 requirements; final gate green (test:all 1473/139).
-Stopped at: v1.2 milestone close complete — awaiting next milestone.
-Resume file: None
+Last session: 2026-06-22/23 — v1.2 (Driver HOS & Hub Detail) shipped, archived, and now RELEASED. Resume session completed the outstanding release: gate re-verified on the release commit (build 10/10, typecheck 0, lint 0, unit 1168), git-flow merge develop→main (main=6f61884), tag v1.2.0, back-merge (develop=0a7fb75), pushed origin main+develop+tags v1.2/v1.2.0, and published GitHub release v1.2.0 (marked Latest).
+Stopped at: v1.2 fully released & public — at parity with v1.0/v1.1. Awaiting next milestone — run /gsd-new-milestone for v1.3.
+Resume file: None. (.planning/HANDOFF.json is STALE v1.1-era artifact; ignore/delete.)
 
 ## Operator Next Steps
 
-- v1.2 shipped 2026-06-22; awaiting next milestone. Run /gsd-new-milestone for v1.3.
+- v1.2 RELEASED 2026-06-23 (main=6f61884, tag v1.2.0, GitHub release Latest). Awaiting next milestone — run /gsd-new-milestone for v1.3.
