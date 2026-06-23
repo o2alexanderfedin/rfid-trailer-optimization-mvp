@@ -248,7 +248,14 @@ export interface DriveSimulationPacedOptions extends DriveSimulationOptions {
 /** Default fixed wall-clock frame cadence (ms). */
 const DEFAULT_FRAME_MS = 250;
 /** Default per-frame drain budget. */
-const DEFAULT_MAX_TICKS_PER_FRAME = 32;
+// Drain budget per frame. Kept LOW (not the 64×-at-250ms throughput max) on
+// purpose: at a large fleet the per-frame fold cost dominates, so the TOTAL work
+// to play the stream is ~framing-independent — a smaller budget just redistributes
+// that work across MORE frames, i.e. more WS deltas (better map responsiveness;
+// the OpenLayers client tweens continuously between keyframes) at ~the same total
+// cost. selectDrain clamps simClock down when capped, so this also self-limits the
+// effective top speed gracefully instead of leaping the whole stream in one frame.
+const DEFAULT_MAX_TICKS_PER_FRAME = 4;
 /** The 1× wall-clock baseline interval — the accumulator advance denominator. */
 const DEFAULT_INTERVAL_MS = 500;
 /** Sim-ms advanced per tick (= the engine's MS_PER_TICK). */

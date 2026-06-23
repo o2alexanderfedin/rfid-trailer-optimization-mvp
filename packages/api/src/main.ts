@@ -94,9 +94,11 @@ async function main(): Promise<void> {
   // (GET/POST /sim/speed): the paced driver reads `getMultiplier()`/`isPaused()`
   // FRESH each frame so a slider drag lands on the very next frame.
   const frameMs = Number(process.env.SIM_FRAME_MS ?? 250);
+  // Low per-frame drain budget ⇒ more WS deltas (smoother map responsiveness) at
+  // ~the same total cost, since the per-frame fold dominates at a large fleet.
   const maxTicksPerFrame = Math.max(
     1,
-    Math.floor(Number(process.env.SIM_MAX_TICKS_PER_FRAME ?? 32)),
+    Math.floor(Number(process.env.SIM_MAX_TICKS_PER_FRAME ?? 4)),
   );
 
   // Phase 18 — live driver-HOS prerequisite: enable Hours-of-Service on the LIVE
