@@ -25,7 +25,7 @@ import {
   type TimingConfig,
 } from "@mm/simulation";
 import { makeRng } from "@mm/simulation";
-import type { DomainEvent } from "@mm/domain";
+import type { DomainEvent, HosConfig } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
 import type { Kysely } from "kysely";
 import type { ApiDb } from "../routes/queries.js";
@@ -162,6 +162,25 @@ export interface DriveSimulationOptions {
    * `undefined` disables the live loop — backward-compatible with existing tests.
    */
   readonly loop?: LoopLike;
+  /**
+   * SIM-HOS-01/02/03/05 (Phase 18 live wiring): OPT-IN driver Hours-of-Service
+   * modeling. When `true` the engine seeds drivers, assigns them per trip,
+   * accrues driving minutes, parks/relays on a breach, and emits driver +
+   * load/unload phase events — so `driver_status` is populated and the Hub Detail
+   * panel + ws driver buckets carry real duty data.
+   *
+   * DEFAULT FALSE / ABSENT (the determinism keystone): the engine emits NO driver
+   * events and makes ZERO `hosRng` draws ⇒ the stream is byte-identical to the
+   * pre-v1.2 golden. The unit determinism goldens pass this OFF explicitly and
+   * MUST stay byte-identical — only the LIVE runnable demo (`main.ts`) turns it on.
+   */
+  readonly hosEnabled?: boolean;
+  /**
+   * DIP: override the FMCSA HOS limits. Only consulted when `hosEnabled` is
+   * `true`; the engine defaults to `DEFAULT_HOS_CONFIG`. Pass the same config
+   * across runs for a byte-identical HOS-on stream.
+   */
+  readonly hosConfig?: HosConfig;
 }
 
 /**
@@ -406,6 +425,8 @@ export async function driveSimulation(
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
+    ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -437,6 +458,8 @@ export async function driveSimulationPaced(
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
+    ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
   });
   const ticks = intoTicks(stream);
 

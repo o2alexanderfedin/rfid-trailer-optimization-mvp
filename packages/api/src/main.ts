@@ -3,7 +3,12 @@ import { PROJECTIONS_SCHEMA_SQL } from "@mm/projections";
 import { sql } from "kysely";
 import { buildServer } from "./server.js";
 import { driveSimulationPaced } from "./sim/driver.js";
-import { DEMO_RFID_CONFIG, DEMO_OVER_CARRY_CONFIG } from "./detection-config.js";
+import {
+  DEMO_RFID_CONFIG,
+  DEMO_OVER_CARRY_CONFIG,
+  resolveDemoHosEnabled,
+} from "./detection-config.js";
+import { DEFAULT_HOS_CONFIG } from "@mm/domain";
 import type { ApiDb } from "./routes/queries.js";
 
 /**
@@ -70,6 +75,17 @@ async function main(): Promise<void> {
   // each iteration. `tickIntervalMs` is kept as the back-compat fallback.
   const tickIntervalMs = Number(process.env.SIM_TICK_INTERVAL_MS ?? 500);
 
+  // Phase 18 — live driver-HOS prerequisite: enable Hours-of-Service on the LIVE
+  // demo (DEFAULT ON; set HOS_ENABLED=0 to disable). With HOS on, the engine
+  // seeds drivers, assigns them per trip, accrues driving minutes, parks/relays
+  // on a breach, and emits driver + load/unload phase events ⇒ `driver_status` is
+  // populated ⇒ `GET /hubs/:id/detail` + the ws driver buckets carry real duty
+  // data (the v1.2 hero feature is now visible on the map + Hub Detail panel).
+  // This DOES NOT touch the unit determinism goldens — they call `simulate`
+  // directly with the default (HOS-off) config and never read HOS_ENABLED.
+  const hosEnabled = resolveDemoHosEnabled();
+  app.log.info(`driver HOS ${hosEnabled ? "ENABLED" : "disabled"} on live demo`);
+
   // Drive the sim AFTER listen so every connected client receives live ticks.
   // Enable seeded RFID emission so the WHOLE Phase-3 pipeline fires end-to-end
   // (reads → fused zone estimates → per-tick detector → exception feed).
@@ -81,6 +97,8 @@ async function main(): Promise<void> {
     durationTicks,
     rfid: DEMO_RFID_CONFIG,
     overCarry: DEMO_OVER_CARRY_CONFIG.rate,
+    hosEnabled,
+    hosConfig: DEFAULT_HOS_CONFIG,
     broadcast,
     loop,
     tickIntervalMs,

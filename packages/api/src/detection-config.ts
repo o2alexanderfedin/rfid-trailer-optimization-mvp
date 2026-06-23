@@ -138,3 +138,29 @@ export interface OverCarryConfig {
 export const DEMO_OVER_CARRY_CONFIG: OverCarryConfig = {
   rate: 0.15,
 };
+
+/**
+ * Phase 18 (live-HOS prerequisite): resolve whether the LIVE demo path
+ * (`main.ts`) should run with driver Hours-of-Service modeling ON. The v1.2
+ * driver-HOS feature was built OPT-IN / DEFAULT-OFF so the unit determinism
+ * goldens stay byte-identical (they pass the OFF config explicitly). The RUNNING
+ * demo, however, must turn it ON so driver assignment, HOS accrual, relay/swap,
+ * and load/unload events flow → `driver_status` is populated → `GET
+ * /hubs/:id/detail` + the ws driver buckets carry real driver duty data (the
+ * v1.2 hero feature is visible on the map + Hub Detail panel).
+ *
+ * Toggle: the `HOS_ENABLED` env var. DEFAULTS ON for the demo — set
+ * `HOS_ENABLED=0` (or `false`/`off`/`no`) to force the legacy HOS-off live
+ * stream. Pure (env passed in), so it is hermetically unit-testable.
+ *
+ * NOTE: this NEVER affects the unit determinism goldens — those call `simulate`
+ * directly with the default (HOS-off) config and never read this env var.
+ */
+export function resolveDemoHosEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env.HOS_ENABLED;
+  if (raw === undefined || raw === "") return true; // default ON for the demo
+  const v = raw.trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "no");
+}
