@@ -5,6 +5,7 @@ import type {
   DriverRegistered,
   DriverSwappedAtHub,
   DutyStatus,
+  FuelConfig,
   HosClock,
   HosConfig,
   Hub,
@@ -16,20 +17,24 @@ import type {
   TrailerArrivedAtHub,
   TrailerDeparted,
   TrailerDocked,
+  TruckRefueled,
+  TruckRested,
   UnloadCompleted,
   UnloadStarted,
 } from "@mm/domain";
 import {
+  DEFAULT_FUEL_CONFIG,
   DEFAULT_HOS_CONFIG,
   applyDrivingLeg,
   epochMinutesToIso,
+  haversineKm,
   isoToEpochMinutes,
   mayDriveNow,
   remainingLegalDriveMinutes,
 } from "@mm/domain";
 import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
 import { buildRoutes, buildTransitParamsByLeg, routeId } from "./network/routes.js";
-import { makeRng } from "./rng.js";
+import { makeRng, type Rng } from "./rng.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
 import { DEFAULT_TIMING_CONFIG, sampleLogNormal, type TimingConfig } from "./timing.js";
@@ -70,6 +75,17 @@ export const TIMING_RNG_SALT = 0x00_00_77_17;
  * same `HosConfig` ⇒ byte-identical HOS stream.
  */
 export const HOS_RNG_SALT = 0x10_51_09_01;
+/**
+ * SP2 (spec §5): the SIXTH substream salt for fuel/refuel draws. A NEW, DISTINCT
+ * constant (the salt-collision test asserts it differs from the five above) so
+ * enabling fuel never perturbs `rng`/`rfidRng`/`overCarryRng`/`timingRng`/`hosRng`.
+ * The `fuelRng` it seeds is constructed ONLY when `fuel.enabled` — so a fuel-off
+ * run draws ZERO fuel values and stays byte-identical to the golden. The current
+ * tank model is fully deterministic (no jitter), so `fuelRng` is reserved for any
+ * future refuel-time jitter; it is wired through the same seed-XOR discipline now
+ * so adding a draw later cannot perturb the other five streams.
+ */
+export const FUEL_RNG_SALT = 0x2b_3d_91_e7;
 
 // --- Public types -----------------------------------------------------------
 
@@ -151,6 +167,20 @@ export interface SimulateOptions {
    * demo to put more trucks on the map at once; the goldens never set it.
    */
   readonly fleetPerSpoke?: number;
+  /**
+   * SP2 (spec §5): OPT-IN fuel/refuel modeling. **DEFAULT OFF** ({@link
+   * FuelConfig.enabled} defaults false) — the determinism keystone. When absent OR
+   * `enabled:false`, the engine tracks NO odometer, creates NO `fuelRng`, emits NO
+   * `TruckRested`/`TruckRefueled`, and adds NO arrival delay ⇒ the stream is
+   * BYTE-IDENTICAL to the pre-SP2 golden. When `enabled`, each trailer accrues a
+   * per-leg haversine-mile odometer; once it crosses `refuelThresholdMiles` the
+   * trailer refuels on that leg (emit `TruckRefueled`, reset the odometer); each
+   * HOS rest/break also emits a co-located `TruckRested`. A refuel co-located with
+   * a rest adds NO extra delay (effective added time = `max(restMin, refuelMin)`,
+   * spec §5 no-double-count). All deterministic: same seed + same config ⇒
+   * byte-identical fuel-on stream.
+   */
+  readonly fuel?: FuelConfig;
 }
 
 /** Options for the store-driven run. */
@@ -246,7 +276,7 @@ class EventQueue {
  * the SINGLE source of truth shared by `simulate` and `runSimulation`.
  */
 function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid, overCarry, timing, hosEnabled, hosConfig } = opts;
+  const { seed, durationTicks, rfid, overCarry, timing, hosEnabled, hosConfig, fuel } = opts;
   if (!Number.isInteger(durationTicks) || durationTicks < 0) {
     throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
   }
@@ -256,6 +286,14 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // the stream is byte-identical to the pre-v1.2 golden (the keystone).
   const hosOn = hosEnabled === true;
   const hosLimits: HosConfig = hosConfig ?? DEFAULT_HOS_CONFIG;
+
+  // SP2 (spec §5): fuel is OPT-IN and DEFAULT OFF. Enabled ONLY when a config is
+  // supplied with `enabled:true` — absent OR `enabled:false` ⇒ NO odometer, NO
+  // `fuelRng`, NO `TruckRested`/`TruckRefueled`, NO arrival delay, so the stream
+  // stays byte-identical to the golden (the determinism keystone). The fuel
+  // config falls back to DEFAULT_FUEL_CONFIG only for the (unused-when-off) knobs.
+  const fuelConfig: FuelConfig = fuel ?? DEFAULT_FUEL_CONFIG;
+  const fuelOn = fuelConfig.enabled === true;
 
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
@@ -293,6 +331,17 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // side-effect-free (independent state); it is only DRAWN when `hosOn`, so the
   // HOS-off stream consumes ZERO `hosRng` values and stays byte-identical.
   const hosRng = makeRng((seed ^ HOS_RNG_SALT) >>> 0);
+  // SP2: the SIXTH substream. Created ONLY when fuel is on (the determinism
+  // keystone — a fuel-off run never even constructs it). The salt is DISTINCT from
+  // the five above (asserted by the salt-collision test) so any future refuel
+  // jitter draw would be fully reproducible per seed yet never perturb the other
+  // streams. The current tank model is deterministic (no draw), so `fuelRng` is
+  // reserved; it is `undefined` when off so the off path is provably draw-free.
+  const fuelRng: Rng | undefined = fuelOn ? makeRng((seed ^ FUEL_RNG_SALT) >>> 0) : undefined;
+  void fuelRng;
+  // SP2: per-trailer odometer (miles since last refuel), init 0 at roster
+  // seeding. Only mutated when `fuelOn`; an off run leaves it empty (no state).
+  const odometerByTrailer = new Map<string, number>();
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
   // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
   // the real great-circle (haversine) distance between its two hubs at an 80 km/h
@@ -332,6 +381,20 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   const spokes = hubs.slice(1);
   const routes = buildRoutes(hubs);
 
+  // SP2 (spec §5): per-DIRECTED-leg miles via the SHARED haversine derivation —
+  // `haversineKm(from, to) × 0.621371` — the SAME geometry the optimizer's
+  // distanceMiles + the geo-track positions are derived from (DRY). Keyed by hub
+  // id for the odometer accrual. Pure (coordinates only); built once. Computed
+  // unconditionally (cheap, no RNG) but only READ on the fuel-on path.
+  const KM_TO_MILES = 0.621_371;
+  const hubById = new Map<string, Hub>(hubs.map((h) => [h.hubId, h]));
+  const legMilesFor = (fromHubId: string, toHubId: string): number => {
+    const from = hubById.get(fromHubId);
+    const to = hubById.get(toHubId);
+    if (from === undefined || to === undefined) return 0;
+    return haversineKm(from, to) * KM_TO_MILES;
+  };
+
   // Demo richness knob (DEFAULT 1 ⇒ byte-identical golden stream).
   const fleetPerSpoke = Math.max(1, Math.floor(opts.fleetPerSpoke ?? 1));
   // Initial-departure stagger (ticks) for extra fleet slots so they spread along
@@ -367,6 +430,9 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
           spoke,
           departTick: slot === 0 ? 1 : 1 + slot * TRAILER_STAGGER_TICKS,
         });
+        // SP2: seed the per-trailer odometer at 0 (only when fuel is on, so an
+        // off run leaves `odometerByTrailer` empty — no state, no deltas).
+        if (fuelOn) odometerByTrailer.set(`T${id}`, 0);
       }
     }
   }
@@ -482,6 +548,60 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       type,
       schemaVersion: 1,
       payload,
+    };
+    emit(`trailer-${trailerId}`, event);
+  };
+
+  /**
+   * SP2 (spec §5): emit a located `TruckRested` ALONGSIDE the HOS rest/break that
+   * triggered it (same trailer, same `occurredAt`, the segment's whole `minutes`),
+   * mapping the HOS segment kind to the closed reason enum. NO lon/lat, NO RNG in
+   * the payload — the geo-track projection computes the map position from the
+   * logged leg geometry. No-op (zero events) unless `fuelOn`.
+   */
+  const emitTruckRested = (
+    trailerId: string,
+    tripId: string,
+    reason: "rest-10h" | "break-30min",
+    durationMin: number,
+  ): void => {
+    const event: TruckRested = {
+      type: "TruckRested",
+      schemaVersion: 1,
+      payload: { trailerId, tripId, reason, durationMin, occurredAt: clock.nowIso() },
+    };
+    emit(`trailer-${trailerId}`, event);
+  };
+
+  /**
+   * SP2 (spec §5): emit a located `TruckRefueled` when the per-trailer odometer
+   * crosses `refuelThresholdMiles` on a departing leg. `gallons` is the
+   * deterministic refilled amount from the tank model
+   * (`round(min(odometerMiles / mpg, tankCapacityGallons))`); `odometerMiles` is
+   * the cumulative miles at the refuel (PRE-reset, integer-rounded for a byte-stable
+   * payload). NO lon/lat, NO RNG in the payload (geometry-free). The caller resets
+   * the odometer to 0 after this.
+   */
+  const emitTruckRefueled = (
+    trailerId: string,
+    tripId: string,
+    odometerMiles: number,
+  ): void => {
+    const odo = Math.round(odometerMiles);
+    const gallons = Math.round(
+      Math.min(odo / fuelConfig.milesPerGallon, fuelConfig.tankCapacityGallons),
+    );
+    const event: TruckRefueled = {
+      type: "TruckRefueled",
+      schemaVersion: 1,
+      payload: {
+        trailerId,
+        tripId,
+        gallons,
+        odometerMiles: odo,
+        durationMin: Math.round(fuelConfig.refuelTimeMinutes),
+        occurredAt: clock.nowIso(),
+      },
     };
     emit(`trailer-${trailerId}`, event);
   };
@@ -609,7 +729,7 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     driverId: string,
     legMinutes: number,
     departIso: string,
-  ): number => {
+  ): { extra: number; rests: readonly { reason: "rest-10h" | "break-30min"; minutes: number }[] } => {
     const before = clockByDriver.get(driverId)!;
     const result = applyDrivingLeg(before, hosLimits, legMinutes, departIso);
     clockByDriver.set(driverId, result.clock);
@@ -619,20 +739,27 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     // `hosRng` jitter (0..HOS_REST_JITTER_TICKS) is drawn PER inserted pause, in
     // queue order, so two replays draw the same values in the same sequence.
     let extra = 0;
+    const rests: { reason: "rest-10h" | "break-30min"; minutes: number }[] = [];
     for (const seg of result.segments) {
       if (seg.kind === "drive") continue;
       const jitter = hosRng.int(HOS_REST_JITTER_TICKS + 1); // 0..JITTER inclusive
-      extra += seg.minutes + jitter;
-      const status: DutyStatus = seg.kind === "break" ? "on_break" : "resting";
-      const reason =
-        seg.kind === "break" ? "30-min-break-due" : "10h-reset";
+      const pauseMinutes = seg.minutes + jitter;
+      extra += pauseMinutes;
+      const isBreak = seg.kind === "break";
+      const status: DutyStatus = isBreak ? "on_break" : "resting";
+      const reason = isBreak ? "30-min-break-due" : "10h-reset";
       emitDutyState(driverId, status, reason, result.clock);
+      // SP2 (spec §5): record this mid-leg park so `departTrailer` can emit a
+      // co-located `TruckRested` (the new map-visible event). Recorded ALWAYS;
+      // emission is gated on `fuelOn` at the call site so the fuel-off stream is
+      // byte-identical (the `hosRng` jitter draw count/order above is unchanged).
+      rests.push({ reason: isBreak ? "break-30min" : "rest-10h", minutes: pauseMinutes });
     }
     // If the leg required any pause, the driver resumes driving afterward.
     if (extra > 0) {
       emitDutyState(driverId, "driving", "rest-complete", result.clock);
     }
-    return extra;
+    return { extra, rests };
   };
 
   /**
@@ -825,17 +952,69 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     // relay the dispatched driver is fresh, so the leg fits with no rest and the
     // trailer departs ON TIME; only when the pool was exhausted (no swap) does
     // the tired driver park mid-leg. ZERO `hosRng` draws when HOS is off.
+    let legRests: readonly { reason: "rest-10h" | "break-30min"; minutes: number }[] = [];
     if (hosOn) {
       const driverId = driverByTrailer.get(trailerId)!;
-      restTicks = accrueDrivingLeg(driverId, transitTicks, clock.nowIso());
-      // The driver is in-flight until the leg (plus any park) completes, so it
-      // is unavailable for relay until then — re-entering the pool on arrival.
+      const accrued = accrueDrivingLeg(driverId, transitTicks, clock.nowIso());
+      restTicks = accrued.extra;
+      legRests = accrued.rests;
+    }
+
+    // SP2 (spec §5): accrue this leg's MILES onto the trailer's odometer and decide
+    // whether the trailer refuels on this leg (odometer crosses the threshold).
+    // The leg miles are outbound center→spoke (matching `transitTicks`'s directed
+    // leg). ZERO state when fuel is off (the odometer map is empty) ⇒ byte-identical.
+    let refuelTicks = 0;
+    let refuelOdometer = 0;
+    let didRefuel = false;
+    if (fuelOn) {
+      const accrued = (odometerByTrailer.get(trailerId) ?? 0) + legMilesFor(center.hubId, spoke.hubId);
+      if (accrued >= fuelConfig.refuelThresholdMiles) {
+        didRefuel = true;
+        refuelOdometer = accrued;
+        odometerByTrailer.set(trailerId, 0);
+        refuelTicks = Math.round(fuelConfig.refuelTimeMinutes);
+      } else {
+        odometerByTrailer.set(trailerId, accrued);
+      }
+    }
+
+    // No-double-count (spec §5): the leg's added arrival time is `max(rest,
+    // refuel)` — the refuel OVERLAPS any co-located rest, so a refuel inside a
+    // >= refuelTime rest adds NO extra delay and a lone refuel adds exactly
+    // `refuelTimeMinutes`. With refuel off (`refuelTicks === 0`) this is exactly
+    // `restTicks` — byte-identical to the prior HOS-only arrival.
+    const addedTicks = Math.max(restTicks, refuelTicks);
+    if (hosOn) {
+      const driverId = driverByTrailer.get(trailerId)!;
+      // The driver is in-flight until the leg (plus any park/refuel) completes, so
+      // it is unavailable for relay until then — re-entering the pool on arrival.
       availableAtMinByDriver.set(
         driverId,
-        isoToEpochMinutes(clock.nowIso()) + transitTicks + restTicks,
+        isoToEpochMinutes(clock.nowIso()) + transitTicks + addedTicks,
       );
     }
-    const arriveTick = departTick + transitTicks + restTicks;
+    const arriveTick = departTick + transitTicks + addedTicks;
+
+    // SP2 (spec §5/§6): schedule the MAP-VISIBLE stop events at a deterministic
+    // MID-LEG tick (halfway through the driving portion) so the geo-track
+    // projection interpolates a genuine MID-ROUTE position (a stop stamped at the
+    // departure tick would render on top of the origin hub). The mid-leg tick is a
+    // pure function of `departTick + transitTicks` (no RNG), so it is fully
+    // reproducible; emitting via the queue keeps `occurredAt` non-decreasing. Gated
+    // on `fuelOn` ⇒ ZERO extra events when fuel is off (byte-identical golden).
+    if (fuelOn && (legRests.length > 0 || didRefuel)) {
+      const midLegTick = departTick + Math.floor(transitTicks / 2);
+      schedule(midLegTick, () => {
+        for (const rest of legRests) {
+          emitTruckRested(trailerId, tripId, rest.reason, rest.minutes);
+        }
+        if (didRefuel) {
+          emitTruckRefueled(trailerId, tripId, refuelOdometer);
+        }
+      });
+    }
+
     schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
   };
 
