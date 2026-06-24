@@ -186,6 +186,37 @@ export interface SimulateOptions {
    * byte-identical fuel-on stream.
    */
   readonly fuel?: FuelConfig;
+  /**
+   * CONT-01: when `true`, the engine runs INDEFINITELY past `durationTicks` — the
+   * `durationTicks` ceiling is ignored and the package-batch / trailer-departure
+   * self-rescheduling loops keep firing forever. The loop terminates only when
+   * the queue drains AND/OR the injected {@link SimulateOptions.stop} predicate
+   * returns `true`. **DEFAULT FALSE / ABSENT — the determinism keystone:** when
+   * absent or `false`, every guard evaluates EXACTLY as the pre-v2.0 finite path,
+   * so the stream is BYTE-IDENTICAL to the existing goldens (DET-01).
+   *
+   * Pair this with {@link SimulateOptions.onEvent} for streaming delivery — an
+   * open-ended run accumulating into `out[]` would grow without bound (use the
+   * `simulate()` array surface only for the finite path).
+   */
+  readonly runUntilStopped?: boolean;
+  /**
+   * CONT-01: streaming emit callback for the open-ended driver path. When
+   * provided, each event is delivered ONE BY ONE to the callback instead of being
+   * accumulated in the internal `out[]` array — so an indefinite run stays
+   * memory-bounded. When ABSENT, `out[]` accumulation is used (the `simulate()`
+   * golden-test surface is unchanged). The events delivered are byte-identical in
+   * order/content to what `simulate()` would have collected.
+   */
+  readonly onEvent?: (event: SimulatedEvent) => void;
+  /**
+   * CONT-01: cooperative stop predicate, polled before each queue pop ONLY when
+   * {@link SimulateOptions.runUntilStopped} is `true`. Return `true` to terminate
+   * the loop cleanly at the next iteration. The injected driver (plan-04) flips
+   * its source so the open-ended run can be stopped on demand. Ignored entirely on
+   * the finite path (absent/false `runUntilStopped`), so it never affects goldens.
+   */
+  readonly stop?: () => boolean;
 }
 
 /** Options for the store-driven run. */
@@ -456,9 +487,20 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   let packageCounter = 0;
   let tripCounter = 0;
 
-  /** Emit one event onto its stream at the current domain time. */
+  /**
+   * Emit one event onto its stream at the current domain time. CONT-01: when an
+   * `onEvent` callback is provided (the open-ended streaming path), the event is
+   * delivered one-by-one to the callback instead of being accumulated in `out[]`,
+   * so an indefinite run stays memory-bounded. Absent ⇒ `out[]` accumulation (the
+   * `simulate()` golden-test surface, byte-identical).
+   */
   const emit = (streamId: string, event: DomainEvent): void => {
-    out.push({ streamId, event, occurredAt: clock.nowIso() });
+    const item: SimulatedEvent = { streamId, event, occurredAt: clock.nowIso() };
+    if (opts.onEvent !== undefined) {
+      opts.onEvent(item);
+    } else {
+      out.push(item);
+    }
   };
 
   /**
@@ -720,7 +762,13 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       pendingBySpoke.get(dest.hubId)!.push(packageId);
     }
     const nextTick = tick + PACKAGE_INTERVAL_TICKS;
-    if (nextTick <= durationTicks) schedule(nextTick, () => createPackageBatch(nextTick));
+    // CONT-02: in open-ended mode, keep self-scheduling past the durationTicks
+    // ceiling so freight generation sustains indefinitely. On the finite path
+    // (absent/false runUntilStopped) the original `<= durationTicks` guard is
+    // preserved EXACTLY — byte-identical goldens (DET-01).
+    if (opts.runUntilStopped === true || nextTick <= durationTicks) {
+      schedule(nextTick, () => createPackageBatch(nextTick));
+    }
   };
 
   /**
@@ -1163,7 +1211,10 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     const spokeDwell = drawDwellTicks("spoke");
     const centerDwell = drawDwellTicks("center");
     const nextDepart = arriveTick + spokeDwell + centerDwell;
-    if (nextDepart <= durationTicks) {
+    // CONT-02: in open-ended mode, keep re-dispatching trailers past the
+    // durationTicks ceiling so the fleet keeps cycling indefinitely. Finite path
+    // (absent/false runUntilStopped) preserves the original guard EXACTLY (DET-01).
+    if (opts.runUntilStopped === true || nextDepart <= durationTicks) {
       schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
     }
   };
@@ -1225,10 +1276,18 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   }
 
   // --- Drive the queue to completion ----------------------------------------
+  // CONT-01: the open-ended path (`runUntilStopped`) ignores the durationTicks
+  // ceiling and runs until the queue drains or the cooperative `stop()` predicate
+  // asks to halt. The finite path is UNCHANGED — `runUntilStopped` absent/false
+  // ⇒ the original `fireTick > durationTicks` break fires exactly as before
+  // (byte-identical goldens, DET-01). `stop` is polled ONLY in open-ended mode.
+  const openEnded = opts.runUntilStopped === true;
+  const shouldStop = opts.stop;
   for (;;) {
+    if (openEnded && shouldStop !== undefined && shouldStop()) break;
     const action = queue.pop();
     if (action === undefined) break;
-    if (action.fireTick > durationTicks) break;
+    if (!openEnded && action.fireTick > durationTicks) break;
     clock.advance(action.fireTick - currentTick(clock));
     action.run();
   }
