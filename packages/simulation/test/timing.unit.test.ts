@@ -76,7 +76,12 @@ describe("sampleLogNormal", () => {
   it("u1 === 0 guard: a degenerate rng returning 0 yields a finite clamped value", () => {
     // An rng whose next() always returns 0 would make ln(u1) = -Infinity without
     // the guard; with the floor it must produce a finite, in-band result.
-    const zeroRng = { next: () => 0, int: () => 0, pick: <T>(xs: readonly T[]) => xs[0]! };
+    const zeroRng = {
+      next: () => 0,
+      int: () => 0,
+      pick: <T>(xs: readonly T[]) => xs[0]!,
+      getState: () => 0,
+    };
     const v = sampleLogNormal(zeroRng, TRANSIT);
     expect(Number.isFinite(v)).toBe(true);
     expect(v).toBeGreaterThanOrEqual(TRANSIT.min);
