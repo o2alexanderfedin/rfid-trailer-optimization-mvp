@@ -33,7 +33,12 @@ import {
   remainingLegalDriveMinutes,
 } from "@mm/domain";
 import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
-import { buildRoutes, buildTransitParamsByLeg, routeId } from "./network/routes.js";
+import {
+  buildRoutes,
+  buildTransitParamsByLeg,
+  loadStaticRoadGeometry,
+  routeId,
+} from "./network/routes.js";
 import { makeRng, type Rng } from "./rng.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
@@ -381,17 +386,27 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   const spokes = hubs.slice(1);
   const routes = buildRoutes(hubs);
 
-  // SP2 (spec §5): per-DIRECTED-leg miles via the SHARED haversine derivation —
-  // `haversineKm(from, to) × 0.621371` — the SAME geometry the optimizer's
-  // distanceMiles + the geo-track positions are derived from (DRY). Keyed by hub
-  // id for the odometer accrual. Pure (coordinates only); built once. Computed
-  // unconditionally (cheap, no RNG) but only READ on the fuel-on path.
+  // SP2 (spec §5) + FIX 5 — per-DIRECTED-leg miles on the SAME distance basis as
+  // the trailer-fuel projection + twin-snapshot, so the sim odometer, the twin's
+  // `milesSinceRefuel`, and the optimizer's `distanceMiles` never diverge (an
+  // endpoint-haversine odometer under-counts a road-following leg by ~10–15%, which
+  // makes the optimizer over-predict refuels). PREFER the committed ORS road
+  // `distance_m` (mirroring `buildTransitParamsByLeg` + twin-snapshot's
+  // `distanceMiles`: `distance_m / 1000 km × 0.621371`), else the great-circle
+  // (haversine) miles between the two hub coords. The road file is loaded ONLY on
+  // the fuel-on path (no I/O when fuel is off ⇒ the off-mode stream stays
+  // byte-identical), and `legMilesFor` is only READ when `fuelOn`. Pure +
+  // deterministic: the static file is committed (no clock, no RNG, no network).
   const KM_TO_MILES = 0.621_371;
   const hubById = new Map<string, Hub>(hubs.map((h) => [h.hubId, h]));
+  const roadGeometry = fuelOn ? loadStaticRoadGeometry() : undefined;
   const legMilesFor = (fromHubId: string, toHubId: string): number => {
     const from = hubById.get(fromHubId);
     const to = hubById.get(toHubId);
     if (from === undefined || to === undefined) return 0;
+    // PREFER the ORS road distance (the SAME basis as the twin + projection).
+    const orsDistanceM = roadGeometry?.legs[routeId(fromHubId, toHubId)]?.distance_m;
+    if (orsDistanceM !== undefined) return (orsDistanceM / 1000) * KM_TO_MILES;
     return haversineKm(from, to) * KM_TO_MILES;
   };
 
