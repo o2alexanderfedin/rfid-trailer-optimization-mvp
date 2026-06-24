@@ -39,7 +39,17 @@ import {
   loadStaticRoadGeometry,
   routeId,
 } from "./network/routes.js";
-import { makeRng, type Rng } from "./rng.js";
+import { makeRng, makeRngFromState, type Rng } from "./rng.js";
+import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
+import {
+  isContinuation,
+  type SerializedHosClock,
+  type SerializedScheduled,
+  type SerializedWorldState,
+  type SimContinuation,
+  type SimStart,
+  type SimTask,
+} from "./continuation.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
 import { DEFAULT_TIMING_CONFIG, sampleLogNormal, type TimingConfig } from "./timing.js";
@@ -102,6 +112,22 @@ export interface SimulatedEvent {
   readonly event: DomainEvent;
   /** Domain time from the virtual clock (ISO-8601) — never the wall clock. */
   readonly occurredAt: string;
+}
+
+/**
+ * CONT-05 (P2): sort-wave / cut-off cadence config. When supplied on
+ * {@link SimulateOptions.sortWave}, freight is created in burst-quiet-burst
+ * windows (a "sort wave") rather than a steady trickle — observable on the live
+ * map as departure surges. The window is PURE modular arithmetic on the
+ * deterministic tick clock (no RNG salt), so it is fully reproducible.
+ */
+export interface SortWaveConfig {
+  /** Ticks at the START of each cycle during which packages ARE created (burst). */
+  readonly burstWindowTicks: number;
+  /** Ticks after the burst during which NO packages are created (quiet). */
+  readonly quietWindowTicks: number;
+  /** Packages created per batch tick while inside the burst window. */
+  readonly burstPackagesPerBatch: number;
 }
 
 /** Options for the pure generator. */
@@ -186,6 +212,47 @@ export interface SimulateOptions {
    * byte-identical fuel-on stream.
    */
   readonly fuel?: FuelConfig;
+  /**
+   * CONT-01: when `true`, the engine runs INDEFINITELY past `durationTicks` — the
+   * `durationTicks` ceiling is ignored and the package-batch / trailer-departure
+   * self-rescheduling loops keep firing forever. The loop terminates only when
+   * the queue drains AND/OR the injected {@link SimulateOptions.stop} predicate
+   * returns `true`. **DEFAULT FALSE / ABSENT — the determinism keystone:** when
+   * absent or `false`, every guard evaluates EXACTLY as the pre-v2.0 finite path,
+   * so the stream is BYTE-IDENTICAL to the existing goldens (DET-01).
+   *
+   * Pair this with {@link SimulateOptions.onEvent} for streaming delivery — an
+   * open-ended run accumulating into `out[]` would grow without bound (use the
+   * `simulate()` array surface only for the finite path).
+   */
+  readonly runUntilStopped?: boolean;
+  /**
+   * CONT-01: streaming emit callback for the open-ended driver path. When
+   * provided, each event is delivered ONE BY ONE to the callback instead of being
+   * accumulated in the internal `out[]` array — so an indefinite run stays
+   * memory-bounded. When ABSENT, `out[]` accumulation is used (the `simulate()`
+   * golden-test surface is unchanged). The events delivered are byte-identical in
+   * order/content to what `simulate()` would have collected.
+   */
+  readonly onEvent?: (event: SimulatedEvent) => void;
+  /**
+   * CONT-01: cooperative stop predicate, polled before each queue pop ONLY when
+   * {@link SimulateOptions.runUntilStopped} is `true`. Return `true` to terminate
+   * the loop cleanly at the next iteration. The injected driver (plan-04) flips
+   * its source so the open-ended run can be stopped on demand. Ignored entirely on
+   * the finite path (absent/false `runUntilStopped`), so it never affects goldens.
+   */
+  readonly stop?: () => boolean;
+  /**
+   * CONT-05 (P2): when present, freight departs in burst-quiet-burst windows
+   * rather than a steady trickle — observable on the live map as departure
+   * surges. **OFF BY DEFAULT (absent)** — the determinism keystone: when absent,
+   * the burst-gate is never entered and the package-batch schedule + RNG draws are
+   * EXACTLY the pre-CONT-05 behaviour, so every golden stays byte-identical
+   * (DET-01/DET-02). The cadence is pure modular arithmetic on the deterministic
+   * tick clock (no RNG salt) — fully reproducible per seed when enabled.
+   */
+  readonly sortWave?: SortWaveConfig;
 }
 
 /** Options for the store-driven run. */
@@ -196,10 +263,9 @@ export interface RunSimulationOptions extends SimulateOptions {
 
 // --- Simulation constants (declarative; the network is fixed for Phase 1) ----
 
-/** Domain ms per tick. 1 tick = 1 minute of simulated time. */
-const MS_PER_TICK = 60_000;
-/** The seeded domain epoch — the clock starts here; no wall-clock read. */
-const EPOCH_ISO = "2026-04-01T00:00:00.000Z";
+// Plan 19-08 Task D: `MS_PER_TICK` + `EPOCH_ISO` are the SINGLE source of truth
+// in `./epoch.js`; every consumer (engine clock, ws simDay/simMs, tests) imports
+// them so the literal can never drift across packages.
 
 /** Ticks between successive package-creation batches at the center hub. */
 const PACKAGE_INTERVAL_TICKS = 15;
@@ -232,22 +298,39 @@ const RELAY_SPARE_DRIVERS = 6;
 
 // --- Internal event-queue --------------------------------------------------
 
-/** A scheduled action: run at `fireTick`; `seq` is the deterministic tie-break. */
+/**
+ * A scheduled action: run at `fireTick`; `seq` is the deterministic tie-break.
+ *
+ * Plan 19-08: the action is now a `SimTask` DATA descriptor (not a closure), so
+ * the queue is fully serializable into a {@link SimContinuation}. A single
+ * `dispatch(task)` switch reconstructs the behaviour — same code, same order.
+ */
 interface Scheduled {
   readonly fireTick: number;
   readonly seq: number;
-  readonly run: () => void;
+  readonly task: SimTask;
 }
 
 /**
  * A deterministic priority queue. Actions are dequeued in `(fireTick, seq)`
  * order — `seq` (insertion order) guarantees a total, stable ordering so the
  * stream never depends on array/heap implementation details.
+ *
+ * Plan 19-08: it holds DATA tasks and can be (de)serialized for a resumable
+ * continuation. The sort comparator is unchanged, so the dispatch order — and
+ * thus the byte-identical stream — is preserved exactly.
  */
 class EventQueue {
-  private items: Scheduled[] = [];
-  private nextSeq = 0;
+  private items: Scheduled[];
+  private nextSeq: number;
   private dirty = false;
+
+  constructor(items: Scheduled[] = [], nextSeq = 0) {
+    this.items = items;
+    this.nextSeq = nextSeq;
+    // A restored queue may be out of order if it was captured mid-run; sort lazily.
+    this.dirty = items.length > 0;
+  }
 
   /** Allocate the next monotonic insertion sequence (the stable tie-break). */
   claimSeq(): number {
@@ -256,8 +339,8 @@ class EventQueue {
     return seq;
   }
 
-  push(fireTick: number, seq: number, run: () => void): void {
-    this.items.push({ fireTick, seq, run });
+  push(fireTick: number, seq: number, task: SimTask): void {
+    this.items.push({ fireTick, seq, task });
     this.dirty = true;
   }
 
@@ -272,19 +355,71 @@ class EventQueue {
     }
     return this.items.shift();
   }
+
+  /** The next insertion seq — captured into the continuation. */
+  peekNextSeq(): number {
+    return this.nextSeq;
+  }
+
+  /**
+   * Snapshot the pending items in deterministic `(fireTick, seq)` order — the
+   * serializable form carried in a {@link SimContinuation}. Sorting here makes the
+   * captured order stable regardless of the internal `dirty`/shift bookkeeping.
+   */
+  snapshot(): SerializedScheduled[] {
+    const sorted = [...this.items].sort((a, b) =>
+      a.fireTick !== b.fireTick ? a.fireTick - b.fireTick : a.seq - b.seq,
+    );
+    return sorted.map((s) => ({ fireTick: s.fireTick, seq: s.seq, task: s.task }));
+  }
 }
 
 // --- The generation core ----------------------------------------------------
 
+/** What {@link runToHorizon} returns: the chunk's events + the resume point. */
+export interface RunToHorizonResult {
+  /** The events emitted in this chunk, in deterministic order. */
+  readonly events: SimulatedEvent[];
+  /** The serializable continuation to resume from (state AFTER this chunk). */
+  readonly continuation: SimContinuation;
+}
+
 /**
- * Run the deterministic simulation and return the ordered event stream. This is
- * the SINGLE source of truth shared by `simulate` and `runSimulation`.
+ * THE continuation-driven generation core (Plan 19-08 Task A).
+ *
+ * Runs the deterministic event queue from `start` (a fresh `{ seed }` OR a
+ * previously-returned {@link SimContinuation}) up to and INCLUDING `horizonTick`,
+ * returning the chunk's `events` plus the {@link SimContinuation} to resume from.
+ * Driving a finite run all-at-once and driving it in chunks via the continuation
+ * produce a BYTE-IDENTICAL ordered stream (the continuation-equivalence keystone).
+ *
+ * Determinism contract (threat T-01-15 + the consult): ALL randomness comes from
+ * the seeded sub-streams (captured raw in the continuation), ALL time from the
+ * `VirtualClock` re-anchored at `continuation.nextTick` — NO `Date.now()`, NO
+ * unseeded `Math.random()`. The queue holds DATA tasks (never closures), so the
+ * continuation is plain serializable data.
  */
-function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid, overCarry, timing, hosEnabled, hosConfig, fuel } = opts;
-  if (!Number.isInteger(durationTicks) || durationTicks < 0) {
-    throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
+export function runToHorizon(
+  start: SimStart,
+  horizonTick: number,
+  opts: Omit<SimulateOptions, "seed" | "durationTicks">,
+): RunToHorizonResult {
+  if (!Number.isInteger(horizonTick) || horizonTick < 0) {
+    throw new RangeError(`horizonTick must be a non-negative integer, got ${horizonTick}`);
   }
+  const resuming = isContinuation(start);
+  // The seed comes from the start point itself — a fresh `{ seed }` OR the
+  // SELF-CONTAINED continuation (which carries `seed`). On resume every sub-stream
+  // is restored from raw state, so the seed is only metadata; on a fresh run it
+  // seeds the sub-streams via `seed ^ salt`.
+  const seed = start.seed;
+  const { rfid, overCarry, timing, hosEnabled, hosConfig, fuel } = opts;
+  // The finite ceiling for the queue loop. On a fresh run this IS `horizonTick`;
+  // on resume the loop simply continues from `nextTick` up to the new horizon.
+  const durationTicks = horizonTick;
+  // CONT-01 streaming surface is handled by the public wrappers; the core always
+  // collects into `out` and the caller decides whether to stream.
+  const onEventSink = opts.onEvent;
 
   // SIM-HOS-01: driver HOS is OPT-IN and DEFAULT FALSE. Absent/false ⇒ the
   // engine emits NO driver/HOS/load-unload events and NEVER draws `hosRng`, so
@@ -312,41 +447,64 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     typeof overCarry === "number" && Number.isFinite(overCarry) ? overCarry : 0;
   const overCarryEnabled = overCarryRate > 0;
 
-  const rng = makeRng(seed);
+  // Plan 19-08: each seeded sub-stream is either constructed fresh from
+  // `seed ^ salt` (a fresh run) or RESTORED from the continuation's raw state (a
+  // resumed chunk). `makeRng(seed)` == `makeRngFromState(mixSeed(seed))`, so a
+  // fresh run is byte-identical to the pre-19-08 behaviour; a restored run draws
+  // the EXACT remaining sequence (the continuation-equivalence keystone).
+  const restoredRng = resuming ? start.rng : undefined;
+  const rng = restoredRng
+    ? makeRngFromState(restoredRng.base)
+    : makeRng(seed);
   // SIM-03: RFID draws from a SEPARATE seeded substream (seed ^ a fixed salt) so
   // enabling RFID never perturbs the operational rng — the non-RFID event order
   // is byte-identical with or without the rfid option, while the RFID stream is
   // still fully reproducible per seed.
-  const rfidRng = makeRng((seed ^ RFID_RNG_SALT) >>> 0);
+  const rfidRng = restoredRng
+    ? makeRngFromState(restoredRng.rfid)
+    : makeRng((seed ^ RFID_RNG_SALT) >>> 0);
   // F-07: over-carry draws from its OWN seeded substream — a salt DISTINCT from
   // the RFID salt (0x5f1da7c3) so it never collides with / perturbs `rfidRng` or
   // `rng`. Same seed + same rate ⇒ byte-identical over-carry decisions.
-  const overCarryRng = makeRng((seed ^ OVER_CARRY_RNG_SALT) >>> 0);
+  const overCarryRng = restoredRng
+    ? makeRngFromState(restoredRng.overCarry)
+    : makeRng((seed ^ OVER_CARRY_RNG_SALT) >>> 0);
   // Timing (dwell/transit) draws from its OWN seeded substream — a salt DISTINCT
   // from the RFID (0x5f1da7c3) and over-carry (0x3ca71d5f) salts — so the
   // log-normal timing variance is fully reproducible per seed yet NEVER perturbs
   // the operational `rng`, `rfidRng`, or `overCarryRng` draws. The draws happen
   // in deterministic event-queue order, so the timestamps are byte-identical for
   // a fixed seed + timing config.
-  const timingRng = makeRng((seed ^ TIMING_RNG_SALT) >>> 0);
+  const timingRng = restoredRng
+    ? makeRngFromState(restoredRng.timing)
+    : makeRng((seed ^ TIMING_RNG_SALT) >>> 0);
   // SIM-HOS-01: the FIFTH substream. HOS draws use a salt DISTINCT from the RFID
   // (0x5f1da7c3), over-carry (0x3ca71d5f), and timing (0x00007717) salts (the
   // salt-collision test asserts this), so HOS variance is fully reproducible per
   // seed yet NEVER perturbs the other four streams. Constructing the generator is
   // side-effect-free (independent state); it is only DRAWN when `hosOn`, so the
   // HOS-off stream consumes ZERO `hosRng` values and stays byte-identical.
-  const hosRng = makeRng((seed ^ HOS_RNG_SALT) >>> 0);
+  const hosRng = restoredRng
+    ? makeRngFromState(restoredRng.hos)
+    : makeRng((seed ^ HOS_RNG_SALT) >>> 0);
   // SP2: the SIXTH substream. Created ONLY when fuel is on (the determinism
   // keystone — a fuel-off run never even constructs it). The salt is DISTINCT from
   // the five above (asserted by the salt-collision test) so any future refuel
   // jitter draw would be fully reproducible per seed yet never perturb the other
   // streams. The current tank model is deterministic (no draw), so `fuelRng` is
   // reserved; it is `undefined` when off so the off path is provably draw-free.
-  const fuelRng: Rng | undefined = fuelOn ? makeRng((seed ^ FUEL_RNG_SALT) >>> 0) : undefined;
+  const fuelRng: Rng | undefined = fuelOn
+    ? restoredRng && restoredRng.fuel !== undefined
+      ? makeRngFromState(restoredRng.fuel)
+      : makeRng((seed ^ FUEL_RNG_SALT) >>> 0)
+    : undefined;
   void fuelRng;
   // SP2: per-trailer odometer (miles since last refuel), init 0 at roster
   // seeding. Only mutated when `fuelOn`; an off run leaves it empty (no state).
-  const odometerByTrailer = new Map<string, number>();
+  // On resume it is restored from the continuation's world state.
+  const odometerByTrailer = new Map<string, number>(
+    resuming ? start.world.odometerByTrailer.map(([k, v]) => [k, v]) : [],
+  );
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
   // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
   // the real great-circle (haversine) distance between its two hubs at an 80 km/h
@@ -377,9 +535,24 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     const params = role === "center" ? timingConfig.dwellCenter : timingConfig.dwellSpoke;
     return Math.max(1, Math.round(sampleLogNormal(timingRng, params)));
   };
+  // Plan 19-08: the queue is restored from the captured DATA tasks on resume; a
+  // fresh run starts with an empty queue (byte-identical to the pre-19-08 path).
+  // The clock starts at the epoch in BOTH cases — it is NOT re-anchored, because
+  // each fired task does `clock.advance(fireTick - currentTick(clock))`, which
+  // sets the absolute virtual time to EXACTLY `fireTick` (a pure function of the
+  // task's `fireTick`, never wall-clock). Every captured task has
+  // `fireTick > prevHorizon`, so the advance is always non-negative on resume.
   const clock = new VirtualClock(EPOCH_ISO, MS_PER_TICK);
-  const queue = new EventQueue();
+  const queue = resuming
+    ? new EventQueue(
+        start.queue.map((s) => ({ fireTick: s.fireTick, seq: s.seq, task: s.task })),
+        start.nextSeq,
+      )
+    : new EventQueue();
   const out: SimulatedEvent[] = [];
+  // Monotonic GLOBAL emit sequence id — continues across chunks so the total
+  // order `(virtualTime, sequenceId)` is uninterrupted on resume.
+  let nextSequenceId = resuming ? start.nextSequenceId : 0;
 
   const hubs = USA_HUBS;
   const center = hubs[0]!;
@@ -453,12 +626,30 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   }
 
   // Monotonic id counters — stable ids make the stream reproducible.
-  let packageCounter = 0;
-  let tripCounter = 0;
+  // Monotonic id counters — restored from the continuation on resume so package /
+  // trip ids continue the same sequence (stable ids keep the stream reproducible).
+  let packageCounter = resuming ? start.world.packageCounter : 0;
+  let tripCounter = resuming ? start.world.tripCounter : 0;
 
-  /** Emit one event onto its stream at the current domain time. */
+  /**
+   * Emit one event onto its stream at the current domain time. CONT-01: when an
+   * `onEvent` callback is provided (the open-ended streaming path), the event is
+   * delivered one-by-one to the callback instead of being accumulated in `out[]`,
+   * so an indefinite run stays memory-bounded. Absent ⇒ `out[]` accumulation (the
+   * `simulate()` golden-test surface, byte-identical).
+   *
+   * Plan 19-08: every emit increments the global `nextSequenceId` (carried in the
+   * continuation) so the total order `(virtualTime, sequenceId)` is uninterrupted
+   * across chunk boundaries.
+   */
   const emit = (streamId: string, event: DomainEvent): void => {
-    out.push({ streamId, event, occurredAt: clock.nowIso() });
+    const item: SimulatedEvent = { streamId, event, occurredAt: clock.nowIso() };
+    nextSequenceId += 1;
+    if (onEventSink !== undefined) {
+      onEventSink(item);
+    } else {
+      out.push(item);
+    }
   };
 
   /**
@@ -501,23 +692,32 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // When the pool is momentarily exhausted the engine falls back to the Phase-11
   // park-while-resting behaviour (mid-leg break/rest via `applyDrivingLeg`).
 
+  // Plan 19-08: the HOS driver state is restored from the continuation on resume
+  // (a fresh run starts empty and seeds the pool at bootstrap below). Only ever
+  // populated when `hosOn`, so an HOS-off run carries empty maps.
   /** trailerId → the driver currently bound to it (mutated on a relay). */
-  const driverByTrailer = new Map<string, string>();
+  const driverByTrailer = new Map<string, string>(
+    resuming ? start.world.driverByTrailer.map(([k, v]) => [k, v]) : [],
+  );
   /** driverId → its live HOS clock (advanced by `applyDrivingLeg` / a reset). */
-  const clockByDriver = new Map<string, HosClock>();
+  const clockByDriver = new Map<string, HosClock>(
+    resuming ? start.world.clockByDriver.map(([k, v]) => [k, { ...v }]) : [],
+  );
   /**
    * driverId → the epoch-MINUTE the driver becomes available again. A driver that
    * is in-flight or resting is `> now`; a free driver is `<= now`. The relay pool
    * scan reads this (never wall-clock) so re-entry after a 10h reset is purely a
    * function of the deterministic virtual clock + the driver's accrued state.
    */
-  const availableAtMinByDriver = new Map<string, number>();
+  const availableAtMinByDriver = new Map<string, number>(
+    resuming ? start.world.availableAtMinByDriver.map(([k, v]) => [k, v]) : [],
+  );
   /**
    * driverIds that are NOT bound to a trailer's primary slot — the SPARE pool the
    * relay scan draws fresh drivers from. In a stable, seed-independent order
    * (registration order) so the relay selection is byte-deterministic.
    */
-  const sparePool: string[] = [];
+  const sparePool: string[] = resuming ? [...start.world.sparePool] : [];
 
   /** A fresh, post-10h-reset HOS clock anchored at the current virtual instant. */
   const freshHosClock = (nowIso: string): HosClock => ({
@@ -544,7 +744,11 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
         driverId,
         dutyStatus,
         reason,
-        clock: snapshot,
+        // Plan 19-08 (determinism fix): emit the clock in the SINGLE canonical key
+        // order so the bytes are independent of which HOS builder produced the
+        // source clock — making all-at-once and chunked-via-continuation runs
+        // byte-identical even when a clock survives a continuation boundary.
+        clock: canonicalHosClock(snapshot),
         occurredAt: clock.nowIso(),
       },
     };
@@ -621,22 +825,28 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     emit(`trailer-${trailerId}`, event);
   };
 
+  // Plan 19-08: the bootstrap (hub/route registration + driver-pool seeding +
+  // initial schedule) runs ONLY on a FRESH run. A resumed chunk restores all of
+  // that state from the continuation, so re-running the bootstrap would
+  // double-emit and corrupt the stream — it is gated on `!resuming` throughout.
   // --- Bootstrap: register every hub then every route, all at tick 0. -------
-  for (const hub of hubs) {
-    emit(`hub-${hub.hubId}`, hubRegisteredEvent(hub));
-  }
-  for (const route of routes) {
-    const event: DomainEvent = {
-      type: "RouteRegistered",
-      schemaVersion: 1,
-      payload: {
-        routeId: route.routeId,
-        fromHubId: route.fromHubId,
-        toHubId: route.toHubId,
-        geometry: route.geometry,
-      },
-    };
-    emit(`route-${route.routeId}`, event);
+  if (!resuming) {
+    for (const hub of hubs) {
+      emit(`hub-${hub.hubId}`, hubRegisteredEvent(hub));
+    }
+    for (const route of routes) {
+      const event: DomainEvent = {
+        type: "RouteRegistered",
+        schemaVersion: 1,
+        payload: {
+          routeId: route.routeId,
+          fromHubId: route.fromHubId,
+          toHubId: route.toHubId,
+          geometry: route.geometry,
+        },
+      };
+      emit(`route-${route.routeId}`, event);
+    }
   }
 
   // --- SIM-HOS-02 + DRV-04: seed the center driver POOL at bootstrap (tick 0).
@@ -648,7 +858,7 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // on, so the off-mode stream is byte-unchanged. Every registration precedes the
   // first `DriverAssignedToTrip` (first dispatch is at tick 1). The pool size is a
   // pure function of the network (no RNG) ⇒ the roster is byte-deterministic.
-  if (hosOn) {
+  if (hosOn && !resuming) {
     const nowIso = clock.nowIso();
     const nowMin = isoToEpochMinutes(nowIso);
     const registerDriver = (driverId: string): void => {
@@ -681,12 +891,38 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // --- Package generation: batches created at the center over time. ---------
   // Each package is created, scanned inbound at the center, and queued to ride
   // the next trailer toward its destination spoke. The queue per spoke is a
-  // FIFO manifest the spoke's trailer drains on departure.
+  // FIFO manifest the spoke's trailer drains on departure. Plan 19-08: restored
+  // from the continuation on resume (a fresh run starts every spoke empty).
   const pendingBySpoke = new Map<string, string[]>();
-  for (const s of spokes) pendingBySpoke.set(s.hubId, []);
+  if (resuming) {
+    for (const [hubId, ids] of start.world.pendingBySpoke) {
+      pendingBySpoke.set(hubId, [...ids]);
+    }
+  }
+  for (const s of spokes) if (!pendingBySpoke.has(s.hubId)) pendingBySpoke.set(s.hubId, []);
 
   const createPackageBatch = (tick: number): void => {
-    const count = 1 + rng.int(maxPackagesPerBatch); // 1..(MAX × fleetPerSpoke)
+    // CONT-05 (P2): sort-wave burst-quiet gate. ENTERED ONLY when `sortWave` is
+    // present — so an absent config leaves the original code path (and RNG draw)
+    // EXACTLY as before (byte-identical goldens, DET-01/DET-02). When present:
+    // during the QUIET window create nothing (no draw, no events); during the
+    // BURST window create exactly `burstPackagesPerBatch`. The window is pure
+    // modular arithmetic on the deterministic tick (no RNG salt).
+    let count: number;
+    if (opts.sortWave !== undefined) {
+      const period =
+        opts.sortWave.burstWindowTicks + opts.sortWave.quietWindowTicks;
+      const cycle = period > 0 ? tick % period : 0;
+      if (cycle >= opts.sortWave.burstWindowTicks) {
+        // Quiet window — emit nothing, but keep self-rescheduling (below).
+        const nextTick = tick + PACKAGE_INTERVAL_TICKS;
+        scheduleNext(nextTick, { kind: "createPackageBatch", tick: nextTick });
+        return;
+      }
+      count = opts.sortWave.burstPackagesPerBatch;
+    } else {
+      count = 1 + rng.int(maxPackagesPerBatch); // 1..(MAX × fleetPerSpoke)
+    }
     for (let i = 0; i < count; i += 1) {
       packageCounter += 1;
       const packageId = `P${String(packageCounter).padStart(5, "0")}`;
@@ -720,7 +956,11 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       pendingBySpoke.get(dest.hubId)!.push(packageId);
     }
     const nextTick = tick + PACKAGE_INTERVAL_TICKS;
-    if (nextTick <= durationTicks) schedule(nextTick, () => createPackageBatch(nextTick));
+    // CONT-02 / Plan 19-08: keep self-scheduling so freight generation sustains
+    // indefinitely. `scheduleNext` decides whether the task is RETAINED (resumable
+    // path — captured into the continuation) or DROPPED past `durationTicks` (the
+    // finite all-at-once path — byte-identical goldens, DET-01).
+    scheduleNext(nextTick, { kind: "createPackageBatch", tick: nextTick });
   };
 
   /**
@@ -1020,17 +1260,24 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     // on `fuelOn` ⇒ ZERO extra events when fuel is off (byte-identical golden).
     if (fuelOn && (legRests.length > 0 || didRefuel)) {
       const midLegTick = departTick + Math.floor(transitTicks / 2);
-      schedule(midLegTick, () => {
-        for (const rest of legRests) {
-          emitTruckRested(trailerId, tripId, rest.reason, rest.minutes);
-        }
-        if (didRefuel) {
-          emitTruckRefueled(trailerId, tripId, refuelOdometer);
-        }
+      schedule(midLegTick, {
+        kind: "midLegStops",
+        trailerId,
+        tripId,
+        legRests: legRests.map((r) => ({ reason: r.reason, minutes: r.minutes })),
+        didRefuel,
+        refuelOdometer,
       });
     }
 
-    schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
+    schedule(arriveTick, {
+      kind: "arriveTrailer",
+      trailerId,
+      spokeHubId: spoke.hubId,
+      tripId,
+      carried: loaded,
+      arriveTick,
+    });
   };
 
   const arriveTrailer = (
@@ -1145,9 +1392,12 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       // leg's geography-derived params.
       const returnArriveTick = arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
       const overCarriedId = heldBack;
-      schedule(returnArriveTick, () =>
-        arriveOverCarriedAtCenter(trailerId, overCarriedId, returnTripId),
-      );
+      schedule(returnArriveTick, {
+        kind: "arriveOverCarriedAtCenter",
+        trailerId,
+        packageId: overCarriedId,
+        tripId: returnTripId,
+      });
     }
 
     // TIME-02: model the trailer's full turnaround as TWO role-keyed dwells, each
@@ -1163,9 +1413,16 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     const spokeDwell = drawDwellTicks("spoke");
     const centerDwell = drawDwellTicks("center");
     const nextDepart = arriveTick + spokeDwell + centerDwell;
-    if (nextDepart <= durationTicks) {
-      schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
-    }
+    // CONT-02 / Plan 19-08: keep re-dispatching so the fleet cycles indefinitely.
+    // `scheduleNext` RETAINS the task on the resumable path (captured into the
+    // continuation) and DROPS it past `durationTicks` on the finite all-at-once
+    // path (byte-identical goldens, DET-01).
+    scheduleNext(nextDepart, {
+      kind: "departTrailer",
+      trailerId,
+      spokeHubId: spoke.hubId,
+      departTick: nextDepart,
+    });
   };
 
   /**
@@ -1210,31 +1467,179 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   };
 
   /** Schedule an action at `fireTick` with a stable insertion-order tie-break. */
-  function schedule(fireTick: number, run: () => void): void {
-    queue.push(fireTick, queue.claimSeq(), run);
+  function schedule(fireTick: number, task: SimTask): void {
+    queue.push(fireTick, queue.claimSeq(), task);
   }
 
-  // --- Seed the initial schedule --------------------------------------------
+  /**
+   * Self-rescheduling helper for the unbounded generators (package batches +
+   * trailer re-dispatch). Plan 19-08: it ALWAYS schedules the next task so the
+   * work is RETAINED in the queue and captured into the continuation — the
+   * resumable core's drain loop is the SOLE horizon ceiling. This is byte-identical
+   * to the pre-19-08 finite path because a task scheduled BEYOND `durationTicks`
+   * has a strictly-greater `fireTick`, so the drain loop never pops it (it can
+   * never tie with an in-horizon task), and scheduling is pure (no RNG, no emit).
+   * The legacy `runUntilStopped` open-ended streaming path keeps polling `stop`.
+   */
+  function scheduleNext(fireTick: number, task: SimTask): void {
+    schedule(fireTick, task);
+  }
+
+  /** Dispatch one DATA task — the single switch that reconstructs every action. */
+  function dispatch(task: SimTask): void {
+    switch (task.kind) {
+      case "createPackageBatch":
+        createPackageBatch(task.tick);
+        return;
+      case "departTrailer":
+        departTrailer(task.trailerId, hubById.get(task.spokeHubId)!, task.departTick);
+        return;
+      case "arriveTrailer":
+        arriveTrailer(
+          task.trailerId,
+          hubById.get(task.spokeHubId)!,
+          task.tripId,
+          task.carried,
+          task.arriveTick,
+        );
+        return;
+      case "midLegStops":
+        for (const rest of task.legRests) {
+          emitTruckRested(task.trailerId, task.tripId, rest.reason, rest.minutes);
+        }
+        if (task.didRefuel) {
+          emitTruckRefueled(task.trailerId, task.tripId, task.refuelOdometer);
+        }
+        return;
+      case "arriveOverCarriedAtCenter":
+        arriveOverCarriedAtCenter(task.trailerId, task.packageId, task.tripId);
+        return;
+    }
+  }
+
+  // --- Seed the initial schedule (FRESH run only) ---------------------------
   // First package batch at tick 0; one trailer per spoke departs at tick 1 so
-  // the first batch is available to load (deterministic, fixed offsets).
-  schedule(0, () => createPackageBatch(0));
-  for (const entry of trailerRoster) {
-    schedule(entry.departTick, () =>
-      departTrailer(entry.trailerId, entry.spoke, entry.departTick),
-    );
+  // the first batch is available to load (deterministic, fixed offsets). On a
+  // RESUME the queue is restored from the continuation, so this is skipped.
+  if (!resuming) {
+    schedule(0, { kind: "createPackageBatch", tick: 0 });
+    for (const entry of trailerRoster) {
+      schedule(entry.departTick, {
+        kind: "departTrailer",
+        trailerId: entry.trailerId,
+        spokeHubId: entry.spoke.hubId,
+        departTick: entry.departTick,
+      });
+    }
   }
 
-  // --- Drive the queue to completion ----------------------------------------
+  // --- Drive the queue up to the horizon ------------------------------------
+  // Plan 19-08: the resumable core drains tasks with `fireTick <= horizonTick`
+  // and STOPS at the horizon, leaving later tasks in the queue for the next chunk
+  // (captured into the continuation). The legacy `runUntilStopped` streaming path
+  // (open-ended.unit.test) ignores the horizon and polls the cooperative `stop()`
+  // predicate instead. Either way the emitted stream up to the horizon is
+  // byte-identical to the all-at-once `simulate()` (the keystone).
+  const openEnded = opts.runUntilStopped === true;
+  const shouldStop = opts.stop;
   for (;;) {
+    if (openEnded && shouldStop !== undefined && shouldStop()) break;
     const action = queue.pop();
     if (action === undefined) break;
-    if (action.fireTick > durationTicks) break;
+    if (!openEnded && action.fireTick > durationTicks) {
+      // Past the horizon — put it back so the continuation captures it intact.
+      queue.push(action.fireTick, action.seq, action.task);
+      break;
+    }
     clock.advance(action.fireTick - currentTick(clock));
-    action.run();
+    dispatch(action.task);
   }
 
-  return out;
+  // --- Capture the continuation (the resume point AFTER this chunk) ---------
+  const continuation = captureContinuation();
+
+  return { events: out, continuation };
+
+  /** Build the serializable continuation from the current engine state. */
+  function captureContinuation(): SimContinuation {
+    const world: SerializedWorldState = {
+      pendingBySpoke: [...pendingBySpoke.entries()].map(
+        ([k, v]) => [k, [...v]] as const,
+      ),
+      odometerByTrailer: [...odometerByTrailer.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
+      driverByTrailer: [...driverByTrailer.entries()].map(([k, v]) => [k, v] as const),
+      clockByDriver: [...clockByDriver.entries()].map(
+        ([k, v]) => [k, serializeHosClock(v)] as const,
+      ),
+      availableAtMinByDriver: [...availableAtMinByDriver.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
+      sparePool: [...sparePool],
+      packageCounter,
+      tripCounter,
+    };
+    return {
+      version: 1,
+      seed,
+      // The next virtual tick to resume at: one past the horizon we drained to
+      // (the clock is currently at the last-fired tick ≤ horizon; the next chunk
+      // re-anchors at this value). Use the horizon+1 so resume math is uniform.
+      nextTick: durationTicks + 1,
+      rng: {
+        base: rng.getState(),
+        rfid: rfidRng.getState(),
+        overCarry: overCarryRng.getState(),
+        timing: timingRng.getState(),
+        hos: hosRng.getState(),
+        fuel: fuelRng?.getState(),
+      },
+      queue: queue.snapshot(),
+      nextSeq: queue.peekNextSeq(),
+      world,
+      nextSequenceId,
+    };
+  }
 }
+
+/**
+ * Plan 19-08 (determinism fix) — the SINGLE canonical HOS-clock key order.
+ *
+ * The domain HOS builders (`freshHosClock`, `applyDrivingLeg`'s mid-leg reset at
+ * `hos.ts:250`, the various `{ ...current, … }` spread-updates) each produce a
+ * `HosClock` with a DIFFERENT object key order — same VALUES, different insertion
+ * order. The all-at-once path emits whichever order the builder produced; a
+ * chunked run that crosses a continuation boundary rehydrates the clock via
+ * {@link serializeHosClock} (this fixed order) and re-emits it — so the SAME clock
+ * serialized to DIFFERENT bytes, breaking byte-identity (the
+ * continuation-equivalence keystone hashes key-order-sensitive `JSON.stringify`).
+ *
+ * The fix: normalize EVERY emitted `DriverDutyStateChanged.payload.clock` (and the
+ * serialized continuation form) through this ONE canonical key order, so both
+ * paths emit byte-identical events. Values are untouched — only key order is
+ * fixed. HOS is OFF by default, so the HOS-off goldens (seed-42 10k, seed-1234)
+ * contain NO HosClock and are unaffected.
+ */
+function canonicalHosClock(c: HosClock): HosClock {
+  return {
+    driveTodayMin: c.driveTodayMin,
+    dutyWindowStartAt: c.dutyWindowStartAt,
+    sinceLastBreakMin: c.sinceLastBreakMin,
+    weeklyOnDutyMin: c.weeklyOnDutyMin,
+    comeOnDutyAt: c.comeOnDutyAt,
+    sleeperBerthLongMin: c.sleeperBerthLongMin,
+    sleeperBerthShortMin: c.sleeperBerthShortMin,
+  };
+}
+
+/** Serialize an HOS clock into the continuation's plain-data form (canonical order). */
+function serializeHosClock(c: HosClock): SerializedHosClock {
+  // Shares the SINGLE canonical key order with the emit site (DRY): the
+  // SerializedHosClock shape is exactly the canonical HosClock field set.
+  return canonicalHosClock(c);
+}
+
 
 /** Current tick of the clock relative to the epoch (integer ticks elapsed). */
 function currentTick(clock: VirtualClock): number {
@@ -1247,9 +1652,23 @@ function currentTick(clock: VirtualClock): number {
 /**
  * Pure generator: the full deterministic event stream for `opts`, with no
  * database and no ambient state. Same seed -> byte-identical array.
+ *
+ * Plan 19-08: REIMPLEMENTED on top of the resumable {@link runToHorizon} core —
+ * a fresh run to the `durationTicks` horizon, returning the collected events. The
+ * result is BYTE-IDENTICAL to the pre-19-08 finite path (the seed-1234 + seed-42
+ * goldens are unchanged; the continuation-equivalence test proves the chunked
+ * path matches this all-at-once stream exactly). When `runUntilStopped` +
+ * `onEvent` are supplied (the legacy streaming surface) events are delivered to
+ * the callback and the returned array is empty — unchanged behaviour.
  */
 export function simulate(opts: SimulateOptions): SimulatedEvent[] {
-  return generate(opts);
+  if (!Number.isInteger(opts.durationTicks) || opts.durationTicks < 0) {
+    throw new RangeError(
+      `durationTicks must be a non-negative integer, got ${opts.durationTicks}`,
+    );
+  }
+  const { events } = runToHorizon({ seed: opts.seed }, opts.durationTicks, opts);
+  return events;
 }
 
 /**
@@ -1259,7 +1678,7 @@ export function simulate(opts: SimulateOptions): SimulatedEvent[] {
  * version ordering is preserved.
  */
 export async function runSimulation(opts: RunSimulationOptions): Promise<void> {
-  const stream = generate(opts);
+  const stream = simulate(opts);
   for (const item of stream) {
     await opts.sink(item);
   }

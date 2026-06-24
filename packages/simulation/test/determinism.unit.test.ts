@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateEvent } from "@mm/domain";
 import { simulate } from "../src/engine.js";
@@ -100,5 +101,108 @@ describe("deterministic event stream (SIM-02)", () => {
     for (const { occurredAt } of simulate(OPTS)) {
       expect(occurredAt).toBe(new Date(occurredAt).toISOString());
     }
+  });
+});
+
+/**
+ * DET-02 — the LONG-RUN determinism golden.
+ *
+ * A 10,000-tick seeded run (seed 42) must hash to a committed SHA-256 constant —
+ * a stronger guarantee than the same-run reproducibility above: it asserts the
+ * stream is byte-stable across builds (and, where CI is multi-arch, across
+ * architectures). The committed hash is the TRUE output of
+ * `simulate({ seed: 42, durationTicks: 10000 })`.
+ *
+ * Cross-architecture note (RESEARCH VQ#9 / Pitfall 3): `sampleLogNormal` uses
+ * `Math.exp`/`Math.log`, which are implementation-defined and could diverge by
+ * 1 ULP after thousands of iterations. The hash below was captured on x86_64
+ * (darwin). If a multi-arch CI run produces a different hash, the contingency is
+ * to replace the log-normal sampler with an integer lookup table (do NOT do this
+ * unless the hash actually fails on CI).
+ */
+// Captured from simulate({ seed: 42, durationTicks: 10000 }) on x86_64 (darwin),
+// 6172 events. This is the TRUE hash of the long-run stream (plan-03 GREEN).
+const LONG_RUN_GOLDEN_SHA256 =
+  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
+
+describe("10k-tick determinism golden (DET-02)", () => {
+  it("simulate({ seed: 42, durationTicks: 10000 }) produces a committed SHA-256 hash", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(LONG_RUN_GOLDEN_SHA256);
+  });
+
+  // Plan 19-08 Task D (folded from p19-r2): in-process reproducibility — two
+  // back-to-back 10k runs in the SAME process MUST hash identically. This would
+  // catch any phantom module-global / cache that leaks between runs (the engine
+  // now routes through the resumable continuation core, so this guards that the
+  // core holds NO process-level state).
+  it("the 10k-tick run is reproducible within a process (same hash twice)", () => {
+    const a = createHash("sha256")
+      .update(JSON.stringify(simulate({ seed: 42, durationTicks: 10000 })))
+      .digest("hex");
+    const b = createHash("sha256")
+      .update(JSON.stringify(simulate({ seed: 42, durationTicks: 10000 })))
+      .digest("hex");
+    expect(b).toBe(a);
+    expect(a).toBe(LONG_RUN_GOLDEN_SHA256);
+  });
+});
+
+/**
+ * Plan 19-08 Task D — explicit same-tick TIE-BREAK TUPLE assertion (folded from
+ * p19-r2). The consult requires a deterministic same-timestamp order via a stable
+ * secondary key. The engine orders the EventQueue by `(fireTick, insertionSeq)`,
+ * so events sharing an `occurredAt` are emitted in a stable, reproducible order.
+ * We assert the FULL ordered `(occurredAt | type | streamId)` tuple sequence is
+ * byte-identical across two runs — a direct witness that the tie-break is total
+ * and stable (never Map/Set iteration or async order).
+ */
+describe("same-tick tie-break tuple is deterministic (Task D)", () => {
+  const TIE_OPTS = { seed: 1234, durationTicks: 4000 } as const;
+
+  function tupleSeq(stream: ReturnType<typeof simulate>): string[] {
+    return stream.map((e) => `${e.occurredAt}|${e.event.type}|${e.streamId}`);
+  }
+
+  it("the ordered (occurredAt|type|streamId) tuple sequence is byte-identical across runs", () => {
+    const a = tupleSeq(simulate(TIE_OPTS));
+    const b = tupleSeq(simulate({ ...TIE_OPTS }));
+    expect(b).toEqual(a);
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+
+  it("there genuinely ARE multiple events sharing a tick (the tie-break matters)", () => {
+    const stream = simulate(TIE_OPTS);
+    // Group by occurredAt; at least one instant carries > 1 event (the bootstrap
+    // fires all HubRegistered + RouteRegistered at the epoch instant).
+    const byInstant = new Map<string, number>();
+    for (const e of stream) byInstant.set(e.occurredAt, (byInstant.get(e.occurredAt) ?? 0) + 1);
+    const maxPerInstant = Math.max(...byInstant.values());
+    expect(maxPerInstant).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * DET-01 — the v2.0 flags-off regression gate.
+ *
+ * With NO v2.0 flags set, the same-seed/same-ticks run must stay byte-identical.
+ * This is trivially true today and MUST remain true after plan-02 adds
+ * `runUntilStopped`/`onEvent` — proving those opt-in flags never perturb the
+ * finite path when absent or explicitly `false`.
+ */
+describe("DET-01 flags-off gate (v2.0 regression)", () => {
+  const FLAGS_OFF_OPTS = { seed: 42, durationTicks: 500 } as const;
+
+  it("no flags — same-seed run is byte-identical", () => {
+    const a = simulate(FLAGS_OFF_OPTS);
+    const b = simulate({ ...FLAGS_OFF_OPTS });
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+
+  it("explicit runUntilStopped: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({ ...FLAGS_OFF_OPTS, runUntilStopped: false });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
 });

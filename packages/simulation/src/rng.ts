@@ -22,6 +22,14 @@ export interface Rng {
   int: (maxExclusive: number) => number;
   /** Pick a uniformly-random element of a non-empty array. */
   pick: <T>(items: readonly T[]) => T;
+  /**
+   * Plan 19-08 (CONT-04): the RAW internal `uint32` state — a single serializable
+   * number that fully captures the generator's position. Carried in the
+   * `SimContinuation` so a resumed run draws the EXACT remaining sequence
+   * (byte-identity keystone). Capturing/restoring `getState()` is a pure read; it
+   * does NOT advance the generator.
+   */
+  getState: () => number;
 }
 
 const UINT32 = 0x1_0000_0000; // 2^32
@@ -39,8 +47,22 @@ function mixSeed(seed: number): number {
  * derived from it so ALL randomness flows through a single seeded source.
  */
 export function makeRng(seed: number): Rng {
-  // 32-bit integer state; arrow functions close over `state` (no `this`).
-  let state = mixSeed(seed);
+  return makeRngFromState(mixSeed(seed));
+}
+
+/**
+ * Plan 19-08 (CONT-04): construct an RNG positioned at a previously-captured raw
+ * `uint32` state (from {@link Rng.getState}). The returned generator produces the
+ * EXACT sequence the original would have produced from that point — so a
+ * `SimContinuation` can resume a sub-stream byte-identically. `makeRng(seed)` is
+ * exactly `makeRngFromState(mixSeed(seed))`, so seeding is unchanged (the goldens
+ * are byte-stable).
+ */
+export function makeRngFromState(rawState: number): Rng {
+  // 32-bit integer state; arrow functions close over `state` (no `this`). The
+  // state is normalized to a uint32 so a restored value behaves identically to a
+  // freshly-mixed seed.
+  let state = rawState >>> 0;
 
   const next = (): number => {
     state = (state + 0x6d_2b_79_f5) >>> 0;
@@ -64,5 +86,8 @@ export function makeRng(seed: number): Rng {
     return items[int(items.length)] as T;
   };
 
-  return { next, int, pick };
+  // The raw state is read directly (a pure read — does NOT advance the stream).
+  const getState = (): number => state;
+
+  return { next, int, pick, getState };
 }

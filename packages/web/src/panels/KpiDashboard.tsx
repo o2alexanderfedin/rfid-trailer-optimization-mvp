@@ -189,6 +189,11 @@ const ANIMATE_MS = 700;
 export function KpiDashboard(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<KpiSnapshot>(ZERO_SNAPSHOT);
   const [animating, setAnimating] = useState<ReadonlySet<string>>(new Set<string>());
+  // CONT-03: the sim-day counter from the ws envelope (virtual clock, never wall
+  // clock). Starts at 0 before the first envelope; only re-renders when it
+  // changes (prev kept in a ref) so a steady multi-period run is cheap to display.
+  const [simDay, setSimDay] = useState<number>(0);
+  const simDayRef = useRef<number>(0);
   const prevRef = useRef<KpiSnapshot>(ZERO_SNAPSHOT);
   const timerRefs = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -267,6 +272,12 @@ export function KpiDashboard(): React.JSX.Element {
 
   const onEnvelope = useCallback(
     (envelope: WsEnvelope): void => {
+      // CONT-03: surface the sim-day counter (envelope-level, every envelope).
+      // Only setState when it actually changes (skip per-tick re-renders).
+      if (envelope.simDay !== simDayRef.current) {
+        simDayRef.current = envelope.simDay;
+        setSimDay(envelope.simDay);
+      }
       if (!shouldRefetchKpis(envelope)) return;
       // Coalesce overlapping refetches: abort any in-flight request first.
       refetchAcRef.current?.abort();
@@ -297,6 +308,10 @@ export function KpiDashboard(): React.JSX.Element {
 
   return (
     <div className="kpi-dashboard" data-testid="kpi-dashboard">
+      {/* CONT-03: continuous-operation sim-day counter (virtual clock). */}
+      <div className="kpi-dashboard__sim-day" data-testid="sim-day-counter">
+        Sim Day {simDay}
+      </div>
       <div className="kpi-dashboard__grid">
         {cards.map((card) => {
           const value = snapshot[card.field];

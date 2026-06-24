@@ -70,6 +70,7 @@ function makeSnapshotEnvelope(seq: number, simMs = 0): WsEnvelope {
     type: "snapshot",
     seq,
     simMs,
+    simDay: 0,
     speed: DEFAULT_SPEED,
     payload: makeSnapshotPayload(),
   };
@@ -81,6 +82,7 @@ function makeTickEnvelope(seq: number, simMs = 0): WsEnvelope {
     type: "tick",
     seq,
     simMs,
+    simDay: 0,
     speed: DEFAULT_SPEED,
     payload: {},
   };

@@ -284,6 +284,7 @@ describe("MapView (browser behaviour)", () => {
       type: "tick",
       seq: 3,
       simMs: 11_000,
+      simDay: 0,
       speed: WS_SNAPSHOT.speed,
       payload: { trailersGone: ["T-100"] },
     };
@@ -322,6 +323,7 @@ describe("MapView (browser behaviour)", () => {
       type: "snapshot",
       seq: 1,
       simMs: 18_000,
+      simDay: 0,
       speed: { multiplier: 0, tickIntervalMs: 500, simSpeed: 0, paused: true },
       payload: {
         trailers: [
@@ -467,6 +469,7 @@ describe("MapView (browser behaviour)", () => {
       type: "snapshot",
       seq: 1,
       simMs: 10_000,
+      simDay: 0,
       speed: WS_SNAPSHOT.speed,
       payload: {
         trailers: [],

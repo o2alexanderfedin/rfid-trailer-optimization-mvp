@@ -90,6 +90,7 @@ describe("paced-loop NO-FREEZE soak (64x, fleetPerSpoke=3)", () => {
           type: "tick",
           seq: broadcasts.length,
           simMs,
+          simDay: 0,
           speed: { multiplier: 64, tickIntervalMs: 500 / 64, simSpeed: 7680, paused: false },
           payload: {},
         });

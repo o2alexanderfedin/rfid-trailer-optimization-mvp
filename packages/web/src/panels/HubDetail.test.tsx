@@ -98,6 +98,7 @@ function snapshotEnv(simMs: number, open: readonly ExceptionItem[] = []): WsEnve
     type: "snapshot",
     seq: 1,
     simMs,
+    simDay: 0,
     speed: SPEED_PAUSED,
     payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: open },
   };
@@ -333,6 +334,7 @@ describe("HubDetail live dwell ticking", () => {
         type: "snapshot",
         seq: 1,
         simMs: 60_000,
+        simDay: 0,
         speed: { multiplier: 1, tickIntervalMs: 500, simSpeed: 120, paused: false },
         payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: [] },
       }),

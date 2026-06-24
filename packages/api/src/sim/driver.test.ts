@@ -254,6 +254,7 @@ function recordingBroadcast(sink: number[]): Broadcast {
       type: "tick",
       seq: sink.length,
       simMs,
+      simDay: 0,
       speed: { multiplier: 1, tickIntervalMs: 0, simSpeed: 1, paused: false },
       payload: {},
     });

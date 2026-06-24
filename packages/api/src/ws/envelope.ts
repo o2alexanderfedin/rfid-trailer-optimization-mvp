@@ -214,10 +214,15 @@ export interface TickPayload {
  * `speed` is an envelope-level field (beside `simMs`, NOT inside `payload`), so
  * the client can drive its local tween clock at the server's effective rate and
  * `diffTick` (which only operates on payloads) is untouched.
+ *
+ * CONT-03: `simDay` is likewise an envelope-level field (beside `simMs`) — the
+ * sim-day counter derived from the deterministic virtual clock (`simMs`), NOT the
+ * wall clock — so the operator UI can show continuous multi-period operation. It
+ * bypasses `diffTick` (always sent), the same convention as `speed`.
  */
 export type WsEnvelope =
-  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly speed: SimSpeedState; readonly payload: SnapshotPayload }
-  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly speed: SimSpeedState; readonly payload: TickPayload };
+  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly simDay: number; readonly speed: SimSpeedState; readonly payload: SnapshotPayload }
+  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly simDay: number; readonly speed: SimSpeedState; readonly payload: TickPayload };
 
 // ---------------------------------------------------------------------------
 // diffTick: pure delta builder (data-in / data-out, no I/O, unit-testable)

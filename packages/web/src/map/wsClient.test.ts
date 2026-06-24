@@ -82,9 +82,9 @@ function makeEnvelope(
   simMs = 0,
 ): WsEnvelope {
   if (type === "snapshot") {
-    return { v: 1, type, seq, simMs, speed: DEFAULT_SPEED, payload: payload as SnapshotPayload };
+    return { v: 1, type, seq, simMs, simDay: 0, speed: DEFAULT_SPEED, payload: payload as SnapshotPayload };
   }
-  return { v: 1, type, seq, simMs, speed: DEFAULT_SPEED, payload };
+  return { v: 1, type, seq, simMs, simDay: 0, speed: DEFAULT_SPEED, payload };
 }
 
 const TRAILER_A: TrailerKeyframe = {

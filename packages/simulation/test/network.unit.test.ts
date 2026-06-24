@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { hubSchema, routeSchema } from "@mm/domain";
-import { buildRoutes, greatCircle } from "../src/network/routes.js";
+import { buildRoutes, greatCircle, routeId } from "../src/network/routes.js";
 import { USA_HUBS } from "../src/network/hubs.js";
 import { makeRng } from "../src/rng.js";
 import { VirtualClock } from "../src/clock.js";
+import { simulate } from "../src/engine.js";
 
 /**
  * SIM-01 + the deterministic primitives (seeded RNG + virtual clock) the engine
@@ -110,6 +111,55 @@ describe("hub-and-spoke routes (SIM-01)", () => {
 
   it("is deterministic — buildRoutes yields identical routes each call", () => {
     expect(buildRoutes(USA_HUBS)).toEqual(buildRoutes(USA_HUBS));
+  });
+});
+
+/**
+ * VQ#5 verification (Phase 19) — bidirectional route registration at bootstrap.
+ *
+ * `buildRoutes()` already emits BOTH directions (center→spoke AND spoke→center)
+ * for every spoke — a Phase-21 prerequisite (no freight flows spoke→center yet,
+ * the routes just exist). This is verification-only: the engine bootstrap emits
+ * one `RouteRegistered` per directed leg, so a 10-hub network (1 center + 9
+ * spokes) yields 9 × 2 = 18 `RouteRegistered` events.
+ */
+describe("bidirectional route registration (VQ#5 verification)", () => {
+  // 100 ticks is enough to capture all bootstrap RouteRegistered events (tick 0).
+  const stream = simulate({ seed: 42, durationTicks: 100 });
+  const routeEvents = stream
+    .map((e) => e.event)
+    .filter((e): e is Extract<typeof e, { type: "RouteRegistered" }> => e.type === "RouteRegistered");
+
+  const center = USA_HUBS[0]!;
+  const spokes = USA_HUBS.slice(1);
+
+  it("emits both center→spoke AND spoke→center for every spoke", () => {
+    // 9 spokes × 2 directions = 18 directed legs.
+    expect(routeEvents.length).toBe(spokes.length * 2);
+
+    const registeredIds = new Set(routeEvents.map((e) => e.payload.routeId));
+    for (const spoke of spokes) {
+      expect(registeredIds.has(routeId(center.hubId, spoke.hubId))).toBe(true);
+      expect(registeredIds.has(routeId(spoke.hubId, center.hubId))).toBe(true);
+    }
+  });
+
+  it("spoke→center route has fromHubId === spoke and toHubId === center", () => {
+    const spoke = spokes[0]!;
+    const outbound = routeEvents.find(
+      (e) => e.payload.routeId === routeId(center.hubId, spoke.hubId),
+    );
+    const inbound = routeEvents.find(
+      (e) => e.payload.routeId === routeId(spoke.hubId, center.hubId),
+    );
+    expect(outbound).toBeDefined();
+    expect(inbound).toBeDefined();
+    expect(outbound!.payload.fromHubId).toBe(center.hubId);
+    expect(outbound!.payload.toHubId).toBe(spoke.hubId);
+    expect(inbound!.payload.fromHubId).toBe(spoke.hubId);
+    expect(inbound!.payload.toHubId).toBe(center.hubId);
+    // Opposite directions are distinct routeIds.
+    expect(outbound!.payload.routeId).not.toBe(inbound!.payload.routeId);
   });
 });
 

@@ -53,7 +53,7 @@
 
 > **Keystone constraint — determinism:** Every v2.0 feature is opt-in (flag off by default). With all v2.0 flags off, the existing seed-42 golden replay is byte-identical to pre-v2.0. New RNG salts (`INDUCTION_RNG_SALT`, `OUTBOUND_RNG_SALT`) are pairwise-distinct from all existing salts, asserted in the salt-collision test. Reducers key off `occurredAt` (virtual clock), never wall-clock. New events follow the established closed-union + Zod `.strict()` + `assertNever`-exhaustive pattern.
 
-- [ ] **Phase 19: Continuous Operation Foundation** - Open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, and bidirectional route registration
+- [x] **Phase 19: Continuous Operation Foundation** - Open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, and bidirectional route registration
 - [ ] **Phase 20: External Induction** - `PackageInducted` event, spoke-hub induction from dedicated seeded substream, SLA deadline to optimizer, pulsing map marker
 - [ ] **Phase 21: Bidirectional Freight / Consolidation** - Spoke→center consolidation via `pendingAtSpoke` queue, center inbound re-sort, optimizer two-direction awareness, consolidation trailer map styling
 - [ ] **Phase 22: Outbound Delivery** - `PackageDelivered` terminal event, destination detection, `onTime` SLA flag, projection purge, delivery hub-highlight on map
@@ -70,7 +70,20 @@
   3. With all v2.0 flags off (`runUntilStopped: false`, all feature flags false), the seed-42 run produces a byte-identical event hash to pre-v2.0 — confirmed by the existing golden test passing unchanged
   4. A 10,000-tick seeded run (`simulate({ seed: 42, durationTicks: 10000 })`) produces the same byte-identical event hash on both x86 and ARM CI architectures; if hashes diverge, the log-normal sampler is replaced with an integer lookup table before phase close
   5. (P2) Freight departs in a sort-wave / cut-off burst-quiet-burst cadence rather than a steady trickle, observable on the live map as distinct departure surges
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+**Wave 1**
+- [ ] 19-01-PLAN.md — Wave 0 RED test stubs: open-ended, DET-02 golden placeholder, LruMap, backpressure, simDay
+- [ ] 19-02-PLAN.md — Engine: runUntilStopped + onEvent + three conditioned guards (CONT-01/02, DET-01)
+- [ ] 19-03-PLAN.md — Commit real DET-02 hash + VQ#5 bidirectional routes verification + salt regression
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 19-04-PLAN.md — driveSimulationOpenEnded() driver (CONT-01/02 api layer)
+- [ ] 19-05-PLAN.md — WS backpressure guard + simDay envelope + UI counter (CONT-03/04b)
+- [ ] 19-06-PLAN.md — LruMap utility + optimizer wiring + watermark verification (CONT-04a/c)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 19-07-PLAN.md — Sort-wave burst-quiet-burst cadence flag (CONT-05 P2, deferrable)
 **UI hint**: yes
 
 ### Phase 20: External Induction
@@ -115,7 +128,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 19. Continuous Operation Foundation | 0/? | Not started | - |
+| 19. Continuous Operation Foundation | 8/8 | ✅ Complete | 2026-06-24 |
 | 20. External Induction | 0/? | Not started | - |
 | 21. Bidirectional Freight / Consolidation | 0/? | Not started | - |
 | 22. Outbound Delivery | 0/? | Not started | - |

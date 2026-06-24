@@ -19,12 +19,16 @@ import {
 import {
   applyScenario,
   type RfidSimConfig,
+  runToHorizon,
   simulate,
   type ScenarioKnobs,
+  type SimContinuation,
+  type SimStart,
   type SimulatedEvent,
   type TimingConfig,
 } from "@mm/simulation";
 import { makeRng } from "@mm/simulation";
+import { pruneEventLog, ageStaleProjections, type RetentionConfig } from "./retention.js";
 import type { DomainEvent, FuelConfig, HosConfig } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
 import type { Kysely } from "kysely";
@@ -323,6 +327,11 @@ function destHubIndex(stream: readonly SimulatedEvent[]): Map<string, string> {
   }
   return dest;
 }
+
+// Plan 19-08: the open-ended driver no longer pre-builds a per-chunk dest-hub
+// index. It maintains `destHub` incrementally — adding on `PackageCreated` and
+// PRUNING on `PackageArrivedAtHub` — so the index stays bounded to in-flight
+// packages, not the run-length total. (See `appendTick` in driveSimulationOpenEnded.)
 
 // ---------------------------------------------------------------------------
 // Core per-tick driver loop (shared by both public functions)
@@ -699,6 +708,346 @@ export async function driveSimulationPaced(
   }
 
   return { ticks: nextIndex };
+}
+
+// ---------------------------------------------------------------------------
+// CONT-01/02: open-ended (continuous) live driver
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for the OPEN-ENDED live driver (CONT-01/02) — the continuous-operation
+ * variant of {@link driveSimulationPaced}. Reuses every pacing field; adds a
+ * cooperative {@link DriveSimulationOpenEndedOptions.stopped} predicate read each
+ * frame.
+ *
+ * DETERMINISM CONTRACT (inherited): pacing (`frameMs` / multiplier / pause /
+ * `stopped`) is PRESENTATION only — it shapes cadence + batching and NEVER enters
+ * the sim engine. The deterministic event STREAM is generated in finite chunks
+ * (same seed → same events in the same order); only the *delivery rate* is
+ * wall-clock. `durationTicks` here is the INITIAL chunk horizon, not a ceiling.
+ */
+export interface DriveSimulationOpenEndedOptions extends DriveSimulationPacedOptions {
+  /**
+   * Cooperative stop predicate, read FRESH each frame. While it returns `false`
+   * the loop runs forever (continuous operation). Return `true` to terminate the
+   * loop cleanly at the next frame boundary. ABSENT ⇒ runs until the process
+   * exits. The composition root (`main.ts`) injects it so the demo can be stopped.
+   */
+  readonly stopped?: () => boolean;
+  /**
+   * Sim-tick horizon generated per chunk. **Default 500** (≈8.3 sim-hours). The
+   * driver advances ONE {@link SimContinuation} by this many ticks on demand
+   * (never pre-baking an infinite stream — Pitfall 1; never REgenerating the
+   * prefix — Plan 19-08), extending the window only as the paced `simClock`
+   * approaches the end of the current chunk. Larger ⇒ fewer (but bigger)
+   * continuation steps; smaller ⇒ tighter memory bound.
+   */
+  readonly chunkTicks?: number;
+  /**
+   * Plan 19-08 Task C — OPT-IN bounded persisted retention for the continuous
+   * path. When provided, the driver periodically prunes the Postgres `events` log
+   * (rows safely below the projection watermark) and ages out stale projection
+   * rows, so a genuinely indefinite run stays bounded END-TO-END (not just RAM).
+   * ABSENT ⇒ retention OFF — the full log is retained (the finite/test path stays
+   * replay-from-0 byte-identical, never reading a pruned log).
+   */
+  readonly retention?: RetentionConfig;
+  /**
+   * Testability hook (Plan 19-08 Task B): invoked once per frame with the current
+   * BOUNDED working-set sizes — the retained (undrained) tick-window length and
+   * the `destHub` index size. Lets a test assert the driver's RAM stays bounded by
+   * ~the window, NOT by run length. Pure observation; no functional impact.
+   */
+  readonly onWindowState?: (state: {
+    readonly retainedTicks: number;
+    readonly destHubSize: number;
+  }) => void;
+}
+
+/** Default per-chunk sim-tick horizon for the open-ended driver. */
+const DEFAULT_CHUNK_TICKS = 500;
+
+/**
+ * Drive the simulation LIVE and OPEN-ENDED (CONT-01/02) — runs indefinitely until
+ * the injected `stopped()` predicate fires (or the process exits).
+ *
+ * Contrast with {@link driveSimulationPaced}, which calls `simulate()` ONCE to
+ * pre-bake the ENTIRE finite stream into `ticks[]` and drains it. That is
+ * incompatible with an indefinite run (you cannot pre-bake an infinite stream —
+ * it would OOM). Instead this driver generates the deterministic stream in finite
+ * CHUNKS of `chunkTicks` (default 500) on demand: it extends a `horizonTick`
+ * ceiling whenever the paced `simClock` nears the end of the already-generated
+ * ticks, regenerating the deterministic stream up to the new horizon and driving
+ * ONLY the newly-revealed ticks (the prefix is byte-identical by determinism, so
+ * re-driving it is neither needed nor done).
+ *
+ * It reuses the EXACT pacing math (`computeSimAdvanceMs` + `selectDrain`), the
+ * per-tick `appendTick`, the once-per-frame `foldFrame`, the non-blocking
+ * coalesced optimizer, and the one-delta-per-frame broadcast from
+ * `driveSimulationPaced` — so behaviour per drained tick is identical; only the
+ * stream SOURCE (chunked + unbounded) and the loop TERMINATION (a `stopped()`
+ * predicate instead of `nextIndex < ticks.length`) differ.
+ *
+ * Resolves `{ ticks }` (the count of drained ticks) once `stopped()` returns true
+ * and the coalescer has gone idle.
+ */
+export async function driveSimulationOpenEnded(
+  opts: DriveSimulationOpenEndedOptions,
+): Promise<{ ticks: number }> {
+  // The deterministic sim options threaded into the continuation core. The SAME
+  // options + seed ⇒ a byte-identical stream, advanced one chunk at a time.
+  const simFeatureOpts = {
+    ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
+    ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+  };
+  const chunkTicks = Math.max(1, Math.floor(opts.chunkTicks ?? DEFAULT_CHUNK_TICKS));
+
+  // Plan 19-08 Task B: ONE SimContinuation drives the run. We advance it by
+  // `chunkTicks` per step and append ONLY the freshly-revealed ticks to a BOUNDED
+  // sliding window — the prefix is NEVER regenerated (the O(n²) regen is gone) and
+  // the window holds at most ~chunkTicks + a frame of undrained ticks.
+  let continuation: SimContinuation | undefined;
+  let horizonTick = 0;
+  /** Advance the continuation by one chunk; return the newly-revealed per-tick groups. */
+  function advanceOneChunk(): SimulatedEvent[][] {
+    horizonTick += chunkTicks;
+    const start: SimStart = continuation ?? { seed: opts.seed };
+    const { events, continuation: next } = runToHorizon(start, horizonTick, simFeatureOpts);
+    continuation = next;
+    // `events` are ONLY this chunk's events (the prefix is held in the
+    // continuation, not re-emitted), so grouping yields just the new ticks.
+    return intoTicks(events);
+  }
+
+  // The BOUNDED sliding window of undrained ticks (index 0 = next to drain). When
+  // ticks drain we splice them off the FRONT so this never grows with run length.
+  const window: SimulatedEvent[][] = [];
+  const windowTimesMs: number[] = [];
+  function appendChunkToWindow(chunk: SimulatedEvent[][]): void {
+    for (const tick of chunk) {
+      window.push(tick);
+      windowTimesMs.push(new Date(tick[0]!.occurredAt).getTime());
+    }
+  }
+
+  const es = eventStoreView(opts.db);
+  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+
+  const detectionOn = opts.rfid !== undefined;
+  const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
+  // destHub maps the PLANNED destination hub per package. It is populated as
+  // packages are revealed (PackageCreated) and PRUNED as they reach their
+  // destination (PackageArrivedAtHub) — so it stays bounded to in-flight packages,
+  // NOT the run-length total. (Only used when detection is on.)
+  const destHub = new Map<string, string>();
+  const departedHubs = new Set<string>();
+  let cursor = 0n;
+
+  /** Append ONE tick's events (OCC-safe per stream) + maintain bounded indices. */
+  async function appendTick(tick: SimulatedEvent[]): Promise<void> {
+    const perStream = new Map<string, SimulatedEvent[]>();
+    for (const item of tick) {
+      const buf = perStream.get(item.streamId) ?? [];
+      buf.push(item);
+      perStream.set(item.streamId, buf);
+    }
+    for (const [streamId, items] of perStream) {
+      const current = await es
+        .selectFrom("streams")
+        .select("version")
+        .where("stream_id", "=", streamId)
+        .executeTakeFirst();
+      await appendToStream(
+        es,
+        streamId,
+        current?.version ?? 0,
+        items.map((i) => i.event),
+        new Date(items[0]!.occurredAt),
+      );
+    }
+
+    if (detectionOn) {
+      for (const item of tick) {
+        if (item.event.type === "PackageCreated") {
+          // Reveal the package's planned destination hub.
+          destHub.set(item.event.payload.packageId, item.event.payload.destHubId);
+        } else if (item.event.type === "PackageArrivedAtHub") {
+          // The package reached a hub — drop it from the in-flight index (prune).
+          destHub.delete(item.event.payload.packageId);
+        } else if (item.event.type === "TrailerDeparted") {
+          departedHubs.add(item.event.payload.fromHubId);
+        }
+      }
+    }
+  }
+
+  /** Once-per-frame heavy folds (inline projection + detection + catch-up). */
+  async function foldFrame(): Promise<void> {
+    const fresh = await readAll(es, cursor);
+    if (fresh.length > 0) {
+      await opts.db.transaction().execute(async (trx) => {
+        const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
+        for (const ev of fresh) await applyInline(proj, ev);
+      });
+      cursor = fresh[fresh.length - 1]!.globalSeq;
+    }
+
+    if (detectionOn) {
+      await runDetection(
+        detectorReads(opts.db, es, destHub, departedHubs),
+        { config: detectionConfig },
+      );
+      const detected = await readAll(es, cursor);
+      if (detected.length > 0) {
+        await opts.db.transaction().execute(async (trx) => {
+          const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
+          for (const ev of detected) await applyInline(proj, ev);
+        });
+        cursor = detected[detected.length - 1]!.globalSeq;
+      }
+    }
+
+    await runCatchup(catchupView(opts.db), replayReadAll);
+  }
+
+  // ---- Accumulator frame loop (open-ended) ----------------------------------
+  const frameMs = opts.frameMs ?? DEFAULT_FRAME_MS;
+  const maxTicksPerFrame = Math.max(
+    1,
+    Math.floor(opts.maxTicksPerFrame ?? DEFAULT_MAX_TICKS_PER_FRAME),
+  );
+  const optEvery = Math.max(1, Math.floor(opts.optimizerEveryTicks ?? 1));
+
+  // Prime the window with the FIRST chunk (so the clock can seed off the first
+  // tick). The continuation now holds the rest of the world — no prefix regen.
+  appendChunkToWindow(advanceOneChunk());
+
+  let simClock = windowTimesMs.length > 0 ? windowTimesMs[0]! - 1 : 0;
+  let lastWall = performance.now();
+  let ticksSinceOpt = 0;
+  let pendingOptEvents: SimulatedEvent["event"][] = [];
+  let lastOptTickMs = 0;
+  let drainedTotal = 0;
+  let lastRetentionAtCount = 0;
+
+  /**
+   * Keep the undrained window long enough to feed a frame by advancing the
+   * continuation (NOT regenerating the prefix). Each step reveals only the next
+   * chunk's events. Memory stays bounded by ~chunk size, not by run duration.
+   */
+  function ensureWindow(): void {
+    let guard = 0;
+    while (window.length <= maxTicksPerFrame) {
+      const before = window.length;
+      appendChunkToWindow(advanceOneChunk());
+      // Bail if the engine is genuinely exhausted (no new ticks for a long span).
+      if (window.length === before) {
+        guard += 1;
+        if (guard > 1000) break;
+      } else {
+        guard = 0;
+      }
+    }
+  }
+
+  async function drainFrame(count: number, clampSimClock: number): Promise<number> {
+    if (count === 0) return clampSimClock;
+    let broadcastSimMs = clampSimClock;
+    for (let k = 0; k < count; k += 1) {
+      // Always drain the HEAD of the bounded window (index 0).
+      const tick = window[0]!;
+      const tickMs = windowTimesMs[0]!;
+      await appendTick(tick);
+      for (const item of tick) pendingOptEvents.push(item.event);
+      lastOptTickMs = tickMs;
+      broadcastSimMs = tickMs;
+      // Discard the drained tick from the front so RAM stays bounded.
+      window.shift();
+      windowTimesMs.shift();
+      drainedTotal += 1;
+    }
+
+    await foldFrame();
+
+    ticksSinceOpt += count;
+    if (ticksSinceOpt >= optEvery) {
+      coalescer.trigger(pendingOptEvents, lastOptTickMs);
+      pendingOptEvents = [];
+      ticksSinceOpt = 0;
+    }
+
+    return broadcastSimMs;
+  }
+
+  // Run forever until `stopped()` asks to halt (CONT-01).
+  while (opts.stopped?.() !== true) {
+    await sleep(frameMs);
+
+    const now = performance.now();
+    const wallDeltaMs = now - lastWall;
+    lastWall = now;
+
+    const paused = opts.isPaused?.() === true;
+    const multiplier = paused ? 0 : (opts.getMultiplier?.() ?? 1);
+
+    simClock += computeSimAdvanceMs({
+      wallDeltaMs,
+      multiplier,
+      msPerTick: MS_PER_TICK,
+      defaultIntervalMs: DEFAULT_INTERVAL_MS,
+    });
+
+    // Keep the bounded window ahead of the clock (continuation-advanced).
+    ensureWindow();
+
+    // selectDrain over the window's RELATIVE timeline (index 0 = next to drain).
+    const { count, clampSimClock } = selectDrain({
+      tickTimesMs: windowTimesMs,
+      nextIndex: 0,
+      simClock,
+      maxTicks: maxTicksPerFrame,
+    });
+    simClock = clampSimClock;
+
+    const broadcastSimMs = await drainFrame(count, simClock);
+
+    // Plan 19-08 Task C: bounded persisted retention (CONTINUOUS path ONLY). Prune
+    // the event log below the projection watermark + age out stale projections on
+    // the configured cadence. ABSENT ⇒ retention OFF (the full log is retained).
+    if (opts.retention !== undefined) {
+      const everyTicks = Math.max(1, opts.retention.everyTicks);
+      if (drainedTotal - lastRetentionAtCount >= everyTicks) {
+        lastRetentionAtCount = drainedTotal;
+        await pruneEventLog(opts.db, opts.retention);
+        await ageStaleProjections(opts.db, opts.retention, broadcastSimMs);
+      }
+    }
+
+    // Testability: report the bounded working-set sizes once per frame.
+    opts.onWindowState?.({ retainedTicks: window.length, destHubSize: destHub.size });
+
+    if (opts.broadcast !== undefined) {
+      await opts.broadcast(broadcastSimMs);
+    }
+  }
+
+  // Flush a final optimizer landmark for any undelivered batch, drain to idle,
+  // then a final broadcast at the clock.
+  if (pendingOptEvents.length > 0) {
+    coalescer.trigger(pendingOptEvents, lastOptTickMs);
+    pendingOptEvents = [];
+  }
+  await coalescer.whenIdle();
+  if (opts.broadcast !== undefined) {
+    await opts.broadcast(simClock);
+  }
+
+  return { ticks: drainedTotal };
 }
 
 /**
