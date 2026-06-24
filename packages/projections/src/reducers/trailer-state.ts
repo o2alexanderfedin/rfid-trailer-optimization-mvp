@@ -175,6 +175,9 @@ export function trailerStateReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    // SP2 stop events do not change this read model (no-op).
+    case "TruckRested":
+    case "TruckRefueled":
       return state;
     default:
       return assertNeverEvent(event);
