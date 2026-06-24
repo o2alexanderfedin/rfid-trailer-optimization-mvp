@@ -120,9 +120,10 @@ describe("deterministic event stream (SIM-02)", () => {
  * to replace the log-normal sampler with an integer lookup table (do NOT do this
  * unless the hash actually fails on CI).
  */
-// Captured from simulate({ seed: 42, durationTicks: 10000 }) on x86_64 (darwin).
-// Replaced from the plan-01 PLACEHOLDER by plan-03 with the real hash.
-const LONG_RUN_GOLDEN_SHA256 = "PLACEHOLDER_REPLACE_AFTER_FIRST_RUN";
+// Captured from simulate({ seed: 42, durationTicks: 10000 }) on x86_64 (darwin),
+// 6172 events. This is the TRUE hash of the long-run stream (plan-03 GREEN).
+const LONG_RUN_GOLDEN_SHA256 =
+  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
 
 describe("10k-tick determinism golden (DET-02)", () => {
   it("simulate({ seed: 42, durationTicks: 10000 }) produces a committed SHA-256 hash", () => {
