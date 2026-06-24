@@ -197,10 +197,12 @@ function hosLegsFeasible(
       if (requiresRest) return false;
       clock = result.clock;
     }
-    // Advance the leg-start clock by the FULL stop dwell (travel + service +
-    // any folded rest), so the next leg starts at its true departure minute. The
-    // 14h ABSOLUTE window keeps elapsing across the dwell (it does NOT pause).
-    legStartMin += legMinutes + stop.serviceMin + (stop.restMin ?? 0);
+    // Advance the leg-start clock by the FULL stop dwell (travel + service + any
+    // folded rest/refuel), so the next leg starts at its true departure minute.
+    // SP2 (spec §7): a refuel co-located with a rest OVERLAPS it ⇒ `max`, not sum
+    // (no double-count); `max(restMin, 0) === restMin` keeps the HOS-only window
+    // walk byte-identical. The 14h ABSOLUTE window keeps elapsing across the dwell.
+    legStartMin += legMinutes + stop.serviceMin + Math.max(stop.restMin ?? 0, stop.refuelMin ?? 0);
     prevHubId = stop.hubId;
   }
 
