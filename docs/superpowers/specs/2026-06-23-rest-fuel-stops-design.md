@@ -28,7 +28,7 @@ Three deliverables:
 |----------|--------|
 | Scope | Visible rest **and** fuel stops **+ optimizer fuel-awareness** (the larger option) |
 | Rests | **Reuse v1.2 HOS** (10-h rest, 30-min break). 30-min break **is** the meal/restroom stop (no separate event). Add a located `TruckRested` event + map "parked" rendering. |
-| Fuel | **New**, deterministic, **mileage-triggered** (~1,200 mi), co-located with a due rest when possible. New `TruckRefueled` event + map "refueling" rendering. |
+| Fuel | **New**, deterministic, **mileage-triggered** (~1,200 mi), co-located with a due rest when possible. New `TruckRefueled` event + map "refueling" rendering. A refuel co-located with a rest **overlaps** it (effective added time = `max(restMin, refuelMin)`, **not** the sum — no double-count). |
 | Stop position | Carried as **interpolated route position computed by the geo-track projection** (events stay geometry-free). |
 | Feature gating | **Opt-in `FuelConfig`, OFF by default** → HOS-off golden stays byte-identical; HOS-on/fuel-on stays deterministic (regenerate v1.2 baselines — expected, not a determinism break). |
 | Optimizer | **Fuel-aware**: add expected refuel time to leg timing via `Stop.refuelMin` (mirrors OPT-HOS-02 `restMin`); inline default unchanged. |
@@ -87,7 +87,7 @@ export const DEFAULT_FUEL_CONFIG: FuelConfig = { enabled: false, tankCapacityGal
 
 - **Per-trailer odometer**: a `Map<trailerId, milesSinceRefuel>` in engine state (alongside `driverByTrailer`/`clockByDriver`), init 0 at roster seeding.
 - **Per-leg miles**: `legMiles = haversineKm(fromHub, toHub) × 0.621371` (ORS `distance_m` when the road-geometry file is present; haversine fallback — matches how transit timing already resolves).
-- **On departure** (`departTrailer`): `odometer += legMiles`. If `fuel.enabled` and `odometer ≥ refuelThresholdMiles`, schedule a **refuel stop** during the trip (co-located in time with a rest if the HOS engine inserts one this leg; else as its own mid-leg pause) and emit `TruckRefueled` at the stop's sim time; reset odometer to 0; refilled `gallons = round((odometer_at_refuel / mpg))` capped at tank capacity.
+- **On departure** (`departTrailer`): `odometer += legMiles`. If `fuel.enabled` and `odometer ≥ refuelThresholdMiles`, the trailer refuels on this leg: emit `TruckRefueled` at the refuel sim time, reset odometer to 0, `gallons = round(min(odometer_at_refuel / mpg, tankCapacityGallons))`. **No-double-count**: the refuel overlaps any co-located HOS rest/break — the leg's effective added arrival time is `max(restMinutesThisLeg, refuelTimeMinutes)`, so a refuel inside a ≥30-min rest adds NO extra delay; a refuel with no concurrent rest adds `refuelTimeMinutes`.
 - **On HOS rest/break insertion** (`accrueDrivingLeg` already emits `DriverDutyStateChanged(resting|on_break)`): also emit `TruckRested` with the same `occurredAt` + the segment's `minutes` as `durationMin` and the mapped `reason`.
 - **Determinism**: a new seeded substream `fuelRng = makeRng(seed ^ FUEL_RNG_SALT)` **only created when `fuel.enabled`** (zero draws when off → golden byte-identical). Any refuel-time jitter (if added) drawn from `fuelRng` at deterministic event-queue order. Rests reuse the existing `hosRng`/HOS segment timing (no new draws).
 - **`SimulateOptions`** gains `fuel?: FuelConfig`. The live demo (`main.ts`) enables it (env `FUEL_ENABLED`, default on for the demo, like HOS).
@@ -110,10 +110,10 @@ Mirror OPT-HOS-02's `restMin` injection exactly (smallest seam — no core VRPTW
 3. `EpochInput` gains `fuelConfig?: FuelConfig` (optional, like `timing`; default `DEFAULT_FUEL_CONFIG`).
 4. `Stop` (vrptw/types.ts) gains `refuelMin?: number` (default 0).
 5. `stopsForTrailer()` computes `refuelMin` per stop via a pure helper `refuelMinForStop(...)`: walk the planned route accumulating `distanceMiles` from `trailer.milesSinceRefuel`; when cumulative crosses `refuelThresholdMiles`, that stop gets `refuelMin = refuelTimeMinutes` and the running total resets.
-6. Departure formulas fold it in (exactly like `restMin`):
-   - `feasibility.ts feasibleArrivals`: `departureMin = serviceStart + serviceMin + (restMin ?? 0) + (refuelMin ?? 0)`
-   - `route-trailers.ts hosLegsFeasible`: `legStartMin += legMinutes + serviceMin + (restMin ?? 0) + (refuelMin ?? 0)`
-7. Effect: refuel time pushes ETAs/feasibility out → reflected in plan timing (and HOS feasibility), consistent with OPT-09/10. Objective terms unchanged; **inline default with no `fuelConfig` ⇒ byte-identical to current** (refuelMin defaults 0).
+6. Departure formulas fold it in via **`max`, not sum** — a refuel co-located with a rest at the same stop **overlaps** it (refuel happens inside the rest window → no double-count); when only one applies, `max` equals that one:
+   - `feasibility.ts feasibleArrivals`: `departureMin = serviceStart + serviceMin + Math.max(restMin ?? 0, refuelMin ?? 0)`
+   - `route-trailers.ts hosLegsFeasible`: `legStartMin += legMinutes + serviceMin + Math.max(restMin ?? 0, refuelMin ?? 0)`
+7. Effect: refuel time pushes ETAs/feasibility out **only when it exceeds any co-located rest** → reflected in plan timing (and HOS feasibility), consistent with OPT-09/10. Objective terms unchanged; **inline default with no `fuelConfig` ⇒ byte-identical to current** (refuelMin defaults 0; `max(restMin,0) === restMin` preserves the exact prior HOS-only formula).
 - Integer-round all fuel-derived minutes at the boundary (anti-P12), like dwell/transit.
 - Snapshot builder (`api/src/optimizer/twin-snapshot.ts`) populates `distanceMiles` + `milesSinceRefuel`.
 
@@ -136,9 +136,9 @@ Mirror OPT-HOS-02's `restMin` injection exactly (smallest seam — no core VRPTW
 
 **New/updated tests**
 - `@mm/domain`: schema validation for `TruckRested`/`TruckRefueled`; contract assert.
-- `@mm/simulation`: (a) fuel-OFF golden byte-identity; (b) fuel-ON determinism (same seed→same stream); (c) odometer accrues per leg + refuel resets at threshold + `TruckRefueled` emitted; (d) `TruckRested` emitted with each HOS rest/break (reason+duration); (e) regenerate `determinism.unit.test.ts` / `hos-determinism.unit.test.ts` baselines.
+- `@mm/simulation`: (a) fuel-OFF golden byte-identity; (b) fuel-ON determinism (same seed→same stream); (c) odometer accrues per leg + refuel resets at threshold + `TruckRefueled` emitted; (d) `TruckRested` emitted with each HOS rest/break (reason+duration); (e) **a refuel co-located with a rest adds no extra arrival delay (`max`, not sum); a refuel with no concurrent rest delays arrival by `refuelTimeMinutes`**; (f) regenerate `determinism.unit.test.ts` / `hos-determinism.unit.test.ts` baselines.
 - `@mm/projections`: geo-track emits `rested`/`refueling` keyframes at interpolated positions; `milesSinceRefuel` accrual+reset; `rebuildCatchup` equivalence.
-- `@mm/optimizer`: mirror `time-aware.test.ts` — increasing `refuelMin`/crossing threshold pushes ETA/feasibility; integer-rounding; idempotency; **back-compat (no fuelConfig ⇒ prior result)**.
+- `@mm/optimizer`: mirror `time-aware.test.ts` — crossing the threshold adds `refuelMin` → pushes ETA/feasibility; **co-located refuel+rest at a stop ⇒ added time = `max(restMin,refuelMin)` (no double-count)**; integer-rounding; idempotency; **back-compat (no fuelConfig ⇒ byte-identical prior result, incl. HOS-only legs)**.
 - `@mm/web`: rested/refueling markers render (jsdom/RTL) from a snapshot fixture.
 - Integration (`@mm/api`): a fuel-on live-demo int test — `TruckRested`/`TruckRefueled` reach projections; geo-track keyframes present; optimizer plan reflects refuel timing.
 
@@ -161,7 +161,7 @@ Mirror OPT-HOS-02's `restMin` injection exactly (smallest seam — no core VRPTW
 |------|-----------|
 | Golden churn cascades across packages | Fuel OFF default keeps all golden-off tests green; regenerate only the HOS-on baselines, in one reviewed step. |
 | Stop position interpolation drift vs client tween | Projection computes position from the same logged geometry + occurredAt the client uses; assert via rebuild-equivalence. |
-| Optimizer fuel double-counting with HOS rest at the same stop | refuelMin and restMin are independent additive terms; when a refuel is co-located with a rest, both apply (models real "refuel during the rest" only partially — acceptable; documented). Revisit if it overstates time. |
+| Fuel/rest time double-counting at a co-located stop | **RESOLVED**: effective added time is `max(restMin, refuelMin)`, not the sum — the refuel happens inside the rest window. `max(restMin,0)===restMin` also keeps HOS-only timing byte-identical (exact back-compat). |
 | Twin needs odometer (new projection field) | Small pure reducer addition; off-default trailers report 0 → optimizer adds 0 refuelMin (back-compat). |
 | Determinism break via new RNG ordering | `fuelRng` only when enabled; draws at deterministic event-queue order; off ⇒ zero draws. |
 
