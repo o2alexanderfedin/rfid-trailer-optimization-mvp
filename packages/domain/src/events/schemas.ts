@@ -335,6 +335,56 @@ export const unloadCompletedSchema = eventSchema(
   phaseEventPayload,
 );
 
+// --- SP2 visible rest/fuel stop events (spec §4) ----------------------------
+
+/**
+ * `TruckRested` — emitted ALONGSIDE the existing `DriverDutyStateChanged`
+ * (`resting` 10-h | `on_break` 30-min) so the rest gains a MAP presence (the
+ * trailer parks at a rest area). `reason` is a CLOSED two-value enum mapping the
+ * HOS segment that triggered it; `durationMin` is that segment's whole minutes.
+ *
+ * DETERMINISM (spec §4): the payload carries NO lon/lat and NO RNG value — only
+ * ids + the clock + the duration derived from the HOS segment. The stop's map
+ * position is computed by the geo-track projection from the logged leg geometry,
+ * never carried here. `durationMin` is a non-negative integer (a 0-minute or
+ * negative rest is rejected at this boundary).
+ */
+export const truckRestedSchema = eventSchema(
+  "TruckRested",
+  z.object({
+    trailerId: id,
+    tripId: id,
+    reason: z.enum(["rest-10h", "break-30min"]),
+    durationMin: z.number().int().nonnegative(),
+    occurredAt,
+  }),
+);
+
+/**
+ * `TruckRefueled` — emitted when a trailer's per-trailer odometer crosses the
+ * `FuelConfig.refuelThresholdMiles` (the trailer visibly refuels mid-route).
+ * `gallons` is the deterministic refilled amount from the tank model
+ * (`min(odometerMiles / mpg, tankCapacityGallons)`, rounded); `odometerMiles` is
+ * the cumulative miles AT the refuel (pre-reset); `durationMin` is the refuel
+ * service time.
+ *
+ * DETERMINISM (spec §4): NO lon/lat and NO RNG in the payload — the geo-track
+ * projection interpolates the refuel position from the logged leg geometry. All
+ * numeric fields are non-negative (a NaN/Infinity or negative value is rejected
+ * structurally at this boundary).
+ */
+export const truckRefueledSchema = eventSchema(
+  "TruckRefueled",
+  z.object({
+    trailerId: id,
+    tripId: id,
+    gallons: z.number().nonnegative().finite(),
+    odometerMiles: z.number().nonnegative().finite(),
+    durationMin: z.number().int().nonnegative(),
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -363,4 +413,7 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   unloadStartedSchema,
   loadStartedSchema,
   unloadCompletedSchema,
+  // SP2 visible rest/fuel stop events (spec §4).
+  truckRestedSchema,
+  truckRefueledSchema,
 ]);

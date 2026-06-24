@@ -117,7 +117,12 @@ async function upsertAuditRow(
     .execute();
 }
 
-/** Idempotent upsert of one geo keyframe (keyed by trailer/trip/kind). */
+/**
+ * Idempotent upsert of one geo keyframe (keyed by trailer/trip/kind/t). Including
+ * `t` lets multiple SP2 mid-leg stops on one leg coexist while keeping a re-folded
+ * event a strict no-op (same event ⇒ same time ⇒ same row). `duration_minutes` is
+ * the stop's park length (null for depart/arrive).
+ */
 async function upsertKeyframe(
   db: Kysely<CatchupDb>,
   kf: GeoKeyframe,
@@ -131,12 +136,13 @@ async function upsertKeyframe(
       t: kf.t,
       lon: kf.lon,
       lat: kf.lat,
+      duration_minutes: kf.durationMinutes ?? null,
     })
     .onConflict((oc) =>
-      oc.columns(["trailer_id", "trip_id", "kind"]).doUpdateSet({
-        t: kf.t,
+      oc.columns(["trailer_id", "trip_id", "kind", "t"]).doUpdateSet({
         lon: kf.lon,
         lat: kf.lat,
+        duration_minutes: kf.durationMinutes ?? null,
       }),
     )
     .execute();
@@ -175,25 +181,36 @@ async function loadGeoTrackState(db: Kysely<CatchupDb>): Promise<GeoTrackState> 
   ]);
   const routes = new Map<string, readonly [number, number][]>();
   for (const r of routeRows) routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
-  const inflight = new Map<string, string>();
+  const inflight = new Map<string, { legKey: string; departAt: string }>();
   for (const r of inflightRows) {
-    inflight.set(r.trip_id, legKey(r.from_hub_id, r.to_hub_id));
+    inflight.set(r.trip_id, {
+      legKey: legKey(r.from_hub_id, r.to_hub_id),
+      // SP2: the persisted depart anchor for stop interpolation; fall back to "" so
+      // a row from a pre-SP2 pass (null) yields fraction 0 (the leg origin).
+      departAt: r.depart_at === null ? "" : toIso(r.depart_at),
+    });
   }
   return { routes, inflight };
 }
 
-/** Record a trip's in-flight leg (M-4), idempotent on the trip id. */
+/**
+ * Record a trip's in-flight leg (M-4) + its depart anchor (SP2 stop interpolation),
+ * idempotent on the trip id.
+ */
 async function upsertInflightTrip(
   db: Kysely<CatchupDb>,
   tripId: string,
   fromHubId: string,
   toHubId: string,
+  departAt: string,
 ): Promise<void> {
   await db
     .insertInto("geo_inflight_trip")
-    .values({ trip_id: tripId, from_hub_id: fromHubId, to_hub_id: toHubId })
+    .values({ trip_id: tripId, from_hub_id: fromHubId, to_hub_id: toHubId, depart_at: departAt })
     .onConflict((oc) =>
-      oc.column("trip_id").doUpdateSet({ from_hub_id: fromHubId, to_hub_id: toHubId }),
+      oc
+        .column("trip_id")
+        .doUpdateSet({ from_hub_id: fromHubId, to_hub_id: toHubId, depart_at: departAt }),
     )
     .execute();
 }
@@ -242,12 +259,14 @@ async function runGeoTrack(
     if (event.type === "RouteRegistered") {
       await upsertRoute(db, event.payload.fromHubId, event.payload.toHubId, event.payload.geometry);
     } else if (event.type === "TrailerDeparted") {
-      // Persist the trip's leg so a later-pass arrival resolves it (M-4).
+      // Persist the trip's leg + depart anchor so a later-pass arrival resolves the
+      // leg (M-4) and a later-pass stop interpolates against the depart time (SP2).
       await upsertInflightTrip(
         db,
         event.payload.tripId,
         event.payload.fromHubId,
         event.payload.toHubId,
+        stored.occurredAt,
       );
     } else if (event.type === "TrailerArrivedAtHub") {
       // The trip's leg is consumed by the arrival; drop it from the index (M-4).
@@ -371,6 +390,9 @@ export async function readGeoKeyframes(
     .orderBy("trailer_id", "asc")
     .orderBy("trip_id", "asc")
     .orderBy("kind", "asc")
+    // SP2: `t` is part of the identity now (multiple stops per leg), so order by it
+    // too for a stable, deterministic read order.
+    .orderBy("t", "asc")
     .execute();
   return rows.map((r) => ({
     trailerId: r.trailer_id,
@@ -379,6 +401,8 @@ export async function readGeoKeyframes(
     t: toIso(r.t),
     lon: r.lon,
     lat: r.lat,
+    // SP2: carry the stop's park length; null (depart/arrive) ⇒ omit the field.
+    ...(r.duration_minutes === null ? {} : { durationMinutes: r.duration_minutes }),
   }));
 }
 
@@ -417,6 +441,7 @@ export async function serializeCatchup(db: Kysely<CatchupDb>): Promise<string> {
     t: k.t,
     lon: k.lon,
     lat: k.lat,
+    durationMinutes: k.durationMinutes ?? null,
   }));
 
   return JSON.stringify({ audit, geo });

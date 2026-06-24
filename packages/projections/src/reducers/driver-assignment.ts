@@ -109,6 +109,8 @@ export function driverAssignmentReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
       return state;
     default:
       return assertNeverEvent(event);

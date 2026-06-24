@@ -16,6 +16,8 @@ import {
   createHubLayer,
   createRouteLayer,
   createTrailerLayer,
+  createTrailerStopLayer,
+  applyTrailerStops,
   upsertTrailerKeyframe,
   removeTrailerFeature,
   applyHubBuckets,
@@ -84,6 +86,8 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
   const trailerSourceRef = useRef<VectorSource | null>(null);
   const hubSourceRef = useRef<VectorSource | null>(null);
   const routeSourceRef = useRef<VectorSource | null>(null);
+  // SP2 (spec §8): the parked/refueling stop-marker source.
+  const stopSourceRef = useRef<VectorSource | null>(null);
 
   /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
   const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
@@ -142,11 +146,17 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     trailerSourceInstancesRef.current += 1;
     setAttr("data-trailer-source-instances", trailerSourceInstancesRef.current);
 
+    // SP2 (spec §8): the parked/refueling STOP layer, ABOVE the moving-trailer
+    // layer so a stationary stop marker sits on top of its (paused) truck marker.
+    const stop = createTrailerStopLayer();
+    stopSourceRef.current = stop.source;
+
     const map = new OlMap({
       target: container,
       layers: [
         new TileLayer({ source: new OSM({ crossOrigin: "anonymous" }) }),
         trailer.layer,
+        stop.layer,
       ],
       view: new View({
         center: fromLonLat([USA_CENTER[0], USA_CENTER[1]]),
@@ -272,6 +282,7 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       trailerSourceRef.current = null;
       hubSourceRef.current = null;
       routeSourceRef.current = null;
+      stopSourceRef.current = null;
       trailerAnimsRef.current.clear();
       routeDtosRef.current.clear();
     };
@@ -283,6 +294,7 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       const trailerSource = trailerSourceRef.current;
       const hubSource = hubSourceRef.current;
       const routeSource = routeSourceRef.current;
+      const stopSource = stopSourceRef.current;
       if (trailerSource === null) return;
 
       // Drive the local clock's PLAYBACK RATE from the server's effective speed
@@ -316,6 +328,8 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
         // Apply hub + route buckets.
         if (hubSource !== null) applyHubBuckets(hubSource, payload.hubs);
         if (routeSource !== null) applyRouteBuckets(routeSource, payload.routes);
+        // SP2 (spec §8): render the parked/refueling stop markers (full set).
+        if (stopSource !== null) applyTrailerStops(stopSource, payload.trailerStops ?? []);
       } else {
         // Delta tick: upsert + delete.
         const payload = envelope.payload;
@@ -337,6 +351,11 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
         }
         if (routeSource !== null && payload.routes !== undefined) {
           applyRouteBuckets(routeSource, payload.routes);
+        }
+        // SP2 (spec §8): the tick carries the FULL stop set whenever it changed —
+        // reconcile the parked-marker layer wholesale (undefined ⇒ unchanged).
+        if (stopSource !== null && payload.trailerStops !== undefined) {
+          applyTrailerStops(stopSource, payload.trailerStops);
         }
       }
 

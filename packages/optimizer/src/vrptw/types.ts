@@ -53,6 +53,15 @@ export interface Stop {
    * BEGIN. Defaults to 0 (back-compat: omitting it is byte-identical to `0`).
    */
   readonly restMin?: number;
+  /**
+   * SP2 (spec §7) — OPTIONAL expected REFUEL minutes when the trailer's running
+   * distance crosses the refuel threshold AT this stop. Folded into the departure
+   * with `max`, NOT sum: `+ Math.max(restMin ?? 0, refuelMin ?? 0)` — a refuel
+   * co-located with a rest OVERLAPS it (no double-count), and when only one
+   * applies `max` equals that one. Defaults to 0 (back-compat: omitting it — AND
+   * `max(restMin, 0) === restMin` — is byte-identical to the pre-SP2 fold).
+   */
+  readonly refuelMin?: number;
 }
 
 /**

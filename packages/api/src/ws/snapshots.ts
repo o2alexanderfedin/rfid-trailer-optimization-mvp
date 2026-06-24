@@ -19,6 +19,7 @@ import {
   type SnapshotPayload,
   type TickPayload,
   type TrailerKeyframe,
+  type TrailerStop,
   type WsEnvelope,
 } from "./envelope.js";
 import type { SpeedController } from "../sim/speed-controller.js";
@@ -485,12 +486,52 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   // Build TrailerKeyframes (one per trailer). routeId is resolved to the
   // `/api/routes` geometry key (`route-FROM-TO`) from the in-flight leg so the
   // client can tween the trailer along its route polyline. See buildTrailerKeyframes.
+  // SP2: the LEG-bounding tween reads only `depart`/`arrive` keyframes; the new
+  // mid-leg `rested`/`refueling` STOP keyframes are surfaced separately (stops[])
+  // so the client can park the marker without disturbing the tween bounds.
+  const legKeyframes: LegKeyframe[] = keyframes.flatMap((k) =>
+    k.kind === "depart" || k.kind === "arrive"
+      ? [{ trailerId: k.trailerId, tripId: k.tripId, kind: k.kind, t: k.t }]
+      : [],
+  );
   const trailers: TrailerKeyframe[] = buildTrailerKeyframes(
-    keyframes,
+    legKeyframes,
     inflightTripRows,
     implicatedTrailerIds,
     legMinutesByRoute,
   );
+
+  // SP2 (spec §8): the mid-leg stop keyframes for the live map — the client renders
+  // a stationary parked/refueling marker at each stop's interpolated position for
+  // `durationMinutes`. Sorted deterministically (trailer, trip, t) for byte-stable
+  // diffs. Carried on the snapshot payload as `trailerStops`.
+  const trailerStops: TrailerStop[] = keyframes
+    .flatMap((k) =>
+      k.kind === "rested" || k.kind === "refueling"
+        ? [
+            {
+              trailerId: k.trailerId,
+              tripId: k.tripId,
+              kind: k.kind,
+              lon: k.lon,
+              lat: k.lat,
+              startMs: isoToMs(k.t),
+              durationMinutes: k.durationMinutes ?? 0,
+            },
+          ]
+        : [],
+    )
+    .sort((a, b) =>
+      a.trailerId !== b.trailerId
+        ? a.trailerId < b.trailerId
+          ? -1
+          : 1
+        : a.tripId !== b.tripId
+          ? a.tripId < b.tripId
+            ? -1
+            : 1
+          : a.startMs - b.startMs,
+    );
 
   // FIX 3 — Hub states: compute real integer buckets from hub_inventory + exceptions.
   // volumeBucket = quantized total package count (inbound+outbound+staged).
@@ -590,6 +631,8 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
 
   return {
     trailers,
+    // SP2 (spec §8): the mid-leg parked/refueling stops the client renders.
+    trailerStops,
     hubs,
     routes, // FIX 3: real route metrics (was [])
     // F-02: live KPIs come from GET /api/kpis — do NOT carry a zeroed placeholder
@@ -759,6 +802,7 @@ function emptySnapshotPayload(): SnapshotPayload {
   // single source of truth). Omitting it keeps `diffTick` from emitting a delta.
   return {
     trailers: [],
+    trailerStops: [],
     hubs: [],
     routes: [],
     exceptionsOpen: [],

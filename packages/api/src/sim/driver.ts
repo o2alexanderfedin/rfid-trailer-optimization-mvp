@@ -25,7 +25,7 @@ import {
   type TimingConfig,
 } from "@mm/simulation";
 import { makeRng } from "@mm/simulation";
-import type { DomainEvent, HosConfig } from "@mm/domain";
+import type { DomainEvent, FuelConfig, HosConfig } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
 import type { Kysely } from "kysely";
 import { performance } from "node:perf_hooks";
@@ -190,6 +190,13 @@ export interface DriveSimulationOptions {
    * trucks on the map at once. Threaded straight through to `simulate`.
    */
   readonly fleetPerSpoke?: number;
+  /**
+   * SP2 (spec §5): OPT-IN fuel/refuel modeling, threaded straight to `simulate`
+   * only when DEFINED. Absent ⇒ the golden stream is byte-identical (the engine
+   * default is fuel-off). The live demo passes `{ ...DEFAULT_FUEL_CONFIG,
+   * enabled: FUEL_ENABLED }` so trucks visibly rest + refuel mid-route.
+   */
+  readonly fuel?: FuelConfig;
 }
 
 /**
@@ -451,6 +458,7 @@ export async function driveSimulation(
     ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -497,6 +505,7 @@ export async function driveSimulationPaced(
     ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
   });
   const ticks = intoTicks(stream);
   // Precompute each tick's DETERMINISTIC sim time (the first event's occurredAt).
@@ -728,6 +737,7 @@ export async function driveSimulationWithScenario(
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
   });
 
   // 2. Apply the scenario knobs (seeded, deterministic).
