@@ -25,7 +25,7 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 - [ ] **CONT-01**: The simulation runs **open-ended** (no fixed horizon), advancing until explicitly stopped via a stop-signal. The existing finite `durationTicks` path is preserved unchanged so all golden tests stay byte-identical.
 - [ ] **CONT-02**: Freight generation **sustains indefinitely across multiple day/cycle periods** (self-rescheduling triggers), not a one-shot finite batch.
 - [ ] **CONT-03**: A **sim-day / cycle counter** is exposed in the ws state diff and shown in the operator UI, so the viewer can see continuous multi-period operation.
-- [ ] **CONT-04**: Sustained operation stays **memory-bounded** — catch-up projection rebuild uses a watermark checkpoint (rebuild cost does not grow with event-log size), the ws send path applies backpressure (`bufferedAmount` guard so a backgrounded client buffer stays bounded), and the optimizer idempotency map is bounded (LRU eviction). The process can run indefinitely without unbounded growth.
+- [ ] **CONT-04**: Sustained operation stays **bounded end-to-end** (RAM *and* storage) — (a) the engine is **resumable** via explicit continuation state so the open-ended driver advances by chunks without regenerating the prefix (bounded working set, no O(n²) regen); (b) catch-up projection rebuild uses a watermark checkpoint; (c) the ws send path applies backpressure (`bufferedAmount` guard); (d) the optimizer idempotency map is bounded (LRU eviction); (e) **bounded persisted retention on the opt-in continuous path** — the event log is pruned below the projection watermark and stale projection rows are aged out, so a continuous run does not store all simulation data indefinitely. **Finite/test paths keep the full log → goldens replay-from-0 byte-identical.** The process can run indefinitely without unbounded growth in memory or storage.
 - [ ] **CONT-05** *(P2)*: Freight departs in a **sort-wave / cut-off rhythm** (burst-quiet-burst cadence) rather than a steady trickle, mirroring real sort windows.
 
 ### Determinism keystone (DET)
@@ -76,7 +76,7 @@ Deferred to a future milestone. Tracked but not in the v2.0 roadmap.
 
 ### Production hardening (out of demo scope, noted for completeness)
 
-- **HRD-FUT-01**: Postgres event-store snapshotting / partitioning / compaction for multi-day continuous runs (unnecessary at hours-long demo scale).
+- **HRD-FUT-01**: Postgres event-store **snapshotting / partitioning** for multi-day continuous runs. _(Update 2026-06-24: basic event-log retention + projection aging were pulled INTO v2.0 CONT-04 per user directive "do not store all simulation data indefinitely"; snapshot-based crash-recovery replay and table partitioning remain future.)_
 
 ---
 
