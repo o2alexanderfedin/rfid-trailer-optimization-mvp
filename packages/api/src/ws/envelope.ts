@@ -58,6 +58,25 @@ export interface TrailerKeyframe {
   readonly util?: number;
 }
 
+/**
+ * SP2 (spec §8) — a MID-LEG truck STOP for the live map: the trailer parks at the
+ * interpolated route position (`lon`/`lat`, computed server-side by the geo-track
+ * projection) for `durationMinutes` starting at `startMs`. `kind` drives the
+ * distinct parked/refueling marker style. ADDITIVE + OPTIONAL on the payload — a
+ * client that predates it ignores it; an older server omits it.
+ */
+export interface TrailerStop {
+  readonly trailerId: string;
+  readonly tripId: string;
+  readonly kind: "rested" | "refueling";
+  readonly lon: number;
+  readonly lat: number;
+  /** Sim-clock ms the stop begins (the geo-track keyframe `t`). */
+  readonly startMs: number;
+  /** Whole minutes the trailer is parked here (the stop's dwell). */
+  readonly durationMinutes: number;
+}
+
 /** VIZ-03 hub metrics (integer buckets for zero-allocation `StyleFunction`). */
 export interface HubState {
   readonly id: string;
@@ -140,6 +159,12 @@ export interface KpiSnapshot {
 /** Full baseline — sent on connect / client-requested resync. */
 export interface SnapshotPayload {
   readonly trailers: readonly TrailerKeyframe[];
+  /**
+   * SP2 (spec §8) — the mid-leg parked/refueling stops to render. OPTIONAL +
+   * additive: an older server omits it (the client reads `?? []`), so the payload
+   * stays back-compatible. The production builder always sets it (possibly empty).
+   */
+  readonly trailerStops?: readonly TrailerStop[];
   readonly hubs: readonly HubState[];
   readonly routes: readonly RouteState[];
   /**
@@ -159,6 +184,12 @@ export interface TickPayload {
   readonly trailers?: readonly TrailerKeyframe[];
   /** Delete: trailerIds that completed or left the network. */
   readonly trailersGone?: readonly string[];
+  /**
+   * SP2 (spec §8) — the FULL current set of mid-leg stops whenever it changed
+   * (sent wholesale, not per-stop diffed: the set is tiny and a wholesale replace
+   * keeps the client's parked-marker layer trivially consistent).
+   */
+  readonly trailerStops?: readonly TrailerStop[];
   /** Hubs whose metric bucket changed. */
   readonly hubs?: readonly HubState[];
   /** Routes whose metric bucket changed. */
@@ -255,6 +286,7 @@ export function diffTick(prev: SnapshotPayload, next: SnapshotPayload): TickPayl
   const result: {
     trailers?: TrailerKeyframe[];
     trailersGone?: string[];
+    trailerStops?: TrailerStop[];
     hubs?: HubState[];
     routes?: RouteState[];
     kpis?: Partial<KpiSnapshot>;
@@ -283,6 +315,15 @@ export function diffTick(prev: SnapshotPayload, next: SnapshotPayload): TickPayl
   }
   gone.sort(byString);
   if (gone.length > 0) result.trailersGone = gone;
+
+  // --- SP2 trailer stops: wholesale replace when the set changed --------------
+  // The set is tiny (only in-flight stops) so a full replace on any change keeps
+  // the client's parked-marker layer trivially consistent (no per-stop diff/key).
+  const prevStops = prev.trailerStops ?? [];
+  const nextStops = next.trailerStops ?? [];
+  if (JSON.stringify(prevStops) !== JSON.stringify(nextStops)) {
+    result.trailerStops = [...nextStops];
+  }
 
   // --- Hubs: upsert (bucket changed or new) --------------------------------
   const prevHubs = new Map<string, HubState>(prev.hubs.map((h) => [h.id, h]));

@@ -1,8 +1,10 @@
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
-import type { ProjectionDb } from "@mm/projections";
+import { readAll } from "@mm/event-store";
+import type { OccurredEvent, ProjectionDb } from "@mm/projections";
+import { emptyTrailerFuelState, getTrailerMiles, trailerFuelReducer } from "@mm/projections";
 import type { Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
-import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes } from "@mm/domain";
+import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes, haversineKm } from "@mm/domain";
 import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import type {
@@ -54,6 +56,9 @@ export const DEFAULT_TRAILER_CAPACITY = 50;
  */
 const DEFAULT_ROUTE_CAPACITY = 200;
 
+/** Kilometres → statute miles (matches the sim + projections derivation). */
+const KM_TO_MILES = 0.621_371;
+
 /**
  * Default departure offset in minutes from epoch 0. When a trailer has no live
  * departure event in the event store (not yet dispatched), we assign a departure
@@ -78,6 +83,28 @@ function sortedUnique(ids: Iterable<string>): string[] {
  */
 function coordHub(point: LonLat): Hub {
   return { hubId: "x", name: "x", lon: point[0], lat: point[1] };
+}
+
+/**
+ * SP2 (spec §6/§7): fold the trailer-fuel reducer over the WHOLE event log to
+ * derive each trailer's `milesSinceRefuel`. Reuses the same PURE reducer the
+ * catch-up runner uses (DRY) so the optimizer's odometer matches the projection.
+ * Deterministic: the log is read in `global_seq` order and the reducer reads only
+ * logged geometry + event payloads (no clock, no RNG). Returns trailerId → miles.
+ */
+async function computeMilesSinceRefuel(db: SnapshotDb): Promise<Map<string, number>> {
+  const es = db as unknown as Kysely<Database>;
+  const stored = await readAll(es, 0n);
+  let state = emptyTrailerFuelState;
+  for (const s of stored) {
+    const occurred: OccurredEvent = { event: s.event, occurredAt: s.occurredAt };
+    state = trailerFuelReducer(state, occurred);
+  }
+  const out = new Map<string, number>();
+  for (const trailerId of state.fuel.keys()) {
+    out.set(trailerId, getTrailerMiles(state, trailerId));
+  }
+  return out;
 }
 
 /**
@@ -113,7 +140,8 @@ function parseRouteRow(
     geometry?: readonly LonLat[];
   };
   const geometry = p.geometry ?? [];
-  const orsDurationS = road?.legs[routeId(p.fromHubId, p.toHubId)]?.duration_s;
+  const roadLeg = road?.legs[routeId(p.fromHubId, p.toHubId)];
+  const orsDurationS = roadLeg?.duration_s;
   const travelMin =
     orsDurationS !== undefined
       ? Math.round(orsDurationS / 60) // ORS road drive time (matches the polyline)
@@ -126,12 +154,28 @@ function parseRouteRow(
             ),
           )
         : TRANSIT_MIN;
+  // SP2 (spec §7): the leg DISTANCE in miles — PREFER the committed ORS road
+  // `distance_m` (the same road the polyline shows), else the great-circle
+  // (haversine) miles between the geometry endpoints (the from/to hub coords).
+  // Integer-rounded at the boundary (anti-P12). Fail-soft to 0 for a <2-point
+  // geometry (no leg distance derivable) so the optimizer simply never refuels it.
+  const orsDistanceM = roadLeg?.distance_m;
+  const distanceMiles =
+    orsDistanceM !== undefined
+      ? Math.round((orsDistanceM / 1000) * KM_TO_MILES)
+      : geometry.length >= 2
+        ? Math.round(
+            haversineKm(coordHub(geometry[0]!), coordHub(geometry[geometry.length - 1]!)) *
+              KM_TO_MILES,
+          )
+        : 0;
   return {
     routeId: p.routeId,
     fromHubId: p.fromHubId,
     toHubId: p.toHubId,
     travelMin,
     capacity: DEFAULT_ROUTE_CAPACITY,
+    distanceMiles,
   };
 }
 
@@ -313,6 +357,15 @@ export async function buildTwinSnapshot(
     }
   }
 
+  // SP2 (spec §6/§7): fold the trailer-fuel reducer over the log to derive each
+  // trailer's `milesSinceRefuel` (the optimizer's fuel-aware odometer). The reducer
+  // is the SAME pure projection logic the catch-up runner uses (DRY) — it accrues
+  // each completed leg's geometry miles on `TrailerArrivedAtHub` and resets on
+  // `TruckRefueled`. Reading the events ordered by `global_seq` keeps the fold
+  // deterministic (no clock/RNG). Only the four leg/refuel-relevant event types
+  // affect the result; reading just those keeps the scan small.
+  const milesSinceRefuelByTrailer = await computeMilesSinceRefuel(db);
+
   // 3. Read operational projections. OPT-HOS-01: also read the Phase-13
   //    `driver_status` projection (driver → remaining legal drive minutes, already
   //    computed by the Phase-10 HOS engine at projection time) so the optimizer can
@@ -400,6 +453,10 @@ export async function buildTwinSnapshot(
             : { driverId, remainingDriveMinutes }
           : undefined;
 
+      // SP2 (spec §7): attach the trailer's miles-since-refuel so the fuel-aware
+      // epoch can decide WHERE a refuel falls. Absent (no fuel events yet) ⇒ 0,
+      // which adds no refuel — byte-identical to the pre-SP2 snapshot.
+      const milesSinceRefuel = milesSinceRefuelByTrailer.get(r.trailer_id) ?? 0;
       const trailer: TwinTrailer = {
         trailerId: r.trailer_id,
         currentHubId,
@@ -407,6 +464,7 @@ export async function buildTwinSnapshot(
         capacity: DEFAULT_TRAILER_CAPACITY,
         route: stops,
         blocks,
+        milesSinceRefuel,
         ...(driver !== undefined ? { driver } : {}),
       };
       return trailer;

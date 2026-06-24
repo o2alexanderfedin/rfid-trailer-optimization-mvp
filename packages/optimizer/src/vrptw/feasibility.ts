@@ -50,11 +50,14 @@ export function feasibleArrivals(
     // shifts when service may BEGIN — it only delays departure.
     if (arrivalMin > stop.windowEndMin) return null;
     const serviceStart = Math.max(arrivalMin, stop.windowStartMin);
-    // OPT-HOS-02 — fold the optional driver-rest minutes into the service time
-    // ("rest-as-time", NO new graph edge kind): `departure = serviceStart +
-    // serviceMin + restMin`, so a rest pushes the next leg's arrival out by
-    // exactly `restMin`. Omitted ⇒ 0 (byte-identical to the pre-Phase-16 fold).
-    const departureMin = serviceStart + stop.serviceMin + (stop.restMin ?? 0);
+    // OPT-HOS-02 + SP2 — fold the optional driver-rest / refuel minutes into the
+    // service time ("rest-as-time", NO new graph edge kind). SP2 (spec §7): a
+    // refuel co-located with a rest OVERLAPS it, so the added time is `max(restMin,
+    // refuelMin)`, NOT the sum (no double-count); when only one applies, `max`
+    // equals that one. Omitting both ⇒ 0, AND `max(restMin, 0) === restMin`, so
+    // this is byte-identical to the pre-SP2 (HOS-only) departure fold.
+    const departureMin =
+      serviceStart + stop.serviceMin + Math.max(stop.restMin ?? 0, stop.refuelMin ?? 0);
     routed.push({ hubId: stop.hubId, arrivalMin, departureMin });
     prevHubId = stop.hubId;
     clock = departureMin;

@@ -72,6 +72,7 @@ export type {
   SnapshotPayload,
   TickPayload,
   TrailerKeyframe,
+  TrailerStop,
   HubState,
   RouteState,
   ExceptionItem,

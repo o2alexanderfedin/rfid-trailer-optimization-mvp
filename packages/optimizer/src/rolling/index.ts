@@ -25,6 +25,9 @@ export { scopeHash, isFrozen } from "./freeze-idempotency.js";
 // --- The composing rolling epoch (OPT-04/05/06) ------------------------------
 export { runEpoch } from "./epoch.js";
 
+// --- SP2 fuel-awareness: the pure refuel-threshold helper (spec §7) ----------
+export { refuelMinForStop } from "./epoch.js";
+
 // --- Contracts ---------------------------------------------------------------
 export type {
   Epoch,

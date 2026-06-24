@@ -22,6 +22,7 @@ import {
   ROUTE_BUCKET_LABELS,
 } from "./coloring.js";
 import { DUTY_COLORS, DUTY_BUCKET_LABELS } from "./dutyColoring.js";
+import { STOP_STATUS_COLORS, STOP_STATUS_LABELS } from "./stopColoring.js";
 
 /** Which metric the hub layer currently displays. */
 export type HubMetric = "volume" | "slaRisk" | "congestion";
@@ -155,6 +156,14 @@ export function Legend({
         title="Driver duty"
         colors={DUTY_COLORS}
         labels={DUTY_BUCKET_LABELS}
+      />
+      <div style={styles.divider} role="separator" />
+      {/* SP2 (spec §8): the truck-status ramp — moving vs the parked/refueling
+          mid-leg stops, so an operator can read the stationary stop markers. */}
+      <LegendSection
+        title="Truck status"
+        colors={STOP_STATUS_COLORS}
+        labels={STOP_STATUS_LABELS}
       />
       <div style={styles.divider} role="separator" />
       <LegendSection

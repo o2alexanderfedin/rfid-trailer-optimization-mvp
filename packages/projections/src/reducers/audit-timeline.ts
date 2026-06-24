@@ -214,6 +214,8 @@ export function auditTimelineReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
       return null;
     default:
       return assertNeverAudit(event);

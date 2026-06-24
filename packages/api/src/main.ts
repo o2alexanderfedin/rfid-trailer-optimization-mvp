@@ -6,9 +6,10 @@ import { driveSimulationPaced } from "./sim/driver.js";
 import {
   DEMO_RFID_CONFIG,
   DEMO_OVER_CARRY_CONFIG,
+  resolveDemoFuelEnabled,
   resolveDemoHosEnabled,
 } from "./detection-config.js";
-import { DEFAULT_HOS_CONFIG } from "@mm/domain";
+import { DEFAULT_FUEL_CONFIG, DEFAULT_HOS_CONFIG, type FuelConfig } from "@mm/domain";
 import type { ApiDb } from "./routes/queries.js";
 
 /**
@@ -53,10 +54,20 @@ async function main(): Promise<void> {
   // in-process path (e.g. parity debugging). Anything other than `inline` ⇒ worker.
   const optimizerExecution =
     process.env.OPTIMIZER_EXECUTION === "inline" ? "inline" : "worker";
+  // SP2 (spec §5): fuel/refuel modeling on the LIVE demo (DEFAULT ON; set
+  // FUEL_ENABLED=0 to disable). When on, the engine accrues a per-trailer odometer
+  // and emits TruckRested/TruckRefueled, and the optimizer folds the expected
+  // refuel time into leg timing — so trucks visibly park to rest + refuel mid-route
+  // and the plan reflects the lost time. Off-by-default in the engine keeps the
+  // unit determinism goldens byte-identical; this env wiring affects ONLY the demo.
+  const fuelEnabled = resolveDemoFuelEnabled();
+  const fuelConfig: FuelConfig = { ...DEFAULT_FUEL_CONFIG, enabled: fuelEnabled };
   const { app, broadcast, loop, speedController, worker } = await buildServer({
     db,
     simSeed: seed,
     optimizerExecution,
+    // SP2: forward the fuel config so the live optimizer is fuel-aware (matches sim).
+    fuelConfig,
     // FIX F: pass the full baseline tick count so scenario injection computes
     // scenarioEpochMs beyond any already-memoized baseline epoch.
     baselineTicks: durationTicks,
@@ -111,6 +122,7 @@ async function main(): Promise<void> {
   // directly with the default (HOS-off) config and never read HOS_ENABLED.
   const hosEnabled = resolveDemoHosEnabled();
   app.log.info(`driver HOS ${hosEnabled ? "ENABLED" : "disabled"} on live demo`);
+  app.log.info(`fuel/refuel stops ${fuelEnabled ? "ENABLED" : "disabled"} on live demo`);
   app.log.info(`fleet: ${fleetPerSpoke} trailer(s) per spoke`);
 
   // Drive the sim AFTER listen so every connected client receives live ticks.
@@ -126,6 +138,9 @@ async function main(): Promise<void> {
     overCarry: DEMO_OVER_CARRY_CONFIG.rate,
     hosEnabled,
     hosConfig: DEFAULT_HOS_CONFIG,
+    // SP2: drive the engine with fuel ON (per FUEL_ENABLED) so the live stream
+    // carries TruckRested/TruckRefueled and the geo-track renders mid-route stops.
+    fuel: fuelConfig,
     fleetPerSpoke,
     optimizerEveryTicks,
     broadcast,

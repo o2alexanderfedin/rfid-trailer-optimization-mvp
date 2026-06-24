@@ -161,16 +161,23 @@ CREATE TABLE IF NOT EXISTS geo_route (
 );
 
 -- CATCH-UP: per-trip trailer position keyframes for the live map. Identity is
--- (trailer_id, trip_id, kind) — one depart + one arrive per trip.
+-- (trailer_id, trip_id, kind, t): one depart + one arrive per trip, PLUS any
+-- number of SP2 mid-leg rested/refueling stops distinguished by their time
+-- (spec §6). Including `t` keeps re-folding the same event idempotent (same time
+-- ⇒ same row) while letting multiple stops on one leg coexist. `duration_minutes`
+-- is the stop's park length (NULL for depart/arrive — a leg endpoint has no dwell).
 CREATE TABLE IF NOT EXISTS geo_keyframe (
-  trailer_id TEXT             NOT NULL,
-  trip_id    TEXT             NOT NULL,
-  kind       TEXT             NOT NULL,
-  t          TIMESTAMPTZ      NOT NULL,
-  lon        DOUBLE PRECISION NOT NULL,
-  lat        DOUBLE PRECISION NOT NULL,
-  PRIMARY KEY (trailer_id, trip_id, kind)
+  trailer_id       TEXT             NOT NULL,
+  trip_id          TEXT             NOT NULL,
+  kind             TEXT             NOT NULL,
+  t                TIMESTAMPTZ      NOT NULL,
+  lon              DOUBLE PRECISION NOT NULL,
+  lat              DOUBLE PRECISION NOT NULL,
+  duration_minutes INTEGER,
+  PRIMARY KEY (trailer_id, trip_id, kind, t)
 );
+
+ALTER TABLE geo_keyframe ADD COLUMN IF NOT EXISTS duration_minutes INTEGER;
 
 -- CATCH-UP (M-4): the in-flight trip -> leg index. A `TrailerDeparted` records
 -- the trip's ACTUAL leg here; the matching `TrailerArrivedAtHub` reads it to
@@ -180,5 +187,11 @@ CREATE TABLE IF NOT EXISTS geo_keyframe (
 CREATE TABLE IF NOT EXISTS geo_inflight_trip (
   trip_id     TEXT PRIMARY KEY,
   from_hub_id TEXT NOT NULL,
-  to_hub_id   TEXT NOT NULL
+  to_hub_id   TEXT NOT NULL,
+  -- SP2: the trip's depart time, the anchor a mid-leg rest/refuel stop
+  -- interpolates against (spec §6). Nullable + ADD-IF-NOT-EXISTS so an existing
+  -- DB upgrades cleanly on the next idempotent boot.
+  depart_at   TIMESTAMPTZ
 );
+
+ALTER TABLE geo_inflight_trip ADD COLUMN IF NOT EXISTS depart_at TIMESTAMPTZ;

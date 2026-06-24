@@ -235,6 +235,11 @@ function describeEvent(e: DomainEvent): string {
     case "LoadStarted":
     case "UnloadCompleted":
       return e.payload.trailerId;
+    // SP2 (v1.3) rest/fuel stop events.
+    case "TruckRested":
+      return e.payload.trailerId;
+    case "TruckRefueled":
+      return e.payload.trailerId;
     default:
       return assertNever(e);
   }
@@ -299,7 +304,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 20 literal discriminators", () => {
+  it("DomainEventType is the union of the 22 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -322,6 +327,9 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       | "UnloadStarted"
       | "LoadStarted"
       | "UnloadCompleted"
+      // SP2 (v1.3) rest/fuel stop events.
+      | "TruckRested"
+      | "TruckRefueled"
     >();
   });
 

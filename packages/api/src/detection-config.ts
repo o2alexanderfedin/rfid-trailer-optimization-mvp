@@ -164,3 +164,26 @@ export function resolveDemoHosEnabled(
   const v = raw.trim().toLowerCase();
   return !(v === "0" || v === "false" || v === "off" || v === "no");
 }
+
+/**
+ * SP2 (spec §5): resolve whether the LIVE demo (`main.ts`) runs with FUEL/refuel
+ * modeling ON. The feature is OPT-IN / DEFAULT-OFF in the engine (so the unit
+ * determinism goldens — which pass NO fuel config — stay byte-identical). The
+ * RUNNING demo turns it ON (like HOS) so trucks visibly park to rest and refuel
+ * mid-route and the optimizer plans against the lost time.
+ *
+ * Toggle: the `FUEL_ENABLED` env var. DEFAULTS ON for the demo — set
+ * `FUEL_ENABLED=0` (or `false`/`off`/`no`) to force the legacy fuel-off live
+ * stream. Pure (env passed in), so it is hermetically unit-testable.
+ *
+ * NOTE: this NEVER affects the unit determinism goldens — those call `simulate`
+ * directly with the default (fuel-off) config and never read this env var.
+ */
+export function resolveDemoFuelEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env.FUEL_ENABLED;
+  if (raw === undefined || raw === "") return true; // default ON for the demo
+  const v = raw.trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "no");
+}

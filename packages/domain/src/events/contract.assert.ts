@@ -44,6 +44,8 @@ function assertExhaustive(event: DomainEvent): void {
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
       return;
     default:
       assertNever(event);

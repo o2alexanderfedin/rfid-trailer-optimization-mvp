@@ -18,6 +18,8 @@ import type {
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
   trailerDockedSchema,
+  truckRefueledSchema,
+  truckRestedSchema,
   unloadCompletedSchema,
   unloadStartedSchema,
   wrongTrailerDetectedSchema,
@@ -114,6 +116,21 @@ export type LoadStarted = z.infer<typeof loadStartedSchema>;
 /** Unloading finished (after the last unload scan). Identifiers + clock only. */
 export type UnloadCompleted = z.infer<typeof unloadCompletedSchema>;
 
+// --- SP2 visible rest/fuel stop events (spec §4) ----------------------------
+
+/**
+ * A trailer parked for a driver rest/break (alongside `DriverDutyStateChanged`).
+ * Carries `reason` + `durationMin` only — NO lon/lat, NO RNG (the geo-track
+ * projection computes the map position from the logged leg geometry).
+ */
+export type TruckRested = z.infer<typeof truckRestedSchema>;
+/**
+ * A trailer refueled mid-route (odometer crossed `refuelThresholdMiles`). Carries
+ * the deterministic `gallons` + cumulative `odometerMiles` + `durationMin` — NO
+ * lon/lat, NO RNG (geometry-free; the geo-track projection interpolates position).
+ */
+export type TruckRefueled = z.infer<typeof truckRefueledSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -142,7 +159,10 @@ export type DomainEvent =
   // Phase-9 (v1.2) load/unload phase events (EVT-02).
   | UnloadStarted
   | LoadStarted
-  | UnloadCompleted;
+  | UnloadCompleted
+  // SP2 visible rest/fuel stop events (spec §4).
+  | TruckRested
+  | TruckRefueled;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

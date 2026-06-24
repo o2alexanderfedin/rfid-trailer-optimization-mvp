@@ -124,6 +124,15 @@ export type {
 } from "./reducers/geo-track.js";
 export { emptyGeoTrackState, geoTrackReducer, legKey } from "./reducers/geo-track.js";
 
+// --- SP2: trailer fuel state (milesSinceRefuel for the planning twin) ---------
+export type { TrailerFuel, TrailerFuelState } from "./reducers/trailer-fuel.js";
+export {
+  emptyTrailerFuelState,
+  geometryMiles,
+  getTrailerMiles,
+  trailerFuelReducer,
+} from "./reducers/trailer-fuel.js";
+
 // --- Operational twin: schema + inline applier + rebuild driver --------------
 export type {
   ProjectionDatabase,
