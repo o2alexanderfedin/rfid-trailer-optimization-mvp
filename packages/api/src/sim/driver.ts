@@ -324,6 +324,24 @@ function destHubIndex(stream: readonly SimulatedEvent[]): Map<string, string> {
   return dest;
 }
 
+/**
+ * Same PLANNED dest-hub index as {@link destHubIndex}, but over the grouped
+ * per-tick chunks the open-ended driver works with (CONT-01). Flattens the chunk
+ * groups and reuses the identical reducer so the detector port is satisfied for
+ * every package revealed within the current chunk horizon.
+ */
+function destHubIndexFromTicks(ticks: readonly SimulatedEvent[][]): Map<string, string> {
+  const dest = new Map<string, string>();
+  for (const tick of ticks) {
+    for (const e of tick) {
+      if (e.event.type === "PackageCreated") {
+        dest.set(e.event.payload.packageId, e.event.payload.destHubId);
+      }
+    }
+  }
+  return dest;
+}
+
 // ---------------------------------------------------------------------------
 // Core per-tick driver loop (shared by both public functions)
 // ---------------------------------------------------------------------------
@@ -693,6 +711,294 @@ export async function driveSimulationPaced(
   }
 
   // Drain the coalesced optimizer to idle, then a final broadcast at the clock.
+  await coalescer.whenIdle();
+  if (opts.broadcast !== undefined) {
+    await opts.broadcast(simClock);
+  }
+
+  return { ticks: nextIndex };
+}
+
+// ---------------------------------------------------------------------------
+// CONT-01/02: open-ended (continuous) live driver
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for the OPEN-ENDED live driver (CONT-01/02) — the continuous-operation
+ * variant of {@link driveSimulationPaced}. Reuses every pacing field; adds a
+ * cooperative {@link DriveSimulationOpenEndedOptions.stopped} predicate read each
+ * frame.
+ *
+ * DETERMINISM CONTRACT (inherited): pacing (`frameMs` / multiplier / pause /
+ * `stopped`) is PRESENTATION only — it shapes cadence + batching and NEVER enters
+ * the sim engine. The deterministic event STREAM is generated in finite chunks
+ * (same seed → same events in the same order); only the *delivery rate* is
+ * wall-clock. `durationTicks` here is the INITIAL chunk horizon, not a ceiling.
+ */
+export interface DriveSimulationOpenEndedOptions extends DriveSimulationPacedOptions {
+  /**
+   * Cooperative stop predicate, read FRESH each frame. While it returns `false`
+   * the loop runs forever (continuous operation). Return `true` to terminate the
+   * loop cleanly at the next frame boundary. ABSENT ⇒ runs until the process
+   * exits. The composition root (`main.ts`) injects it so the demo can be stopped.
+   */
+  readonly stopped?: () => boolean;
+  /**
+   * Sim-tick horizon generated per chunk. **Default 500** (≈8.3 sim-hours). The
+   * driver generates the deterministic stream in finite chunks of this size
+   * on-demand (never pre-baking an infinite stream — Pitfall 1), extending the
+   * horizon only as the paced `simClock` approaches the end of the current chunk.
+   * Larger ⇒ fewer (but bigger) regenerations; smaller ⇒ tighter memory bound.
+   */
+  readonly chunkTicks?: number;
+}
+
+/** Default per-chunk sim-tick horizon for the open-ended driver. */
+const DEFAULT_CHUNK_TICKS = 500;
+
+/**
+ * Drive the simulation LIVE and OPEN-ENDED (CONT-01/02) — runs indefinitely until
+ * the injected `stopped()` predicate fires (or the process exits).
+ *
+ * Contrast with {@link driveSimulationPaced}, which calls `simulate()` ONCE to
+ * pre-bake the ENTIRE finite stream into `ticks[]` and drains it. That is
+ * incompatible with an indefinite run (you cannot pre-bake an infinite stream —
+ * it would OOM). Instead this driver generates the deterministic stream in finite
+ * CHUNKS of `chunkTicks` (default 500) on demand: it extends a `horizonTick`
+ * ceiling whenever the paced `simClock` nears the end of the already-generated
+ * ticks, regenerating the deterministic stream up to the new horizon and driving
+ * ONLY the newly-revealed ticks (the prefix is byte-identical by determinism, so
+ * re-driving it is neither needed nor done).
+ *
+ * It reuses the EXACT pacing math (`computeSimAdvanceMs` + `selectDrain`), the
+ * per-tick `appendTick`, the once-per-frame `foldFrame`, the non-blocking
+ * coalesced optimizer, and the one-delta-per-frame broadcast from
+ * `driveSimulationPaced` — so behaviour per drained tick is identical; only the
+ * stream SOURCE (chunked + unbounded) and the loop TERMINATION (a `stopped()`
+ * predicate instead of `nextIndex < ticks.length`) differ.
+ *
+ * Resolves `{ ticks }` (the count of drained ticks) once `stopped()` returns true
+ * and the coalescer has gone idle.
+ */
+export async function driveSimulationOpenEnded(
+  opts: DriveSimulationOpenEndedOptions,
+): Promise<{ ticks: number }> {
+  // The deterministic sim options threaded into EVERY chunk regeneration. The
+  // SAME options + seed ⇒ a byte-identical prefix each time, so extending the
+  // horizon only REVEALS more ticks (never changes the ones already driven).
+  // NOTE: runUntilStopped is deliberately NOT set — each chunk is a FINITE
+  // `simulate()` call bounded by `horizonTick` (no infinite pre-bake; Pitfall 1).
+  const simOpts = {
+    seed: opts.seed,
+    ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
+    ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+  };
+  const chunkTicks = Math.max(1, Math.floor(opts.chunkTicks ?? DEFAULT_CHUNK_TICKS));
+
+  // Generate the deterministic stream up to `horizon` ticks and split it into the
+  // ordered per-tick groups (same `intoTicks` grouping as the paced driver).
+  function generateChunk(horizon: number): SimulatedEvent[][] {
+    const stream = simulate({ ...simOpts, durationTicks: horizon });
+    return intoTicks(stream);
+  }
+
+  // The rolling generated window. We extend `horizonTick` and regenerate when the
+  // simClock approaches the end of `ticks`. detection's destHub index is rebuilt
+  // per chunk from the freshly-generated stream (bounded by the chunk horizon).
+  let horizonTick = Math.max(
+    chunkTicks,
+    Math.floor(opts.durationTicks > 0 ? opts.durationTicks : chunkTicks),
+  );
+  let ticks = generateChunk(horizonTick);
+  let tickTimesMs = ticks.map((tick) => new Date(tick[0]!.occurredAt).getTime());
+
+  const es = eventStoreView(opts.db);
+  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+
+  const detectionOn = opts.rfid !== undefined;
+  const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
+  // destHub is rebuilt from each (cumulative) chunk so newly-revealed packages
+  // are covered. It only grows with the horizon, not with run duration directly.
+  let destHub = detectionOn
+    ? destHubIndexFromTicks(ticks)
+    : new Map<string, string>();
+  const departedHubs = new Set<string>();
+  let cursor = 0n;
+
+  /** Append ONE tick's events (OCC-safe per stream) + track departed hubs. */
+  async function appendTick(tick: SimulatedEvent[]): Promise<void> {
+    const perStream = new Map<string, SimulatedEvent[]>();
+    for (const item of tick) {
+      const buf = perStream.get(item.streamId) ?? [];
+      buf.push(item);
+      perStream.set(item.streamId, buf);
+    }
+    for (const [streamId, items] of perStream) {
+      const current = await es
+        .selectFrom("streams")
+        .select("version")
+        .where("stream_id", "=", streamId)
+        .executeTakeFirst();
+      await appendToStream(
+        es,
+        streamId,
+        current?.version ?? 0,
+        items.map((i) => i.event),
+        new Date(items[0]!.occurredAt),
+      );
+    }
+
+    if (detectionOn) {
+      for (const item of tick) {
+        if (item.event.type === "TrailerDeparted") {
+          departedHubs.add(item.event.payload.fromHubId);
+        }
+      }
+    }
+  }
+
+  /** Once-per-frame heavy folds (inline projection + detection + catch-up). */
+  async function foldFrame(): Promise<void> {
+    const fresh = await readAll(es, cursor);
+    if (fresh.length > 0) {
+      await opts.db.transaction().execute(async (trx) => {
+        const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
+        for (const ev of fresh) await applyInline(proj, ev);
+      });
+      cursor = fresh[fresh.length - 1]!.globalSeq;
+    }
+
+    if (detectionOn) {
+      await runDetection(
+        detectorReads(opts.db, es, destHub, departedHubs),
+        { config: detectionConfig },
+      );
+      const detected = await readAll(es, cursor);
+      if (detected.length > 0) {
+        await opts.db.transaction().execute(async (trx) => {
+          const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
+          for (const ev of detected) await applyInline(proj, ev);
+        });
+        cursor = detected[detected.length - 1]!.globalSeq;
+      }
+    }
+
+    await runCatchup(catchupView(opts.db), replayReadAll);
+  }
+
+  // ---- Accumulator frame loop (open-ended) ----------------------------------
+  const frameMs = opts.frameMs ?? DEFAULT_FRAME_MS;
+  const maxTicksPerFrame = Math.max(
+    1,
+    Math.floor(opts.maxTicksPerFrame ?? DEFAULT_MAX_TICKS_PER_FRAME),
+  );
+  const optEvery = Math.max(1, Math.floor(opts.optimizerEveryTicks ?? 1));
+
+  let simClock = tickTimesMs.length > 0 ? tickTimesMs[0]! - 1 : 0;
+  let nextIndex = 0;
+  let lastWall = performance.now();
+  let ticksSinceOpt = 0;
+  let pendingOptEvents: SimulatedEvent["event"][] = [];
+  let lastOptTickMs = 0;
+
+  /**
+   * Ensure the generated window extends far enough ahead of `simClock` that the
+   * frame can drain. When `nextIndex` is within one chunk of the end of `ticks`,
+   * extend `horizonTick` by `chunkTicks` and regenerate. The deterministic prefix
+   * is byte-identical, so already-driven ticks (index < nextIndex) are unchanged;
+   * we simply keep the same `ticks` array (now longer) and continue from
+   * `nextIndex`. Memory stays bounded by ~the horizon, not by run duration.
+   */
+  function ensureHorizon(): void {
+    // Extend while the undrained tail is too short to feed a frame.
+    while (ticks.length - nextIndex <= maxTicksPerFrame) {
+      const before = ticks.length;
+      horizonTick += chunkTicks;
+      ticks = generateChunk(horizonTick);
+      tickTimesMs = ticks.map((tick) => new Date(tick[0]!.occurredAt).getTime());
+      if (detectionOn) destHub = destHubIndexFromTicks(ticks);
+      // Safety: if a regeneration revealed NO new ticks (the network produced no
+      // further events for this horizon span), keep extending — but bail if the
+      // engine is genuinely exhausted to avoid an infinite generation loop.
+      if (ticks.length === before && horizonTick > opts.durationTicks + chunkTicks * 1000) {
+        break;
+      }
+    }
+  }
+
+  async function drainFrame(count: number, clampSimClock: number): Promise<number> {
+    if (count === 0) return clampSimClock;
+    let broadcastSimMs = clampSimClock;
+    for (let k = 0; k < count; k += 1) {
+      const idx = nextIndex;
+      const tick = ticks[idx]!;
+      const tickMs = tickTimesMs[idx]!;
+      await appendTick(tick);
+      for (const item of tick) pendingOptEvents.push(item.event);
+      lastOptTickMs = tickMs;
+      broadcastSimMs = tickMs;
+      nextIndex += 1;
+    }
+
+    await foldFrame();
+
+    ticksSinceOpt += count;
+    if (ticksSinceOpt >= optEvery) {
+      coalescer.trigger(pendingOptEvents, lastOptTickMs);
+      pendingOptEvents = [];
+      ticksSinceOpt = 0;
+    }
+
+    return broadcastSimMs;
+  }
+
+  // Run forever until `stopped()` asks to halt (CONT-01).
+  while (opts.stopped?.() !== true) {
+    await sleep(frameMs);
+
+    const now = performance.now();
+    const wallDeltaMs = now - lastWall;
+    lastWall = now;
+
+    const paused = opts.isPaused?.() === true;
+    const multiplier = paused ? 0 : (opts.getMultiplier?.() ?? 1);
+
+    simClock += computeSimAdvanceMs({
+      wallDeltaMs,
+      multiplier,
+      msPerTick: MS_PER_TICK,
+      defaultIntervalMs: DEFAULT_INTERVAL_MS,
+    });
+
+    // Keep the generated window ahead of the clock (chunked, never pre-baked).
+    ensureHorizon();
+
+    const { count, clampSimClock } = selectDrain({
+      tickTimesMs,
+      nextIndex,
+      simClock,
+      maxTicks: maxTicksPerFrame,
+    });
+    simClock = clampSimClock;
+
+    const broadcastSimMs = await drainFrame(count, simClock);
+
+    if (opts.broadcast !== undefined) {
+      await opts.broadcast(broadcastSimMs);
+    }
+  }
+
+  // Flush a final optimizer landmark for any undelivered batch, drain to idle,
+  // then a final broadcast at the clock.
+  if (pendingOptEvents.length > 0) {
+    coalescer.trigger(pendingOptEvents, lastOptTickMs);
+    pendingOptEvents = [];
+  }
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
     await opts.broadcast(simClock);

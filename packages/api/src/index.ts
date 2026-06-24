@@ -81,10 +81,15 @@ export type {
   SimSpeedState,
 } from "./ws/envelope.js";
 export { diffTick } from "./ws/envelope.js";
-export { driveSimulation, driveSimulationPaced } from "./sim/driver.js";
+export {
+  driveSimulation,
+  driveSimulationPaced,
+  driveSimulationOpenEnded,
+} from "./sim/driver.js";
 export type {
   DriveSimulationOptions,
   DriveSimulationPacedOptions,
+  DriveSimulationOpenEndedOptions,
 } from "./sim/driver.js";
 export { makeSpeedController } from "./sim/speed-controller.js";
 export type {
