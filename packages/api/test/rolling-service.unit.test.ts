@@ -68,4 +68,38 @@ describe("RollingOptimizerService memo LRU cap (CONT-04c)", () => {
     expect(outcome.committed).toBe(false);
     expect(service.memoSize()).toBe(sizeAfterFirst);
   });
+
+  // Plan 19-08 Task D (folded from p19-r2): an EVICTED epoch must RE-COMPUTE — the
+  // LRU eviction must not produce a false-positive idempotency hit. We count
+  // compute calls: after seeding "e0", pushing 600 distinct epochs evicts it
+  // (cap 500), so re-running "e0" calls the compute AGAIN (not a memo hit).
+  it("re-running an EVICTED epoch re-computes (no false-positive idempotency hit)", async () => {
+    let calls = 0;
+    const runEpochFn: RunEpochFn = (e: Epoch): Promise<EpochResult> => {
+      calls += 1;
+      return Promise.resolve({
+        epochId: e.epochId,
+        scopeHash: `scope-${e.epochId}`,
+        generated: null,
+        accepted: null,
+        recommendations: [],
+      });
+    };
+    const db = {} as unknown as RollingOptimizerDeps["db"];
+    const service = new RollingOptimizerService({ db, runEpochFn });
+
+    await service.runOnce(epoch("e0"), input());
+    const callsAfterSeed = calls;
+    // Push 600 distinct epochs (cap 500) so "e0" is evicted.
+    for (let i = 1; i <= 600; i += 1) {
+      await service.runOnce(epoch(`x${i}`), input());
+    }
+    const before = calls;
+    // "e0" was evicted ⇒ re-running it must re-compute (calls increments), and the
+    // memo stays capped (no unbounded growth).
+    await service.runOnce(epoch("e0"), input());
+    expect(calls).toBe(before + 1);
+    expect(calls).toBeGreaterThan(callsAfterSeed);
+    expect(service.memoSize()).toBe(500);
+  });
 });

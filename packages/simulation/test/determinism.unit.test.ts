@@ -131,6 +131,56 @@ describe("10k-tick determinism golden (DET-02)", () => {
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
     expect(hash).toBe(LONG_RUN_GOLDEN_SHA256);
   });
+
+  // Plan 19-08 Task D (folded from p19-r2): in-process reproducibility — two
+  // back-to-back 10k runs in the SAME process MUST hash identically. This would
+  // catch any phantom module-global / cache that leaks between runs (the engine
+  // now routes through the resumable continuation core, so this guards that the
+  // core holds NO process-level state).
+  it("the 10k-tick run is reproducible within a process (same hash twice)", () => {
+    const a = createHash("sha256")
+      .update(JSON.stringify(simulate({ seed: 42, durationTicks: 10000 })))
+      .digest("hex");
+    const b = createHash("sha256")
+      .update(JSON.stringify(simulate({ seed: 42, durationTicks: 10000 })))
+      .digest("hex");
+    expect(b).toBe(a);
+    expect(a).toBe(LONG_RUN_GOLDEN_SHA256);
+  });
+});
+
+/**
+ * Plan 19-08 Task D — explicit same-tick TIE-BREAK TUPLE assertion (folded from
+ * p19-r2). The consult requires a deterministic same-timestamp order via a stable
+ * secondary key. The engine orders the EventQueue by `(fireTick, insertionSeq)`,
+ * so events sharing an `occurredAt` are emitted in a stable, reproducible order.
+ * We assert the FULL ordered `(occurredAt | type | streamId)` tuple sequence is
+ * byte-identical across two runs — a direct witness that the tie-break is total
+ * and stable (never Map/Set iteration or async order).
+ */
+describe("same-tick tie-break tuple is deterministic (Task D)", () => {
+  const TIE_OPTS = { seed: 1234, durationTicks: 4000 } as const;
+
+  function tupleSeq(stream: ReturnType<typeof simulate>): string[] {
+    return stream.map((e) => `${e.occurredAt}|${e.event.type}|${e.streamId}`);
+  }
+
+  it("the ordered (occurredAt|type|streamId) tuple sequence is byte-identical across runs", () => {
+    const a = tupleSeq(simulate(TIE_OPTS));
+    const b = tupleSeq(simulate({ ...TIE_OPTS }));
+    expect(b).toEqual(a);
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+
+  it("there genuinely ARE multiple events sharing a tick (the tie-break matters)", () => {
+    const stream = simulate(TIE_OPTS);
+    // Group by occurredAt; at least one instant carries > 1 event (the bootstrap
+    // fires all HubRegistered + RouteRegistered at the epoch instant).
+    const byInstant = new Map<string, number>();
+    for (const e of stream) byInstant.set(e.occurredAt, (byInstant.get(e.occurredAt) ?? 0) + 1);
+    const maxPerInstant = Math.max(...byInstant.values());
+    expect(maxPerInstant).toBeGreaterThan(1);
+  });
 });
 
 /**

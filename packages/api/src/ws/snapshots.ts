@@ -8,6 +8,7 @@ import {
   readOpenExceptions,
 } from "@mm/projections";
 import { assertNever, type Severity } from "@mm/domain";
+import { EPOCH_MS } from "@mm/simulation";
 import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
 import {
@@ -656,8 +657,8 @@ const WS_CONNECTING = 0; // ws.CONNECTING
  */
 export const BACKPRESSURE_BYTES = 256 * 1024;
 
-/** Sim-clock epoch — MUST match the engine's `EPOCH_ISO`. */
-const EPOCH_MS = Date.parse("2026-04-01T00:00:00.000Z");
+// Plan 19-08 Task D: `EPOCH_MS` is imported from `@mm/simulation` (the SINGLE
+// source of truth) — no duplicated `"2026-04-01…"` literal that could drift.
 /** Milliseconds per sim day. */
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

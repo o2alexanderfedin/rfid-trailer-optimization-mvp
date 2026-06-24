@@ -40,6 +40,7 @@ import {
   routeId,
 } from "./network/routes.js";
 import { makeRng, makeRngFromState, type Rng } from "./rng.js";
+import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
 import {
   isContinuation,
   type SerializedHosClock,
@@ -262,10 +263,9 @@ export interface RunSimulationOptions extends SimulateOptions {
 
 // --- Simulation constants (declarative; the network is fixed for Phase 1) ----
 
-/** Domain ms per tick. 1 tick = 1 minute of simulated time. */
-const MS_PER_TICK = 60_000;
-/** The seeded domain epoch — the clock starts here; no wall-clock read. */
-const EPOCH_ISO = "2026-04-01T00:00:00.000Z";
+// Plan 19-08 Task D: `MS_PER_TICK` + `EPOCH_ISO` are the SINGLE source of truth
+// in `./epoch.js`; every consumer (engine clock, ws simDay/simMs, tests) imports
+// them so the literal can never drift across packages.
 
 /** Ticks between successive package-creation batches at the center hub. */
 const PACKAGE_INTERVAL_TICKS = 15;

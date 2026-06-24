@@ -29,6 +29,8 @@ export type { RoadLeg, RoadGeometryFile } from "./network/routes.js";
 // --- SIM-02: deterministic primitives ---------------------------------------
 export type { Rng } from "./rng.js";
 export { makeRng, makeRngFromState } from "./rng.js";
+// Plan 19-08 Task D: the SINGLE-SOURCE epoch constants (no duplicated literals).
+export { EPOCH_ISO, EPOCH_MS, MS_PER_TICK } from "./epoch.js";
 export { VirtualClock } from "./clock.js";
 export type { LogNormalParams, TimingConfig } from "./timing.js";
 export { sampleLogNormal, DEFAULT_TIMING_CONFIG } from "./timing.js";
