@@ -25,10 +25,6 @@ interface LruMapCtor {
 let LruMap: LruMapCtor;
 
 beforeAll(async () => {
-  // Wave 0: the module does not exist until plan-06 creates it. Suppress the
-  // resolve error so `pnpm typecheck` stays green; the runtime import rejects
-  // (cannot find module) — the intended RED until plan-06.
-  // @ts-expect-error -- ../src/optimizer/lru-map.js is created in plan-06
   const mod = (await import("../src/optimizer/lru-map.js")) as {
     LruMap: LruMapCtor;
   };

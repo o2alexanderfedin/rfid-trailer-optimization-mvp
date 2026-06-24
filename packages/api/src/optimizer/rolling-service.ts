@@ -10,6 +10,7 @@ import {
   type EpochResult,
   type ObjectiveWeights,
 } from "@mm/optimizer";
+import { LruMap } from "./lru-map.js";
 
 /**
  * `@mm/api` — `RollingOptimizerService`: the ONLY stateful, side-effecting part
@@ -83,8 +84,14 @@ export class RollingOptimizerService {
   private readonly weights: ObjectiveWeights;
   /** The epoch compute transport (inline by default; worker when injected). */
   private readonly runEpochFn: RunEpochFn;
-  /** `${epochId}:${scopeHash}` → the committed result (idempotency memo). */
-  private readonly memo = new Map<string, EpochResult>();
+  /**
+   * `${epochId}:${scopeHash}` → the committed result (idempotency memo).
+   * CONT-04c: an {@link LruMap} (cap 500) bounds this for a continuous run so it
+   * cannot grow without bound — `epochId` derives from `simMs` (changing every
+   * tick), so re-submitted identical epochs are rare and eviction mostly affects
+   * stale old epochs. Drop-in for the prior `Map` (same get/set/size surface).
+   */
+  private readonly memo = new LruMap<string, EpochResult>(500);
   /** The most recent epoch result (what the API endpoint surfaces). */
   private latest: EpochResult | null = null;
   /**
@@ -110,6 +117,15 @@ export class RollingOptimizerService {
    */
   latestResult(): EpochResult | null {
     return this.latestNonEmpty ?? this.latest;
+  }
+
+  /**
+   * CONT-04c: the current idempotency-memo entry count — a clean testability
+   * surface (no functional impact) that lets a unit test assert the memo stays
+   * bounded (≤ 500) over many runs. Never exceeds the LruMap cap.
+   */
+  memoSize(): number {
+    return this.memo.size;
   }
 
   /**

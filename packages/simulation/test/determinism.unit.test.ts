@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateEvent } from "@mm/domain";
-import { simulate, type SimulateOptions } from "../src/engine.js";
+import { simulate } from "../src/engine.js";
 
 /**
  * SIM-02 — THE DETERMINISM KEYSTONE.
@@ -152,10 +152,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
 
   it("explicit runUntilStopped: false is byte-identical to the flag being absent", () => {
     const absent = simulate(FLAGS_OFF_OPTS);
-    const explicitFalse = simulate({
-      ...FLAGS_OFF_OPTS,
-      runUntilStopped: false,
-    } as SimulateOptions & { runUntilStopped?: boolean });
+    const explicitFalse = simulate({ ...FLAGS_OFF_OPTS, runUntilStopped: false });
     expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
 });

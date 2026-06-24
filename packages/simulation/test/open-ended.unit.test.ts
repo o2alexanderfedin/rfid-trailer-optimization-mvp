@@ -1,33 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { simulate, type SimulateOptions, type SimulatedEvent } from "../src/engine.js";
+import { simulate, type SimulatedEvent } from "../src/engine.js";
 
 /**
  * Phase 19 CONT-01/02/DET-01 — open-ended engine tests.
  *
- * Wave 0 stubs: some of these are RED until plan-02 implements `runUntilStopped`
- * + the streaming `onEvent` callback on `SimulateOptions`. Three of them verify
- * already-correct behaviour and PASS immediately:
+ * Covers the `runUntilStopped` + streaming `onEvent` + cooperative `stop`
+ * surface (plan-02), plus two verifications of already-correct behaviour:
  *   - the flags-off finite path is byte-identical (DET-01 regression baseline),
  *   - the `EventQueue` same-tick tie-break is deterministic (VQ#2 verification).
- *
- * The `runUntilStopped`-flag tests are cast through a widened option type so the
- * file COMPILES before plan-02 lands; they fail at RUNTIME (the flag has no
- * effect yet) rather than at the TypeScript boundary — the intended RED signal.
  */
 
 // A small horizon — long enough that several package batches and a couple of
 // departures fire, short enough to keep the open-ended assertions cheap.
 const SHORT_OPTS = { seed: 42, durationTicks: 500 } as const;
-
-/**
- * Widen `SimulateOptions` with the Phase-19 fields plan-02 adds so the stub file
- * type-checks today. Once plan-02 lands these become real fields and the cast is
- * a no-op (still type-safe).
- */
-type OpenEndedOptions = SimulateOptions & {
-  readonly runUntilStopped?: boolean;
-  readonly onEvent?: (event: SimulatedEvent) => void;
-};
 
 /** Highest tick (occurredAt minutes since epoch) present in a stream. */
 function maxTick(stream: readonly SimulatedEvent[]): number {
@@ -44,18 +29,15 @@ function maxTick(stream: readonly SimulatedEvent[]): number {
 describe("open-ended loop (CONT-01)", () => {
   it("runUntilStopped: false with finite durationTicks produces same stream as simulate() (DET-01 regression)", () => {
     const a = simulate(SHORT_OPTS);
-    const b = simulate({ ...SHORT_OPTS, runUntilStopped: false } as OpenEndedOptions);
+    const b = simulate({ ...SHORT_OPTS, runUntilStopped: false });
     expect(JSON.stringify(b)).toBe(JSON.stringify(a));
   });
 
   it("runUntilStopped: true with an onEvent stop-after-N callback terminates the loop", () => {
-    // RED until plan-02: with the flag unimplemented, the engine ignores
-    // runUntilStopped + onEvent and accumulates into out[] (finite path), so the
-    // collected count will be the finite-stream length, not the capped N.
     const collected: SimulatedEvent[] = [];
     const CAP = 200;
     let stopped = false;
-    const opts: OpenEndedOptions = {
+    simulate({
       seed: 42,
       durationTicks: 100,
       runUntilStopped: true,
@@ -65,8 +47,7 @@ describe("open-ended loop (CONT-01)", () => {
         if (collected.length >= CAP) stopped = true;
       },
       stop: () => stopped,
-    } as OpenEndedOptions & { stop?: () => boolean };
-    simulate(opts);
+    });
     // The onEvent path must have received events (streaming) and the loop must
     // have honoured the stop signal — terminating at/near the cap, NOT running
     // the (much larger) finite stream into out[].
@@ -81,27 +62,19 @@ describe("self-rescheduling past durationTicks (CONT-02)", () => {
     const collected: SimulatedEvent[] = [];
     let stopped = false;
     const STOP_TICK = original * 3;
-    const opts = {
+    // Drive a clock-bound stop: flip `stopped` once an event past 3× the
+    // original horizon is observed (proves generation continued past the ceiling).
+    simulate({
       seed: 42,
       durationTicks: original,
       runUntilStopped: true,
-      onEvent: (ev: SimulatedEvent) => {
-        if (stopped) return;
-        collected.push(ev);
-      },
-      stop: () => stopped,
-    } as OpenEndedOptions & { stop?: () => boolean };
-    // Drive a clock-bound stop via a wrapper that flips `stopped` once we observe
-    // an event past 3× the original horizon.
-    const wrapped = {
-      ...opts,
-      onEvent: (ev: SimulatedEvent) => {
+      onEvent: (ev) => {
         if (stopped) return;
         collected.push(ev);
         if (maxTick([ev]) > STOP_TICK) stopped = true;
       },
-    } as OpenEndedOptions & { stop?: () => boolean };
-    simulate(wrapped);
+      stop: () => stopped,
+    });
     // PackageCreated events must exist PAST the original durationTicks ceiling.
     const created = collected.filter((e) => e.event.type === "PackageCreated");
     expect(created.length).toBeGreaterThan(0);
@@ -113,18 +86,17 @@ describe("self-rescheduling past durationTicks (CONT-02)", () => {
     const collected: SimulatedEvent[] = [];
     let stopped = false;
     const STOP_TICK = original * 6;
-    const opts = {
+    simulate({
       seed: 42,
       durationTicks: original,
       runUntilStopped: true,
-      onEvent: (ev: SimulatedEvent) => {
+      onEvent: (ev) => {
         if (stopped) return;
         collected.push(ev);
         if (maxTick([ev]) > STOP_TICK) stopped = true;
       },
       stop: () => stopped,
-    } as OpenEndedOptions & { stop?: () => boolean };
-    simulate(opts);
+    });
     const departed = collected.filter((e) => e.event.type === "TrailerDeparted");
     // At least one departure must occur PAST the original durationTicks ceiling —
     // proving arriveTrailer keeps self-scheduling in open-ended mode.
