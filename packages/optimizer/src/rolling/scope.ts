@@ -61,11 +61,11 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
-    // SP2 stop events are SCOPE-NEUTRAL: a rest/refuel never re-scopes the
-    // optimizer (the planner reacts to dispatch/arrival, not the mid-leg stop), so
-    // an absent-fuelConfig epoch stays byte-identical to the pre-SP2 result.
     case "TruckRested":
     case "TruckRefueled":
+      // SP2 stop events (TruckRested/TruckRefueled) are SCOPE-NEUTRAL too — a
+      // rest/refuel never re-scopes the optimizer, so an absent-fuelConfig epoch
+      // stays byte-identical to the pre-SP2 result.
       return [];
     default: {
       // Exhaustiveness guard — a new event type must be classified here.

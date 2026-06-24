@@ -3,7 +3,7 @@ import type { Database } from "@mm/event-store";
 import { readAll } from "@mm/event-store";
 import type { OccurredEvent, ProjectionDb } from "@mm/projections";
 import { emptyTrailerFuelState, getTrailerMiles, trailerFuelReducer } from "@mm/projections";
-import type { DomainEvent, Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
+import type { Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
 import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes, haversineKm } from "@mm/domain";
 import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
@@ -97,7 +97,7 @@ async function computeMilesSinceRefuel(db: SnapshotDb): Promise<Map<string, numb
   const stored = await readAll(es, 0n);
   let state = emptyTrailerFuelState;
   for (const s of stored) {
-    const occurred: OccurredEvent = { event: s.event as DomainEvent, occurredAt: s.occurredAt };
+    const occurred: OccurredEvent = { event: s.event, occurredAt: s.occurredAt };
     state = trailerFuelReducer(state, occurred);
   }
   const out = new Map<string, number>();

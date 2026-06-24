@@ -214,7 +214,6 @@ export function auditTimelineReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
-    // SP2 stop events are map-viz only (geo-track) — not audit-timeline rows.
     case "TruckRested":
     case "TruckRefueled":
       return null;
