@@ -25,6 +25,7 @@ export type {
   UnloadCompleted,
   TruckRested,
   TruckRefueled,
+  PackageInducted,
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
@@ -53,4 +54,5 @@ export {
   unloadCompletedSchema,
   truckRestedSchema,
   truckRefueledSchema,
+  packageInductedSchema,
 } from "./schemas.js";

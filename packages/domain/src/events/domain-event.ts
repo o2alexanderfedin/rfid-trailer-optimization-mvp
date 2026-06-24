@@ -9,6 +9,7 @@ import type {
   missedUnloadDetectedSchema,
   packageArrivedAtHubSchema,
   packageCreatedSchema,
+  packageInductedSchema,
   packageScannedSchema,
   planAcceptedSchema,
   planGeneratedSchema,
@@ -131,6 +132,17 @@ export type TruckRested = z.infer<typeof truckRestedSchema>;
  */
 export type TruckRefueled = z.infer<typeof truckRefueledSchema>;
 
+// --- v2.0 external induction (IND-01) ---------------------------------------
+
+/**
+ * Freight entered the network from outside at a spoke hub (IND-01 / v2.0).
+ * COEXISTS with `PackageCreated` (internal center-origin spawn). `slaDeadlineIso`
+ * is locked at induction; `externalOriginRef` is a deterministic counter id. The
+ * optimizer reads inducted packages via the `hub_inventory` projection's
+ * `inbound` bucket (Decision 3).
+ */
+export type PackageInducted = z.infer<typeof packageInductedSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -162,7 +174,9 @@ export type DomainEvent =
   | UnloadCompleted
   // SP2 visible rest/fuel stop events (spec §4).
   | TruckRested
-  | TruckRefueled;
+  | TruckRefueled
+  // v2.0 external induction (IND-01).
+  | PackageInducted;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];
