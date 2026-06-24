@@ -104,6 +104,22 @@ export interface SimulatedEvent {
   readonly occurredAt: string;
 }
 
+/**
+ * CONT-05 (P2): sort-wave / cut-off cadence config. When supplied on
+ * {@link SimulateOptions.sortWave}, freight is created in burst-quiet-burst
+ * windows (a "sort wave") rather than a steady trickle — observable on the live
+ * map as departure surges. The window is PURE modular arithmetic on the
+ * deterministic tick clock (no RNG salt), so it is fully reproducible.
+ */
+export interface SortWaveConfig {
+  /** Ticks at the START of each cycle during which packages ARE created (burst). */
+  readonly burstWindowTicks: number;
+  /** Ticks after the burst during which NO packages are created (quiet). */
+  readonly quietWindowTicks: number;
+  /** Packages created per batch tick while inside the burst window. */
+  readonly burstPackagesPerBatch: number;
+}
+
 /** Options for the pure generator. */
 export interface SimulateOptions {
   /** PRNG seed — same seed yields a byte-identical stream. */
@@ -217,6 +233,16 @@ export interface SimulateOptions {
    * the finite path (absent/false `runUntilStopped`), so it never affects goldens.
    */
   readonly stop?: () => boolean;
+  /**
+   * CONT-05 (P2): when present, freight departs in burst-quiet-burst windows
+   * rather than a steady trickle — observable on the live map as departure
+   * surges. **OFF BY DEFAULT (absent)** — the determinism keystone: when absent,
+   * the burst-gate is never entered and the package-batch schedule + RNG draws are
+   * EXACTLY the pre-CONT-05 behaviour, so every golden stays byte-identical
+   * (DET-01/DET-02). The cadence is pure modular arithmetic on the deterministic
+   * tick clock (no RNG salt) — fully reproducible per seed when enabled.
+   */
+  readonly sortWave?: SortWaveConfig;
 }
 
 /** Options for the store-driven run. */
@@ -728,7 +754,29 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   for (const s of spokes) pendingBySpoke.set(s.hubId, []);
 
   const createPackageBatch = (tick: number): void => {
-    const count = 1 + rng.int(maxPackagesPerBatch); // 1..(MAX × fleetPerSpoke)
+    // CONT-05 (P2): sort-wave burst-quiet gate. ENTERED ONLY when `sortWave` is
+    // present — so an absent config leaves the original code path (and RNG draw)
+    // EXACTLY as before (byte-identical goldens, DET-01/DET-02). When present:
+    // during the QUIET window create nothing (no draw, no events); during the
+    // BURST window create exactly `burstPackagesPerBatch`. The window is pure
+    // modular arithmetic on the deterministic tick (no RNG salt).
+    let count: number;
+    if (opts.sortWave !== undefined) {
+      const period =
+        opts.sortWave.burstWindowTicks + opts.sortWave.quietWindowTicks;
+      const cycle = period > 0 ? tick % period : 0;
+      if (cycle >= opts.sortWave.burstWindowTicks) {
+        // Quiet window — emit nothing, but keep self-rescheduling (below).
+        const nextTick = tick + PACKAGE_INTERVAL_TICKS;
+        if (opts.runUntilStopped === true || nextTick <= durationTicks) {
+          schedule(nextTick, () => createPackageBatch(nextTick));
+        }
+        return;
+      }
+      count = opts.sortWave.burstPackagesPerBatch;
+    } else {
+      count = 1 + rng.int(maxPackagesPerBatch); // 1..(MAX × fleetPerSpoke)
+    }
     for (let i = 0; i < count; i += 1) {
       packageCounter += 1;
       const packageId = `P${String(packageCounter).padStart(5, "0")}`;

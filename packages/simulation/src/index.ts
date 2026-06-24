@@ -38,6 +38,7 @@ export type {
   SimulatedEvent,
   SimulateOptions,
   RunSimulationOptions,
+  SortWaveConfig,
 } from "./engine.js";
 export { simulate, runSimulation } from "./engine.js";
 

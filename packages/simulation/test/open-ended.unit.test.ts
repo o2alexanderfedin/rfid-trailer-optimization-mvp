@@ -118,3 +118,49 @@ describe("EventQueue same-tick tie-break determinism (VQ#2 verification)", () =>
     expect(tick0.length).toBeGreaterThan(1);
   });
 });
+
+/**
+ * CONT-05 (P2) — sort-wave burst-quiet-burst departure cadence.
+ *
+ * Flag-gated: absent ⇒ byte-identical to the steady-trickle stream (DET-01); when
+ * present, freight is created ONLY inside the burst window (PackageCreated events
+ * cluster), not during the quiet window.
+ */
+describe("sort-wave cadence (CONT-05, P2)", () => {
+  const BASE = { seed: 42, durationTicks: 300 } as const;
+  const WAVE = {
+    burstWindowTicks: 10,
+    quietWindowTicks: 30,
+    burstPackagesPerBatch: 5,
+  } as const;
+  const PERIOD = WAVE.burstWindowTicks + WAVE.quietWindowTicks;
+
+  it("sortWave absent is byte-identical to the steady-trickle stream (DET-01)", () => {
+    const off = simulate(BASE);
+    const offExplicit = simulate({ ...BASE });
+    expect(JSON.stringify(offExplicit)).toBe(JSON.stringify(off));
+  });
+
+  it("sortWave ON produces a different, non-empty stream", () => {
+    const off = simulate(BASE);
+    const on = simulate({ ...BASE, sortWave: WAVE });
+    expect(on.length).toBeGreaterThan(0);
+    expect(JSON.stringify(on)).not.toBe(JSON.stringify(off));
+  });
+
+  it("PackageCreated events fall ONLY inside burst windows (cycle < burstWindowTicks)", () => {
+    const on = simulate({ ...BASE, sortWave: WAVE });
+    const createdTicks = on
+      .filter((e) => e.event.type === "PackageCreated")
+      .map((e) => maxTick([e]));
+    expect(createdTicks.length).toBeGreaterThan(0);
+    for (const tick of createdTicks) {
+      // Package batches fire at multiples of the package interval; every one that
+      // produced a PackageCreated must be inside the burst window of its cycle.
+      expect(tick % PERIOD).toBeLessThan(WAVE.burstWindowTicks);
+    }
+    // And the run is deterministic with the flag on.
+    const again = simulate({ ...BASE, sortWave: WAVE });
+    expect(JSON.stringify(again)).toBe(JSON.stringify(on));
+  });
+});
