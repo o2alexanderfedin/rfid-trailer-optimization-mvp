@@ -22,16 +22,16 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 
 ### Continuous operation (CONT)
 
-- [ ] **CONT-01**: The simulation runs **open-ended** (no fixed horizon), advancing until explicitly stopped via a stop-signal. The existing finite `durationTicks` path is preserved unchanged so all golden tests stay byte-identical.
-- [ ] **CONT-02**: Freight generation **sustains indefinitely across multiple day/cycle periods** (self-rescheduling triggers), not a one-shot finite batch.
-- [ ] **CONT-03**: A **sim-day / cycle counter** is exposed in the ws state diff and shown in the operator UI, so the viewer can see continuous multi-period operation.
-- [ ] **CONT-04**: Sustained operation stays **bounded end-to-end** (RAM *and* storage) — (a) the engine is **resumable** via explicit continuation state so the open-ended driver advances by chunks without regenerating the prefix (bounded working set, no O(n²) regen); (b) catch-up projection rebuild uses a watermark checkpoint; (c) the ws send path applies backpressure (`bufferedAmount` guard); (d) the optimizer idempotency map is bounded (LRU eviction); (e) **bounded persisted retention on the opt-in continuous path** — the event log is pruned below the projection watermark and stale projection rows are aged out, so a continuous run does not store all simulation data indefinitely. **Finite/test paths keep the full log → goldens replay-from-0 byte-identical.** The process can run indefinitely without unbounded growth in memory or storage.
-- [ ] **CONT-05** *(P2)*: Freight departs in a **sort-wave / cut-off rhythm** (burst-quiet-burst cadence) rather than a steady trickle, mirroring real sort windows.
+- [x] **CONT-01**: The simulation runs **open-ended** (no fixed horizon), advancing until explicitly stopped via a stop-signal. The existing finite `durationTicks` path is preserved unchanged so all golden tests stay byte-identical.
+- [x] **CONT-02**: Freight generation **sustains indefinitely across multiple day/cycle periods** (self-rescheduling triggers), not a one-shot finite batch.
+- [x] **CONT-03**: A **sim-day / cycle counter** is exposed in the ws state diff and shown in the operator UI, so the viewer can see continuous multi-period operation.
+- [x] **CONT-04**: Sustained operation stays **bounded end-to-end** (RAM *and* storage) — (a) the engine is **resumable** via explicit continuation state so the open-ended driver advances by chunks without regenerating the prefix (bounded working set, no O(n²) regen); (b) catch-up projection rebuild uses a watermark checkpoint; (c) the ws send path applies backpressure (`bufferedAmount` guard); (d) the optimizer idempotency map is bounded (LRU eviction); (e) **bounded persisted retention on the opt-in continuous path** — the event log is pruned below the projection watermark and stale projection rows are aged out, so a continuous run does not store all simulation data indefinitely. **Finite/test paths keep the full log → goldens replay-from-0 byte-identical.** The process can run indefinitely without unbounded growth in memory or storage.
+- [x] **CONT-05** *(P2)*: Freight departs in a **sort-wave / cut-off rhythm** (burst-quiet-burst cadence) rather than a steady trickle, mirroring real sort windows.
 
 ### Determinism keystone (DET)
 
-- [ ] **DET-01**: **Every v2.0 feature is opt-in** behind a flag (`runUntilStopped`, `inductionEnabled`, `consolidationEnabled`, `outboundDeliveryEnabled`). With all flags off, the existing seed-42 golden replay is **byte-identical** to pre-v2.0. Enforced as an acceptance gate in every v2.0 phase.
-- [ ] **DET-02**: **Long-run determinism** — a 10,000-tick seeded run (`simulate({ seed: 42, durationTicks: 10000 })`) produces a byte-identical event hash, verified cross-architecture (x86 + ARM). If hashes diverge, the log-normal sampler is replaced with an integer lookup table.
+- [x] **DET-01**: **Every v2.0 feature is opt-in** behind a flag (`runUntilStopped`, `inductionEnabled`, `consolidationEnabled`, `outboundDeliveryEnabled`). With all flags off, the existing seed-42 golden replay is **byte-identical** to pre-v2.0. Enforced as an acceptance gate in every v2.0 phase.
+- [x] **DET-02**: **Long-run determinism** — a 10,000-tick seeded run (`simulate({ seed: 42, durationTicks: 10000 })`) produces a byte-identical event hash, verified cross-architecture (x86 + ARM). If hashes diverge, the log-normal sampler is replaced with an integer lookup table.
 
 ### External induction (IND)
 
@@ -102,13 +102,13 @@ Phase mapping confirmed by roadmapper 2026-06-24. Continues numbering from v1.2'
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONT-01 | Phase 19 | Pending |
-| CONT-02 | Phase 19 | Pending |
-| CONT-03 | Phase 19 | Pending |
-| CONT-04 | Phase 19 | Pending |
-| CONT-05 (P2) | Phase 19 | Pending |
-| DET-01 | Phase 19 | Pending |
-| DET-02 | Phase 19 | Pending |
+| CONT-01 | Phase 19 | Complete |
+| CONT-02 | Phase 19 | Complete |
+| CONT-03 | Phase 19 | Complete |
+| CONT-04 | Phase 19 | Complete |
+| CONT-05 (P2) | Phase 19 | Complete |
+| DET-01 | Phase 19 | Complete |
+| DET-02 | Phase 19 | Complete |
 | IND-01 | Phase 20 | Pending |
 | IND-02 | Phase 20 | Pending |
 | IND-03 | Phase 20 | Pending |
