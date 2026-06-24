@@ -98,7 +98,7 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Proposed phase mapping (continues numbering from v1.2's Phase 18). Confirmed/adjusted by the roadmapper in Step 10.
+Phase mapping confirmed by roadmapper 2026-06-24. Continues numbering from v1.2's Phase 18.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
@@ -133,4 +133,4 @@ Proposed phase mapping (continues numbering from v1.2's Phase 18). Confirmed/adj
 
 ---
 *Requirements defined: 2026-06-24*
-*Last updated: 2026-06-24 after initial v2.0 definition (research-first, design decisions resolved)*
+*Last updated: 2026-06-24 — traceability confirmed by roadmapper (phases 19–22)*
