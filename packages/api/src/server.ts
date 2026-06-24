@@ -3,6 +3,7 @@ import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import fastifyWebsocket from "@fastify/websocket";
 import type { TimingConfig } from "@mm/simulation";
+import type { FuelConfig } from "@mm/domain";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
@@ -80,6 +81,15 @@ export interface ServerDeps {
    * terminated by `app.close()` via an `onClose` hook.
    */
   readonly optimizerExecution?: "inline" | "worker";
+  /**
+   * SP2 (spec §7) — OPTIONAL fuel config forwarded into the live `RollingLoop` so
+   * the optimizer is FUEL-AWARE on the live path (it folds the expected refuel time
+   * into leg timing when a planned route crosses the threshold). Absent OR disabled
+   * ⇒ no refuel time is folded — byte-identical to the pre-SP2 plan. The demo
+   * (`main.ts`) passes `{ ...DEFAULT_FUEL_CONFIG, enabled: FUEL_ENABLED }` so the
+   * optimizer's view matches the fuel the sim emits.
+   */
+  readonly fuelConfig?: FuelConfig;
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -172,6 +182,9 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
     service: optimizer,
     buildSnapshot: () => buildTwinSnapshot(snapshotDb),
     freezeWindowMin: 15,
+    // SP2: forward the fuel config so the live optimizer is fuel-aware (omitted
+    // when absent ⇒ byte-identical to the pre-SP2 plan).
+    ...(deps.fuelConfig !== undefined ? { fuelConfig: deps.fuelConfig } : {}),
   });
 
   // ONE SpeedController seeded from the env default tick interval (1× by
