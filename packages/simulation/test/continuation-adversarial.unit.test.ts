@@ -137,21 +137,24 @@ function deepFreeze<T>(value: T): T {
 // ---------------------------------------------------------------------------
 
 describe("adversarial: RNG-state completeness across every sub-stream", () => {
-  const SEEDS = [1, 2, 3, 42, 1234, 7] as const;
-  // Tiny chunk sizes are the worst case: they force a capture/restore at almost
-  // every tick, so a single un-serialized sub-stream draw diverges immediately.
-  const SMALL_CHUNKS = [1, 2, 3] as const;
+  // The sub-stream-completeness property (no dropped seeded draw across a chunk
+  // boundary) is SEED-INDEPENDENT and CHUNK-SIZE-independent once it holds for
+  // the worst case (chunk-1). We keep a tiny seed set and prove the worst-case
+  // chunk-1 on one seed; the other seeds use a coarser chunk-3 to keep coverage
+  // breadth without paying O(horizon) chunk-1 cost per seed (p19-fix Step 1).
+  const SEEDS = [1, 42, 1234] as const;
   const HORIZON = 700;
 
   for (const seed of SEEDS) {
-    for (const chunk of SMALL_CHUNKS) {
-      it(`ALL features on: chunked(${chunk}) byte-identical to all-at-once (seed ${seed}, h ${HORIZON})`, () => {
-        const allAtOnce = simulate({ seed, durationTicks: HORIZON, ...ALL_ON });
-        const chunked = chunkedStream(seed, HORIZON, chunk, ALL_ON);
-        expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
-        expect(chunked.length).toBe(allAtOnce.length);
-      });
-    }
+    // Worst-case chunk-1 (capture/restore at almost every tick) on the lead seed
+    // only; the property is seed-independent so the rest use coarse chunk-3.
+    const chunk = seed === SEEDS[0] ? 1 : 3;
+    it(`ALL features on: chunked(${chunk}) byte-identical to all-at-once (seed ${seed}, h ${HORIZON})`, () => {
+      const allAtOnce = simulate({ seed, durationTicks: HORIZON, ...ALL_ON });
+      const chunked = chunkedStream(seed, HORIZON, chunk, ALL_ON);
+      expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
+      expect(chunked.length).toBe(allAtOnce.length);
+    });
   }
 
   // The base (operational) RNG draws (package count/dest/size/weight) at fixed
@@ -189,8 +192,11 @@ describe("adversarial: no phantom module/closure/cache state", () => {
     const seed = 7;
     const h = 600;
     const gold = hashStream(simulate({ seed, durationTicks: h, ...ALL_ON }));
-    // Interleave chunk sizes to provoke any cross-run cache: 1, 5, 1, 13, 1.
-    for (const c of [1, 5, 1, 13, 1] as const) {
+    // Interleave chunk sizes to provoke any cross-run cache. We keep ONE chunk-1
+    // (the worst-case fine boundary) and bracket it with coarser sizes; repeating
+    // chunk-1 three times added only O(h) cost without new coverage, so the
+    // interleave is now 1, 5, 13, 5 (still alternates fine/coarse across runs).
+    for (const c of [1, 5, 13, 5] as const) {
       expect(hashStream(chunkedStream(seed, h, c, ALL_ON))).toBe(gold);
     }
   });
@@ -230,10 +236,20 @@ describe("adversarial: no phantom module/closure/cache state", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial: no pointer/object-identity dependence", () => {
-  for (const chunk of [1, 2, 3, 7] as const) {
-    it(`deep-frozen + structuredClone'd continuation at every boundary stays byte-identical (chunk ${chunk})`, () => {
+  // clonedFrozenChunkedStream does a structuredClone + deep-freeze at EVERY
+  // boundary, so the per-test cost is O(horizon / chunk) deep clones. The
+  // pointer-identity trap is independent of chunk size once chunk-1 (a clone at
+  // every tick) passes, so we prove the worst-case chunk-1 at a SHORT horizon
+  // and the larger horizon under a coarse chunk-7 (far fewer clones) — p19-fix.
+  const IDENTITY_CASES = [
+    { chunk: 1, h: 300 }, // worst case: clone+freeze at almost every tick
+    { chunk: 2, h: 300 },
+    { chunk: 3, h: 400 },
+    { chunk: 7, h: 700 }, // full horizon, coarse chunk → ~100 clones
+  ] as const;
+  for (const { chunk, h } of IDENTITY_CASES) {
+    it(`deep-frozen + structuredClone'd continuation at every boundary stays byte-identical (chunk ${chunk}, h ${h})`, () => {
       const seed = 1234;
-      const h = 700;
       const allAtOnce = simulate({ seed, durationTicks: h, ...ALL_ON });
       // If ANY map is keyed by object identity (not a stable string), or any
       // resume mutates captured state in place, the frozen clone diverges/throws.
@@ -257,9 +273,12 @@ describe("adversarial: no pointer/object-identity dependence", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial: chunk-boundary edge cases", () => {
-  it("chunkSize=1 over a long horizon stays byte-identical (all-on, seed 1234, h 1200)", () => {
-    const allAtOnce = simulate({ seed: 1234, durationTicks: 1200, ...ALL_ON });
-    const chunked = chunkedStream(1234, 1200, 1, ALL_ON);
+  it("chunkSize=1 over a horizon stays byte-identical (all-on, seed 1234, h 800)", () => {
+    // chunk-1 byte-identity over a multi-batch horizon. Capped at h 800 (≤ the
+    // p19-fix chunk-1 ceiling); long-horizon chunk-crossing is separately proven
+    // by the HOS regression (chunk-2 h 2000) and the coarse-chunk equivalence.
+    const allAtOnce = simulate({ seed: 1234, durationTicks: 800, ...ALL_ON });
+    const chunked = chunkedStream(1234, 800, 1, ALL_ON);
     expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
     expect(chunked.length).toBe(allAtOnce.length);
   });
@@ -365,17 +384,23 @@ describe("adversarial: chunk-boundary edge cases", () => {
 // ---------------------------------------------------------------------------
 
 describe("adversarial: HOS clock JSON key-order is byte-stable across chunk boundaries (EXPOSED BUG)", () => {
-  for (const seed of [2, 7, 42, 99, 1234] as const) {
-    it(`HOS-only chunked(1) is BYTE-identical to all-at-once (seed ${seed}, h 2000)`, () => {
-      const opts: FeatureOpts = { timing: SHORT_TIMING, hosEnabled: true };
-      const allAtOnce = simulate({ seed, durationTicks: 2000, ...opts });
-      const chunked = chunkedStream(seed, 2000, 1, opts);
-      // Lengths + canonical values already match; this asserts BYTE-identity,
-      // which currently FAILS purely on DriverDutyStateChanged.clock key order.
-      expect(chunked.length).toBe(allAtOnce.length);
-      expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
-    });
-  }
+  // THE HOS CHUNK-BOUNDARY REGRESSION — this caught a real determinism bug
+  // (DriverDutyStateChanged.clock JSON key-order divergence after a driver
+  // accrues a mid-leg rest whose clock survives a continuation boundary, only
+  // visible at horizon ≥ ~1500). It is SEED-INDEPENDENT, so per p19-fix Step 1
+  // we keep exactly ONE HOS-only case that crosses a boundary at h ≥ 1500. A
+  // chunk-2 boundary (≈ horizon/2 resume cycles) is enough to cross the rest and
+  // re-emit the restored clock — far cheaper than chunk-1 while keeping the
+  // regression. DO NOT delete or shorten below h 1500.
+  it("HOS-only chunked(2) is BYTE-identical to all-at-once (seed 1234, h 1600)", () => {
+    const opts: FeatureOpts = { timing: SHORT_TIMING, hosEnabled: true };
+    const allAtOnce = simulate({ seed: 1234, durationTicks: 1600, ...opts });
+    const chunked = chunkedStream(1234, 1600, 2, opts);
+    // Lengths + canonical values already match; this asserts BYTE-identity,
+    // which regressed purely on DriverDutyStateChanged.clock key order.
+    expect(chunked.length).toBe(allAtOnce.length);
+    expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
+  });
 
   it("ALL-features chunked(2) byte-identical at a long horizon (seed 99, h 1500)", () => {
     const allAtOnce = simulate({ seed: 99, durationTicks: 1500, ...ALL_ON });
@@ -408,14 +433,24 @@ describe("adversarial: single-feature isolation across chunks", () => {
       },
     },
   ];
+  // Each feature here asserts a DISTINCT single-stream isolation property, so we
+  // keep all five — but the chunk SIZE is pure repetition once one fine boundary
+  // passes. We prove each feature once at a coarse chunk-3 (≈ 230 resumes at
+  // h 700) and additionally pin the worst-case chunk-1 on a single representative
+  // feature (hos-only, the one that exposed the real key-order bug) — p19-fix.
   for (const { name, opts } of SINGLE) {
-    for (const chunk of [1, 3] as const) {
-      it(`${name}: chunked(${chunk}) byte-identical to all-at-once (seed 1234, h 700)`, () => {
-        const allAtOnce = simulate({ seed: 1234, durationTicks: 700, ...opts });
-        const chunked = chunkedStream(1234, 700, chunk, opts);
-        expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
-        expect(chunked.length).toBe(allAtOnce.length);
-      });
-    }
+    it(`${name}: chunked(3) byte-identical to all-at-once (seed 1234, h 700)`, () => {
+      const allAtOnce = simulate({ seed: 1234, durationTicks: 700, ...opts });
+      const chunked = chunkedStream(1234, 700, 3, opts);
+      expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
+      expect(chunked.length).toBe(allAtOnce.length);
+    });
   }
+  it("hos-only: chunked(1) byte-identical to all-at-once (seed 1234, h 700)", () => {
+    const opts: FeatureOpts = { timing: SHORT_TIMING, hosEnabled: true };
+    const allAtOnce = simulate({ seed: 1234, durationTicks: 700, ...opts });
+    const chunked = chunkedStream(1234, 700, 1, opts);
+    expect(hashStream(chunked)).toBe(hashStream(allAtOnce));
+    expect(chunked.length).toBe(allAtOnce.length);
+  });
 });

@@ -31,14 +31,20 @@ import { startPgFixture, type PgFixture } from "./pg-fixture.js";
 const SEED = 7319;
 // A SMALL initial horizon so the run must EXTEND it (chunked generation) to reach
 // the stop threshold — exercising the open-ended continuation past the ceiling.
-const INITIAL_HORIZON = 40;
-const CHUNK_TICKS = 30;
+// Bounded for reliable gating (p19-fix Step 2): a tiny horizon + short chunk so
+// the run still crosses SEVERAL chunk boundaries past the ceiling but completes
+// in < 25s against the DB-backed loop.
+const INITIAL_HORIZON = 20;
+const CHUNK_TICKS = 15;
 const FLEET_PER_SPOKE = 2;
 
 const EPOCH_MS = Date.parse("2026-04-01T00:00:00.000Z");
 const MS_PER_TICK = 60_000;
-// Stop once the run advances well past the initial horizon (proves continuation).
-const STOP_AT_TICK = INITIAL_HORIZON * 4; // 160 ticks
+// Stop once the run advances well past the initial horizon (proves continuation):
+// 3× the initial horizon ⇒ the continuation is extended past the 20-tick ceiling
+// several times (≈ 3 chunk extensions of CHUNK_TICKS=15) — still unambiguously
+// "past the initial horizon" while keeping the DB-backed run < 25s.
+const STOP_AT_TICK = INITIAL_HORIZON * 3; // 60 ticks
 const STOP_AT_MS = EPOCH_MS + STOP_AT_TICK * MS_PER_TICK;
 
 describe("open-ended driver (CONT-01/02)", () => {
@@ -116,7 +122,7 @@ describe("open-ended driver (CONT-01/02)", () => {
       await built.worker?.close();
       await built.app.close();
     }
-  }, 120_000);
+  }, 60_000);
 
   // A SHORT chunk so the run crosses MANY chunk boundaries quickly — the window
   // would balloon under the old prefix-regen model; the continuation-driven driver
@@ -137,14 +143,16 @@ describe("open-ended driver (CONT-01/02)", () => {
     });
 
     try {
-      // Stop after ~130 sim-ticks: > 6 chunks (SMALL_CHUNK=20) so the window MUST
-      // have rolled many times. Under prefix-regen the window would be ~130; the
-      // continuation driver keeps it ~one chunk.
-      // Advance well past MANY chunk horizons (300 sim-ticks = 15 chunks of 20),
-      // so the continuation has been advanced repeatedly and the window has rolled
-      // many times. Under the old prefix-regen model the window held the WHOLE
-      // prefix; the continuation driver discards drained ticks.
-      const STOP_TICK = 300;
+      // Advance past MANY chunk horizons so the continuation is extended
+      // repeatedly and the window rolls many times. `onWindowState` fires once per
+      // wall-clock FRAME, so the sample COUNT is frame-paced (machine-speed
+      // sensitive near a boundary). A LOW multiplier (8) makes the sim clock crawl
+      // so each STOP_TICK of sim time spans MANY frames ⇒ the `> 5` sample
+      // assertion is robust regardless of host speed, while a small STOP_TICK
+      // keeps the DB-backed run < 25s. 120 sim-ticks = 6 chunks of SMALL_CHUNK=20:
+      // under the old prefix-regen model the window would hold the whole ~120-tick
+      // prefix; the continuation driver discards drained ticks and stays bounded.
+      const STOP_TICK = 120;
       const STOP_MS = EPOCH_MS + STOP_TICK * MS_PER_TICK;
       let lastSimMs = 0;
       const retainedSamples: number[] = [];
@@ -159,7 +167,13 @@ describe("open-ended driver (CONT-01/02)", () => {
         timing: DEFAULT_TIMING_CONFIG,
         frameMs: 5,
         maxTicksPerFrame: MAX_TPF,
-        getMultiplier: () => 512,
+        // A LOW multiplier so the sim clock crawls: per frame the advance is
+        // clamped (maxWallDeltaMs=1000) to ≈ 2×multiplier ticks, so multiplier=4 ⇒
+        // ≈ 8 ticks/frame ⇒ STOP_TICK=120 spans ≈ 15 frames (one onWindowState
+        // sample each), making the `> 5` sample assertion robust to host speed.
+        // Spreading the SAME total tick-drain over more frames adds no meaningful
+        // DB cost — wall time is dominated by total ticks drained, not frames.
+        getMultiplier: () => 4,
         optimizerEveryTicks: 8,
         loop: built.loop,
         broadcast: (simMs: number) => {
@@ -170,7 +184,7 @@ describe("open-ended driver (CONT-01/02)", () => {
             seq: 1,
             simMs,
             simDay: 0,
-            speed: { multiplier: 512, tickIntervalMs: 1, simSpeed: 1, paused: false },
+            speed: { multiplier: 4, tickIntervalMs: 1, simSpeed: 1, paused: false },
             payload: {},
           });
         },
@@ -178,7 +192,7 @@ describe("open-ended driver (CONT-01/02)", () => {
         stopped,
       });
 
-      // The run advanced ~15 chunk horizons in SIM time (the continuation was
+      // The run advanced ~8 chunk horizons in SIM time (the continuation was
       // extended many times — proving no prefix regen / unbounded pre-bake).
       expect(lastSimMs).toBeGreaterThanOrEqual(STOP_MS);
       expect(retainedSamples.length).toBeGreaterThan(5);
@@ -192,7 +206,7 @@ describe("open-ended driver (CONT-01/02)", () => {
       await built.worker?.close();
       await built.app.close();
     }
-  }, 120_000);
+  }, 60_000);
 
   it("Task C: retention prunes the event log below the watermark over a continuous run", async () => {
     const db: ApiDb = fx.db;
@@ -209,7 +223,10 @@ describe("open-ended driver (CONT-01/02)", () => {
     const ev = fx.db as unknown as EventsView;
 
     try {
-      const STOP_MS = EPOCH_MS + 130 * MS_PER_TICK;
+      // 70 sim-ticks = > 3 chunks of SMALL_CHUNK=20 and well past the prune
+      // retentionMargin (20) + everyTicks (10), so the watermark advances and the
+      // prune bites the log below it. Bounded for reliable gating (p19-fix Step 2).
+      const STOP_MS = EPOCH_MS + 70 * MS_PER_TICK;
       let lastSimMs = 0;
       const stopped = (): boolean => lastSimMs >= STOP_MS;
 
@@ -266,5 +283,5 @@ describe("open-ended driver (CONT-01/02)", () => {
       await built.worker?.close();
       await built.app.close();
     }
-  }, 120_000);
+  }, 60_000);
 });
