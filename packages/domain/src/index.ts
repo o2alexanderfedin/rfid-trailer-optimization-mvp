@@ -75,6 +75,8 @@ export type {
   UnloadStarted,
   LoadStarted,
   UnloadCompleted,
+  TruckRested,
+  TruckRefueled,
 } from "./events/index.js";
 export {
   assertNever,
@@ -101,7 +103,13 @@ export {
   unloadStartedSchema,
   loadStartedSchema,
   unloadCompletedSchema,
+  truckRestedSchema,
+  truckRefueledSchema,
 } from "./events/index.js";
+
+// --- Shared FUEL contract (SP2 §4 — sim odometer + optimizer fuel-awareness) --
+export type { FuelConfig } from "./fuel.js";
+export { DEFAULT_FUEL_CONFIG } from "./fuel.js";
 
 // --- Phase-2 planning value types (the shared planner/aggregation contract) --
 export type {
