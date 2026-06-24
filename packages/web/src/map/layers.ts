@@ -6,9 +6,10 @@ import LineString from "ol/geom/LineString.js";
 import { fromLonLat } from "ol/proj.js";
 import type { HubDto, RouteDto } from "../api/client.js";
 import type { TrailerSnapshot } from "./useTrailerSnapshots.js";
-import type { HubState, RouteState, TrailerKeyframe } from "@mm/api";
+import type { HubState, RouteState, TrailerKeyframe, TrailerStop } from "@mm/api";
 import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
 import { classifyDutyBucket } from "./dutyColoring.js";
+import { stopStyle } from "./stopColoring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -209,6 +210,63 @@ export function applyHubBuckets(
     // falls back to its volume coloring (nothing is fabricated).
     const dutyBucket = classifyDutyBucket(hub);
     feature.set("dutyBucket", dutyBucket ?? undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SP2 — parked/refueling stop layer (spec §8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the (initially empty) trailer-STOP layer + its single reused source. A
+ * `rested`/`refueling` stop renders a STATIONARY marker here (no tween) for the
+ * stop's duration, styled distinctly by `stopStyle` (amber "P" / blue fuel pump).
+ */
+export function createTrailerStopLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  const layer = new VectorLayer({ source, style: stopStyle });
+  return { layer, source };
+}
+
+/** A stop's stable feature id — distinct per (trailer, trip, start), so a trailer
+ * may show successive stops along a trip without collision. */
+function stopFeatureId(s: TrailerStop): string {
+  return `stop:${s.trailerId}:${s.tripId}:${s.startMs}`;
+}
+
+/**
+ * Reconcile the trailer-stop source against the CURRENT set of active stops
+ * (spec §8): upsert a STATIONARY marker per stop at its interpolated `lon`/`lat`
+ * (set ONCE — never tweened while parked), and REMOVE any marker whose stop is no
+ * longer in the set (the stop finished). The source is never blindly cleared, so
+ * a still-active parked marker keeps its exact position across renders.
+ */
+export function applyTrailerStops(
+  source: VectorSource,
+  stops: readonly TrailerStop[],
+): void {
+  const wanted = new Set(stops.map(stopFeatureId));
+  // Remove finished stops (feature exists but no longer in the active set).
+  for (const feature of source.getFeatures()) {
+    const id = feature.getId();
+    if (typeof id === "string" && id.startsWith("stop:") && !wanted.has(id)) {
+      source.removeFeature(feature);
+    }
+  }
+  // Upsert each active stop (create once; never move a still-parked marker).
+  for (const s of stops) {
+    const id = stopFeatureId(s);
+    if (source.getFeatureById(id) !== null) continue; // already parked here
+    const feature = new Feature({
+      geometry: new Point(fromLonLat([s.lon, s.lat])),
+      trailerId: s.trailerId,
+      tripId: s.tripId,
+      kind: s.kind,
+      startMs: s.startMs,
+      durationMinutes: s.durationMinutes,
+    });
+    feature.setId(id);
+    source.addFeature(feature);
   }
 }
 
