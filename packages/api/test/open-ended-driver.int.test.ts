@@ -8,6 +8,7 @@ import {
 } from "../src/index.js";
 import type { BuiltServer } from "../src/server.js";
 import { DEFAULT_TIMING_CONFIG } from "@mm/simulation";
+import type { Kysely } from "kysely";
 import { startPgFixture, type PgFixture } from "./pg-fixture.js";
 
 /**
@@ -111,6 +112,156 @@ describe("open-ended driver (CONT-01/02)", () => {
       for (let i = 1; i < broadcasts.length; i += 1) {
         expect(broadcasts[i]!).toBeGreaterThanOrEqual(broadcasts[i - 1]!);
       }
+    } finally {
+      await built.worker?.close();
+      await built.app.close();
+    }
+  }, 120_000);
+
+  // A SHORT chunk so the run crosses MANY chunk boundaries quickly — the window
+  // would balloon under the old prefix-regen model; the continuation-driven driver
+  // discards drained ticks so it stays bounded. fleet 1 + small horizon keeps the
+  // DB-bound run inside the timeout while still crossing ~6 chunk boundaries.
+  const SMALL_CHUNK = 20;
+  const MAX_TPF = 8;
+
+  it("Task B: the retained tick window stays BOUNDED over a multi-chunk run", async () => {
+    const db: ApiDb = fx.db;
+    const built: BuiltServer = await buildServer({
+      db,
+      enableWs: false,
+      simSeed: SEED + 1,
+      baselineTicks: SMALL_CHUNK,
+      optimizerExecution: "inline",
+      timing: DEFAULT_TIMING_CONFIG,
+    });
+
+    try {
+      // Stop after ~130 sim-ticks: > 6 chunks (SMALL_CHUNK=20) so the window MUST
+      // have rolled many times. Under prefix-regen the window would be ~130; the
+      // continuation driver keeps it ~one chunk.
+      // Advance well past MANY chunk horizons (300 sim-ticks = 15 chunks of 20),
+      // so the continuation has been advanced repeatedly and the window has rolled
+      // many times. Under the old prefix-regen model the window held the WHOLE
+      // prefix; the continuation driver discards drained ticks.
+      const STOP_TICK = 300;
+      const STOP_MS = EPOCH_MS + STOP_TICK * MS_PER_TICK;
+      let lastSimMs = 0;
+      const retainedSamples: number[] = [];
+      const stopped = (): boolean => lastSimMs >= STOP_MS;
+
+      await driveSimulationOpenEnded({
+        db,
+        seed: SEED + 1,
+        durationTicks: SMALL_CHUNK,
+        chunkTicks: SMALL_CHUNK,
+        fleetPerSpoke: 1,
+        timing: DEFAULT_TIMING_CONFIG,
+        frameMs: 5,
+        maxTicksPerFrame: MAX_TPF,
+        getMultiplier: () => 512,
+        optimizerEveryTicks: 8,
+        loop: built.loop,
+        broadcast: (simMs: number) => {
+          lastSimMs = simMs;
+          return Promise.resolve({
+            v: 1,
+            type: "tick" as const,
+            seq: 1,
+            simMs,
+            simDay: 0,
+            speed: { multiplier: 512, tickIntervalMs: 1, simSpeed: 1, paused: false },
+            payload: {},
+          });
+        },
+        onWindowState: ({ retainedTicks }) => retainedSamples.push(retainedTicks),
+        stopped,
+      });
+
+      // The run advanced ~15 chunk horizons in SIM time (the continuation was
+      // extended many times — proving no prefix regen / unbounded pre-bake).
+      expect(lastSimMs).toBeGreaterThanOrEqual(STOP_MS);
+      expect(retainedSamples.length).toBeGreaterThan(5);
+      // The retained tick-GROUP window NEVER grows with run length: bounded by ~2
+      // chunks + a frame regardless of how many chunks were crossed. (With realistic
+      // transit most sim-ticks carry no events, so the window holds far fewer
+      // tick-groups than chunk size — the cap is a generous upper bound.)
+      const maxRetained = Math.max(...retainedSamples);
+      expect(maxRetained).toBeLessThanOrEqual(SMALL_CHUNK * 2 + MAX_TPF + 1);
+    } finally {
+      await built.worker?.close();
+      await built.app.close();
+    }
+  }, 120_000);
+
+  it("Task C: retention prunes the event log below the watermark over a continuous run", async () => {
+    const db: ApiDb = fx.db;
+    const built: BuiltServer = await buildServer({
+      db,
+      enableWs: false,
+      simSeed: SEED + 2,
+      baselineTicks: SMALL_CHUNK,
+      optimizerExecution: "inline",
+      timing: DEFAULT_TIMING_CONFIG,
+    });
+
+    type EventsView = Kysely<{ events: { global_seq: string } }>;
+    const ev = fx.db as unknown as EventsView;
+
+    try {
+      const STOP_MS = EPOCH_MS + 130 * MS_PER_TICK;
+      let lastSimMs = 0;
+      const stopped = (): boolean => lastSimMs >= STOP_MS;
+
+      await driveSimulationOpenEnded({
+        db,
+        seed: SEED + 2,
+        durationTicks: SMALL_CHUNK,
+        chunkTicks: SMALL_CHUNK,
+        fleetPerSpoke: 1,
+        timing: DEFAULT_TIMING_CONFIG,
+        frameMs: 5,
+        maxTicksPerFrame: MAX_TPF,
+        getMultiplier: () => 512,
+        optimizerEveryTicks: 8,
+        loop: built.loop,
+        // Small margin so the prune actually bites within this short run.
+        retention: { everyTicks: 10, retentionMargin: 20, staleHorizonMs: 0 },
+        broadcast: (simMs: number) => {
+          lastSimMs = simMs;
+          return Promise.resolve({
+            v: 1,
+            type: "tick" as const,
+            seq: 1,
+            simMs,
+            simDay: 0,
+            speed: { multiplier: 512, tickIntervalMs: 1, simSpeed: 1, paused: false },
+            payload: {},
+          });
+        },
+        stopped,
+      });
+
+      const retained = Number(
+        (
+          await ev
+            .selectFrom("events")
+            .select((eb) => eb.fn.countAll().as("c"))
+            .executeTakeFirstOrThrow()
+        ).c,
+      );
+      const headSeq = Number(
+        (
+          await ev
+            .selectFrom("events")
+            .select((eb) => eb.fn.max("global_seq").as("mx"))
+            .executeTakeFirstOrThrow()
+        ).mx ?? 0,
+      );
+      // Rows were pruned: the retained count is strictly below the highest
+      // global_seq ever assigned (the log is bounded, not cumulative).
+      expect(headSeq).toBeGreaterThan(0);
+      expect(retained).toBeLessThan(headSeq);
     } finally {
       await built.worker?.close();
       await built.app.close();
