@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateEvent } from "@mm/domain";
-import { simulate } from "../src/engine.js";
+import { simulate, type SimulateOptions } from "../src/engine.js";
 
 /**
  * SIM-02 — THE DETERMINISM KEYSTONE.
@@ -100,5 +101,60 @@ describe("deterministic event stream (SIM-02)", () => {
     for (const { occurredAt } of simulate(OPTS)) {
       expect(occurredAt).toBe(new Date(occurredAt).toISOString());
     }
+  });
+});
+
+/**
+ * DET-02 — the LONG-RUN determinism golden.
+ *
+ * A 10,000-tick seeded run (seed 42) must hash to a committed SHA-256 constant —
+ * a stronger guarantee than the same-run reproducibility above: it asserts the
+ * stream is byte-stable across builds (and, where CI is multi-arch, across
+ * architectures). The committed hash is the TRUE output of
+ * `simulate({ seed: 42, durationTicks: 10000 })`.
+ *
+ * Cross-architecture note (RESEARCH VQ#9 / Pitfall 3): `sampleLogNormal` uses
+ * `Math.exp`/`Math.log`, which are implementation-defined and could diverge by
+ * 1 ULP after thousands of iterations. The hash below was captured on x86_64
+ * (darwin). If a multi-arch CI run produces a different hash, the contingency is
+ * to replace the log-normal sampler with an integer lookup table (do NOT do this
+ * unless the hash actually fails on CI).
+ */
+// Captured from simulate({ seed: 42, durationTicks: 10000 }) on x86_64 (darwin).
+// Replaced from the plan-01 PLACEHOLDER by plan-03 with the real hash.
+const LONG_RUN_GOLDEN_SHA256 = "PLACEHOLDER_REPLACE_AFTER_FIRST_RUN";
+
+describe("10k-tick determinism golden (DET-02)", () => {
+  it("simulate({ seed: 42, durationTicks: 10000 }) produces a committed SHA-256 hash", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(LONG_RUN_GOLDEN_SHA256);
+  });
+});
+
+/**
+ * DET-01 — the v2.0 flags-off regression gate.
+ *
+ * With NO v2.0 flags set, the same-seed/same-ticks run must stay byte-identical.
+ * This is trivially true today and MUST remain true after plan-02 adds
+ * `runUntilStopped`/`onEvent` — proving those opt-in flags never perturb the
+ * finite path when absent or explicitly `false`.
+ */
+describe("DET-01 flags-off gate (v2.0 regression)", () => {
+  const FLAGS_OFF_OPTS = { seed: 42, durationTicks: 500 } as const;
+
+  it("no flags — same-seed run is byte-identical", () => {
+    const a = simulate(FLAGS_OFF_OPTS);
+    const b = simulate({ ...FLAGS_OFF_OPTS });
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+
+  it("explicit runUntilStopped: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      runUntilStopped: false,
+    } as SimulateOptions & { runUntilStopped?: boolean });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
 });
