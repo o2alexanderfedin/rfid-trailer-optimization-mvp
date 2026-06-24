@@ -1,11 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: milestone
-status: Awaiting next milestone (run /gsd-new-milestone for v1.3)
-stopped_at: context exhaustion at 75% (2026-06-23)
-last_updated: "2026-06-23T19:16:27.770Z"
-last_activity: 2026-06-22 — Milestone v1.2 completed and archived
+milestone: v2.0
+milestone_name: Complete Simulation Model
+status: planning
+last_updated: "2026-06-24T04:37:12.633Z"
+last_activity: 2026-06-24
+progress:
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -19,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: Milestone v1.2 complete (Phases 9–18, 35/35 requirements) — shipped & archived 2026-06-22
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone (run /gsd-new-milestone for v1.3)
-Last activity: 2026-06-22 — Milestone v1.2 completed and archived
+Status: Defining requirements
+Last activity: 2026-06-24 — Milestone v2.0 started
 
 ## Performance Metrics
 
