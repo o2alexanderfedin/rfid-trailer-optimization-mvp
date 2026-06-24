@@ -1,17 +1,11 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.2
-milestone_name: Driver HOS & Hub Detail
-status: Awaiting next milestone
-stopped_at: v1.2 milestone close complete — awaiting next milestone.
-last_updated: "2026-06-22T04:12:01.801Z"
+milestone_name: milestone
+status: Awaiting next milestone (run /gsd-new-milestone for v1.3)
+stopped_at: context exhaustion at 75% (2026-06-23)
+last_updated: "2026-06-23T19:16:27.770Z"
 last_activity: 2026-06-22 — Milestone v1.2 completed and archived
-progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
 ---
 
 # Project State
@@ -93,9 +87,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-22/23 — v1.2 (Driver HOS & Hub Detail) shipped, archived, and now RELEASED. Resume session completed the outstanding release: gate re-verified on the release commit (build 10/10, typecheck 0, lint 0, unit 1168), git-flow merge develop→main (main=6f61884), tag v1.2.0, back-merge (develop=0a7fb75), pushed origin main+develop+tags v1.2/v1.2.0, and published GitHub release v1.2.0 (marked Latest).
-Stopped at: v1.2 fully released & public — at parity with v1.0/v1.1. Awaiting next milestone — run /gsd-new-milestone for v1.3.
-Resume file: None. (.planning/HANDOFF.json is STALE v1.1-era artifact; ignore/delete.)
+Last session: 2026-06-23T19:16:27.766Z
+Stopped at: context exhaustion at 75% (2026-06-23)
+Resume file: None
 
 ## Operator Next Steps
 
