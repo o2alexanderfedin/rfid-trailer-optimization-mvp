@@ -762,22 +762,27 @@ Phase 19 makes no changes to authentication, session management, input validatio
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **10k-tick golden hash — cross-architecture verification**
+> All three resolved during plan-phase by design decisions in the plans. Resolution noted per item.
+
+1. **10k-tick golden hash — cross-architecture verification** — **RESOLVED (plan 19-03).**
    - What we know: Existing golden uses JSON equality (same run), not a committed hash.
    - What's unclear: Whether CI runs on ARM as well as x86 (the cross-arch assertion in DET-02).
    - Recommendation: Generate the hash on CI, commit it. If CI is single-arch, document as single-arch verified and add a note to run locally on both architectures. Do NOT block phase close on cross-arch — ship the hash from CI and document the mitigation.
+   - **Resolution:** Plan 19-03 commits the real hash from the run and documents the single-arch CI mitigation + integer-lookup-table contingency in its acceptance criteria.
 
-2. **Open-ended driver architecture — streaming buffer size**
+2. **Open-ended driver architecture — streaming buffer size** — **RESOLVED (plan 19-04).**
    - What we know: `driveSimulationPaced` pre-bakes all ticks; incompatible with open-ended.
    - What's unclear: The ideal buffer size for the streaming approach (emit N ticks ahead, drain as consumed).
    - Recommendation: A simple approach: run `generate()` incrementally by chunking — call simulate with `durationTicks = currentTick + CHUNK_SIZE`, extend the horizon each time. This reuses all existing infrastructure. The CONTEXT describes `onEvent` callback as the mechanism; design the driver to buffer at most one chunk in memory at a time.
+   - **Resolution:** Plan 19-04 adopts the chunked approach (CHUNK_SIZE = 500 ticks); `driveSimulationOpenEnded()` does NOT call `simulate()` upfront (no pre-baking of an infinite stream).
 
-3. **`sim-day` field placement on `WsEnvelope` vs `TickPayload`**
+3. **`sim-day` field placement on `WsEnvelope` vs `TickPayload`** — **RESOLVED (plan 19-05).**
    - What we know: `simMs` is already on every `WsEnvelope`. `simDay` can be derived client-side.
    - What's unclear: Whether the UI team (this is solo/agentic) wants server-derived `simDay` or is OK computing it from `simMs`.
    - Recommendation: Add `simDay` to `WsEnvelope` (alongside `simMs`) for simplicity. The client then just reads `envelope.simDay`. Avoids client-side epoch math.
+   - **Resolution:** Plan 19-05 adds `simDay` to `WsEnvelope` (both union variants, envelope-level — bypasses `diffTick`), derived from `simMs` (never wall-clock).
 
 ---
 
