@@ -139,10 +139,20 @@ describe("geoTrackReducer — rested/refueling stop keyframes (spec §6)", () =>
       stored(rested("T1", "TRIP1", 600, at(40 * 60_000)), at(40 * 60_000)),
     ]);
     const rests = keyframes.filter((k) => k.kind === "rested" && k.tripId === "TRIP1");
+    // Both stops SURVIVE — distinct keys (keyed by occurredAt `t`), no collision.
     expect(rests.length).toBe(2);
-    // The later rest is farther along the leg than the earlier one.
-    const sorted = [rests[0]!, rests[1]!].sort((a, b) => a.lon - b.lon);
-    expect(sorted[1]!.lon).toBeGreaterThan(sorted[0]!.lon);
+    expect(rests[0]!.t).not.toBe(rests[1]!.t);
+    // FIX 4: every mid-leg stop renders at the leg's DRIVING MIDPOINT (the sim
+    // stamps mid-leg stops at the driving-time midpoint, so the geometry fraction
+    // is 0.5). For the straight A→B leg that is lon 5 (halfway), and crucially it
+    // never CLAMPS to the destination endpoint (the pre-fix drift). Both rests on
+    // this leg therefore share the same mid-route position — matching the real sim,
+    // where co-located stops on a leg fire at one mid-leg tick.
+    for (const r of rests) {
+      expect(r.lon).toBeGreaterThan(A[0]);
+      expect(r.lon).toBeLessThan(B[0]);
+      expect(r.lon).toBeCloseTo((A[0] + B[0]) / 2, 6);
+    }
   });
 
   it("a stop for a trip with NO departure/route yields no keyframe (fail-soft)", () => {

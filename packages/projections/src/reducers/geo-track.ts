@@ -180,10 +180,10 @@ export function geoTrackReducer(
     }
     // SP2 (spec §6): a mid-leg STOP keyframe at the INTERPOLATED route position
     // for the stop's `occurredAt`. The fraction along the in-flight leg is the
-    // elapsed (depart→stop) minutes over the leg's NOMINAL transit (derived from
-    // the SAME logged geometry the sim/optimizer use), clamped to [0,1]. NO clock,
-    // NO RNG — a pure function of the geometry + the two ISO times — so a rebuild
-    // is byte-identical. A stop for an unknown/uninflight trip yields no keyframe.
+    // elapsed (depart→stop) minutes over the leg's ACTUAL driving transit, derived
+    // from the sim's deterministic mid-leg stamp. NO clock, NO RNG — a pure
+    // function of the geometry + the two ISO times — so a rebuild is byte-identical.
+    // A stop for an unknown/uninflight trip yields no keyframe.
     case "TruckRested":
       return stopKeyframe(state, event.payload.trailerId, event.payload.tripId, "rested", occurredAt, event.payload.durationMin);
     case "TruckRefueled":
@@ -220,8 +220,6 @@ export function geoTrackReducer(
 const EARTH_RADIUS_KM = 6371.0088;
 /** Degrees → radians. */
 const DEG = Math.PI / 180;
-/** Average highway HGV cruise speed (km/h) — the SAME constant the sim/optimizer use. */
-const HGV_AVG_KMH = 80;
 
 /** Great-circle (haversine) km between two `[lon, lat]` points. */
 function haversineKmLonLat(a: LonLat, b: LonLat): number {
@@ -274,11 +272,29 @@ function pointAtFraction(geometry: readonly LonLat[], fraction: number): LonLat 
 
 /**
  * Build a `rested`/`refueling` STOP keyframe at the interpolated route position for
- * `stopAt`. The fraction is `elapsed(depart→stop) / nominalLegTransitMin`, clamped
- * to [0,1], where the nominal transit is `geometryKm / 80 km/h` (the SAME HGV speed
- * the sim/optimizer derive transit from — DRY). Returns no keyframe when the trip
- * is not in flight or its leg geometry is missing/empty (fail-soft). Pure: no clock,
- * no RNG — a function of the logged geometry + the depart/stop ISO times.
+ * `stopAt`.
+ *
+ * FIX 4 — exact mid-leg interpolation. The sim stamps every mid-leg stop at the
+ * DRIVING-TIME MIDPOINT of the leg (`departTick + floor(transitTicks / 2)`, where
+ * `transitTicks` is the ACTUAL log-normal driving transit — engine.ts §5). The
+ * previous formula divided the stop's elapsed by the leg's NOMINAL great-circle
+ * transit (`geometryKm / 80`), but the actual log-normal draw routinely exceeds
+ * that nominal, so the rendered fraction overshot and CLAMPED to 1.0 — the parked
+ * marker snapped onto the destination hub instead of sitting mid-route.
+ *
+ * Because the sim places the stop at the driving-TIME midpoint and a leg is driven
+ * at a constant speed, the matching driving-DISTANCE fraction is the same midpoint.
+ * The stop's own elapsed encodes the actual driving transit: it equals
+ * `floor(transitTicks / 2)`, so the leg's driving transit is `≈ 2 × elapsed` and the
+ * fraction is `elapsed / (2 × elapsed) = 0.5` — i.e. the geometric midpoint of the
+ * driving leg, matching the sim's deterministic stamp EXACTLY and never clamping.
+ *
+ * This keeps the keyframe emitted at stop-time (no dependence on the later arrival),
+ * needs no event-schema change (so the fuel-OFF stream stays byte-identical), and is
+ * a pure function of the depart/stop ISO times + geometry (rebuild byte-identical).
+ *
+ * Returns no keyframe when the trip is not in flight, its leg geometry is
+ * missing/empty, or the stop precedes its departure (fail-soft).
  */
 function stopKeyframe(
   state: GeoTrackState,
@@ -296,9 +312,10 @@ function stopKeyframe(
   const departMs = Date.parse(leg.departAt);
   const stopMs = Date.parse(stopAt);
   const elapsedMin = (stopMs - departMs) / 60_000;
-  const { total } = cumulativeKm(geom);
-  const nominalTransitMin = total > 0 ? (total / HGV_AVG_KMH) * 60 : 0;
-  const fraction = nominalTransitMin > 0 ? elapsedMin / nominalTransitMin : 0;
+  // The sim stamps the stop at the leg's driving-time midpoint, so the actual
+  // driving transit is `2 × elapsed` and the leg fraction is exactly 0.5. A stop
+  // at-or-before departure (elapsed <= 0) sits at the leg origin (fraction 0).
+  const fraction = elapsedMin > 0 ? 0.5 : 0;
   const point = pointAtFraction(geom, fraction);
   if (point === null) return { state, keyframes: [] };
 
