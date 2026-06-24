@@ -38,10 +38,14 @@ import {
  */
 
 const SEED = 4242;
-const TICKS = 6000;
-// HOS on so rests exist; fuel on (a small threshold so refuels are frequent over
-// the long coast legs within the horizon).
-const FUEL_ON: FuelConfig = { ...DEFAULT_FUEL_CONFIG, enabled: true, refuelThresholdMiles: 800 };
+// 600 ticks (1 tick = 1 min sim time): enough for the long-coast legs (LAX/SEA/PHX
+// ~1,900–2,250 min one-way) to drive past the threshold mid-leg, fire HOS rests +
+// refuels, and land ≥1 arrival — while finishing well inside the integration
+// timeout. (At 6000 ticks the run exceeded the lane's default 120s and timed out.)
+const TICKS = 600;
+// HOS on so rests exist; fuel on with a SMALL threshold (400 mi) so several refuels
+// occur within this short horizon over the long legs.
+const FUEL_ON: FuelConfig = { ...DEFAULT_FUEL_CONFIG, enabled: true, refuelThresholdMiles: 400 };
 
 /** A view of the fixture handle as the catch-up runner's `Kysely<CatchupDb>`. */
 function catchupView(db: FixtureDb): Kysely<CatchupDb> {
@@ -123,7 +127,7 @@ describe("SP2 fuel-on live path: rest/refuel events + geo keyframes + fuel-aware
     await rebuildCatchup(cv, replayReadAll);
     const rebuiltState = await serializeCatchup(cv);
     expect(rebuiltState).toBe(liveState);
-  });
+  }, 300_000);
 
   it("a fuel-OFF run over the SAME seed produces NO stop events (keystone end-to-end)", async () => {
     // Reset the store by spinning a fresh fixture would be heavy; instead assert the
@@ -147,5 +151,5 @@ describe("SP2 fuel-on live path: rest/refuel events + geo keyframes + fuel-aware
     } finally {
       await fx2.stop();
     }
-  });
+  }, 300_000);
 });
