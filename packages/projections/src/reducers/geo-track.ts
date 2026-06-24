@@ -210,6 +210,8 @@ export function geoTrackReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    // v2.0 IND-01: external induction carries no map position — no keyframe.
+    case "PackageInducted":
       return { state, keyframes: [] };
     default:
       return assertNeverGeo(event);

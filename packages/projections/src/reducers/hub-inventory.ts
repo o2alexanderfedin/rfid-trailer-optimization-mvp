@@ -165,6 +165,15 @@ export function hubInventoryReducer(
         hubId: event.payload.hubId,
         bucket: "inbound",
       });
+    case "PackageInducted":
+      // v2.0 IND-01/Decision 3: externally-induced freight enters the induction
+      // hub's INBOUND bucket — the SAME demand path as PackageArrivedAtHub. The
+      // optimizer reads inducted freight automatically via this projection (no new
+      // demand-source concept needed).
+      return placePackage(state, event.payload.packageId, {
+        hubId: event.payload.inductionHubId,
+        bucket: "inbound",
+      });
     case "PackageScanned": {
       const bucket = bucketForScan(event.payload.scanType);
       return placePackage(

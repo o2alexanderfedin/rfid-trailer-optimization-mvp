@@ -111,6 +111,8 @@ export function driverAssignmentReducer(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    // v2.0 IND-01: external induction binds no driver — no-op for driver-assignment.
+    case "PackageInducted":
       return state;
     default:
       return assertNeverEvent(event);

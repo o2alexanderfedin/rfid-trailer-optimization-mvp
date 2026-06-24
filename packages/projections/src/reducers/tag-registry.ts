@@ -91,6 +91,8 @@ export function tagRegistryReducer(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    // v2.0 IND-01: induction binds no RFID tag at intake — no-op for tag-registry.
+    case "PackageInducted":
       return state;
     default:
       return assertNeverEvent(event);

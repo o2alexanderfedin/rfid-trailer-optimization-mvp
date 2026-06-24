@@ -177,6 +177,8 @@ export function trailerStateReducer(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    // v2.0 IND-01: external induction moves no trailer — no-op for trailer-state.
+    case "PackageInducted":
       return state;
     default:
       return assertNeverEvent(event);

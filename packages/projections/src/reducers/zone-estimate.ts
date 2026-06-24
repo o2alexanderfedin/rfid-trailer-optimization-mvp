@@ -197,6 +197,8 @@ function applyEvent(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    // v2.0 IND-01: induction carries no RFID zone evidence — no-op for zone-estimate.
+    case "PackageInducted":
       return state;
     default:
       return assertNeverEvent(event);
