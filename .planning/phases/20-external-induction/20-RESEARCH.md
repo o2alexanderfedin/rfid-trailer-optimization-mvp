@@ -699,7 +699,13 @@ Phase 20 makes no changes to authentication, session management, input validatio
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All four questions below carry inline recommendations that the Phase 20 plans implement:
+> Q1 (package-location update) → Plan 03 sets location to `inductionHubId` (active case);
+> Q2 (`externalOriginRef` format) → Plan 02 uses a separate `inductionCounter` with `EXT-NNNNN`;
+> Q3 (VIZ-13 animation) → Plan 05 uses the timed-feature add/remove approach;
+> Q4 (`INDUCTION_INTERVAL_TICKS`) → Plan 02 starts at 30 ticks as a tunable `SimulateOptions` value.
 
 1. **`package-location.ts` — should `PackageInducted` update last-known-location?**
    - What we know: `PackageArrivedAtHub` updates last-known location to the arrival hub. `PackageInducted` places freight at the `inductionHubId`.

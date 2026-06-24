@@ -1,9 +1,9 @@
 ---
 phase: 20
 slug: external-induction
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-24
 ---
 
@@ -94,14 +94,27 @@ New / extended test files (stubs land in Wave 0 alongside or before the code und
 
 ---
 
+## TDD Ordering — RED-before-GREEN Coverage
+
+Every code task in Plans 20-01..06 carries an explicit RED phase (failing test authored before the implementation) followed by a GREEN phase:
+
+- **IND-01 closed union:** Plan 20-01 Task 1 authors the `validate()` round-trip RED test before the 5-file ceremony.
+- **IND-02 core determinism + salt distinctness:** Plan 20-02 Task 1 authors `induction-determinism.unit.test.ts` (flag-off zero-events, flag-on events-present, deadline sanity) AND extends `fuel-determinism.unit.test.ts` for `INDUCTION_RNG_SALT` pairwise-distinctness — both RED — before the engine implementation in Task 2.
+- **IND-03 reducer inbound:** Plan 20-03 Task 1 authors the `hub-inventory` inbound RED test before the reducer cases.
+- **IND-03 scope classification:** Plan 20-04 Task 1 authors the `scope.ts` RED case before the implementation.
+
+**Continuation-equivalence (`inductionEnabled:true`, chunk-boundary-between-arrivals) is a deliberate post-Plan-02 extension (Plan 20-06), NOT a Wave 0 RED gate.** Rationale: the test must import `inductionEnabled` from `SimulateOptions`, which does not exist until Plan 20-02 lands. Authoring it in Wave 0 would produce a TypeScript compile error (unknown option) rather than a meaningful RED assertion. The *core* IND-02 determinism RED gate (flag-off byte-identity + events-present + salt-distinctness) already pre-exists the engine in Plan 20-02 Task 1; the chunk-boundary continuation case is an additive equivalence proof layered on top once the engine API exists. This is an intentional, documented waiver of strict RED-before-GREEN for this one case — the determinism property it guards is independently RED-gated upstream.
+
+---
+
 ## Validation Sign-Off
 
-- [ ] All tasks have automated verify or Wave 0 test dependencies (VIZ-13 marker visual is the only manual item)
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all NEW/EXTEND test references above
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s (unit); full gate ~15min
-- [ ] All new heavy tests scale-bounded per § Scale Bounds
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have automated verify or Wave 0 test dependencies (VIZ-13 pulsing-marker visual is the only manual item)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify (every code task has a `pnpm build && pnpm typecheck && pnpm vitest` gate)
+- [x] Wave 0 covers all NEW/EXTEND test references above (continuation-equivalence induction case is a documented post-Plan-02 extension — see TDD Ordering above)
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s (unit); full gate ~15min
+- [x] All new heavy tests scale-bounded per § Scale Bounds
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-24
