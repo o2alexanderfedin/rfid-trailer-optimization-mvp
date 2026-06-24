@@ -141,8 +141,8 @@ describe("geoTrackReducer — rested/refueling stop keyframes (spec §6)", () =>
     const rests = keyframes.filter((k) => k.kind === "rested" && k.tripId === "TRIP1");
     expect(rests.length).toBe(2);
     // The later rest is farther along the leg than the earlier one.
-    const [first, second] = [rests[0]!, rests[1]!].sort((a, b) => a.lon - b.lon);
-    expect(second.lon).toBeGreaterThan(first.lon);
+    const sorted = [rests[0]!, rests[1]!].sort((a, b) => a.lon - b.lon);
+    expect(sorted[1]!.lon).toBeGreaterThan(sorted[0]!.lon);
   });
 
   it("a stop for a trip with NO departure/route yields no keyframe (fail-soft)", () => {
