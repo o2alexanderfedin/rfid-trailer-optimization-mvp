@@ -744,7 +744,11 @@ export function runToHorizon(
         driverId,
         dutyStatus,
         reason,
-        clock: snapshot,
+        // Plan 19-08 (determinism fix): emit the clock in the SINGLE canonical key
+        // order so the bytes are independent of which HOS builder produced the
+        // source clock — making all-at-once and chunked-via-continuation runs
+        // byte-identical even when a clock survives a continuation boundary.
+        clock: canonicalHosClock(snapshot),
         occurredAt: clock.nowIso(),
       },
     };
@@ -1599,8 +1603,25 @@ export function runToHorizon(
   }
 }
 
-/** Serialize an HOS clock into the continuation's plain-data form. */
-function serializeHosClock(c: HosClock): SerializedHosClock {
+/**
+ * Plan 19-08 (determinism fix) — the SINGLE canonical HOS-clock key order.
+ *
+ * The domain HOS builders (`freshHosClock`, `applyDrivingLeg`'s mid-leg reset at
+ * `hos.ts:250`, the various `{ ...current, … }` spread-updates) each produce a
+ * `HosClock` with a DIFFERENT object key order — same VALUES, different insertion
+ * order. The all-at-once path emits whichever order the builder produced; a
+ * chunked run that crosses a continuation boundary rehydrates the clock via
+ * {@link serializeHosClock} (this fixed order) and re-emits it — so the SAME clock
+ * serialized to DIFFERENT bytes, breaking byte-identity (the
+ * continuation-equivalence keystone hashes key-order-sensitive `JSON.stringify`).
+ *
+ * The fix: normalize EVERY emitted `DriverDutyStateChanged.payload.clock` (and the
+ * serialized continuation form) through this ONE canonical key order, so both
+ * paths emit byte-identical events. Values are untouched — only key order is
+ * fixed. HOS is OFF by default, so the HOS-off goldens (seed-42 10k, seed-1234)
+ * contain NO HosClock and are unaffected.
+ */
+function canonicalHosClock(c: HosClock): HosClock {
   return {
     driveTodayMin: c.driveTodayMin,
     dutyWindowStartAt: c.dutyWindowStartAt,
@@ -1610,6 +1631,13 @@ function serializeHosClock(c: HosClock): SerializedHosClock {
     sleeperBerthLongMin: c.sleeperBerthLongMin,
     sleeperBerthShortMin: c.sleeperBerthShortMin,
   };
+}
+
+/** Serialize an HOS clock into the continuation's plain-data form (canonical order). */
+function serializeHosClock(c: HosClock): SerializedHosClock {
+  // Shares the SINGLE canonical key order with the emit site (DRY): the
+  // SerializedHosClock shape is exactly the canonical HosClock field set.
+  return canonicalHosClock(c);
 }
 
 

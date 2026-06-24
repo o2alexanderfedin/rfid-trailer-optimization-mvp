@@ -11,13 +11,17 @@ import type { ApiDb } from "../routes/queries.js";
  * full log is retained and replay-from-0 stays byte-identical (a guard test
  * asserts the finite path never reads a pruned log).
  *
- * SAFETY INVARIANT (the watermark rule): we NEVER delete an event at or above the
- * projection watermark (`min(last_seq)` across the catch-up projections). Those
- * rows are not yet materialized into the projections, so deleting them would lose
- * data. Pruning is safe ONLY for rows strictly BELOW `(watermark - margin)`: those
- * are already folded into the projection snapshot and are never replayed at
- * runtime (catch-up resumes from the watermark, not from 0). The Google-consult
- * "watermark + replay-from-0 beats snapshotting" guidance is exactly this design.
+ * SAFETY INVARIANT (the watermark rule): we NEVER delete an event whose
+ * `global_seq` is STRICTLY ABOVE the projection watermark (`min(last_seq)` across
+ * the catch-up projections) — those rows are not yet materialized, so deleting
+ * them would lose data. We prune `global_seq <= (watermark - margin)`. With the
+ * default `margin > 0` this leaves a cushion of already-projected rows below the
+ * watermark; with `margin == 0` the `== watermark` row itself is pruned, which is
+ * STILL SAFE: catch-up's `readAll(from)` is EXCLUSIVE (`global_seq > from`) and the
+ * checkpoint stores the last APPLIED seq, so an `== watermark` row has already been
+ * folded into the projection snapshot and is never re-read at runtime (catch-up
+ * resumes from the watermark, not from 0). The Google-consult "watermark +
+ * replay-from-0 beats snapshotting" guidance is exactly this design.
  */
 
 /** Tuning knobs for the continuous-path retention sweep. */
@@ -82,13 +86,17 @@ export async function pruneEventLog(
   const watermark = await projectionWatermark(db);
   const margin = BigInt(Math.max(0, Math.floor(config.retentionMargin)));
   const cutoff = watermark - margin;
-  // Nothing below `watermark - margin` to prune (and we must never touch
-  // `>= watermark`): a non-positive cutoff means keep everything for now.
+  // A non-positive cutoff means there is nothing safely prunable yet — keep all.
   if (cutoff <= 0n) return 0;
   const result = await (db as unknown as Kysely<EventsDb>)
     .deleteFrom("events")
-    // STRICTLY `<= cutoff` and `cutoff < watermark` (margin >= 0), so the watermark
-    // row and everything above it is always retained (the safety invariant).
+    // Prune `global_seq <= cutoff` where `cutoff = watermark - margin <= watermark`.
+    // The TRUE invariant: NOTHING with `global_seq > watermark` is ever pruned — so
+    // no un-applied event is ever lost. With `margin = 0` the cutoff EQUALS the
+    // watermark and the watermark row itself is pruned, which is SAFE: catch-up's
+    // `readAll(from)` is EXCLUSIVE (`global_seq > from`) and the checkpoint stores
+    // the last APPLIED seq, so the `== watermark` row is already materialized and
+    // is never re-read at runtime.
     .where("global_seq", "<=", sql<string>`${cutoff.toString()}`)
     .executeTakeFirst();
   return Number(result.numDeletedRows ?? 0n);
