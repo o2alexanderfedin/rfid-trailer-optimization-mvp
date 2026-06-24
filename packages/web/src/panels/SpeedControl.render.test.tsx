@@ -51,6 +51,7 @@ function speedEnvelope(speed: SimSpeedState): WsEnvelope {
     type: "snapshot",
     seq: 1,
     simMs: 0,
+    simDay: 0,
     speed,
     payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: [] },
   };

@@ -43,6 +43,7 @@ function snapshotAt(simMs: number, speed: SimSpeedState = SPEED_PAUSED): WsEnvel
     type: "snapshot",
     seq: 1,
     simMs,
+    simDay: 0,
     speed,
     payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: [] },
   };

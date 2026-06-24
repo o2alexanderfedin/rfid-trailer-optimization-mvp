@@ -171,6 +171,7 @@ const DUTY_SNAPSHOT: WsEnvelope = {
   type: "snapshot",
   seq: 1,
   simMs: 18_000,
+  simDay: 0,
   speed: { multiplier: 0, tickIntervalMs: 500, simSpeed: 0, paused: true },
   payload: {
     trailers: SPOKES.slice(0, 6).map((s, i) => ({

@@ -648,8 +648,50 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
 const WS_OPEN = 1; // ws.OPEN
 const WS_CONNECTING = 0; // ws.CONNECTING
 
+/**
+ * CONT-04b: WS backpressure threshold. When a client's OS-managed send buffer
+ * (`socket.bufferedAmount`) exceeds this, the broadcast SKIPS that client's tick
+ * delta for the frame — keeping a backgrounded/saturated client's buffer bounded
+ * over an indefinite run (instead of growing without bound). 256 KB.
+ */
+export const BACKPRESSURE_BYTES = 256 * 1024;
+
+/** Sim-clock epoch — MUST match the engine's `EPOCH_ISO`. */
+const EPOCH_MS = Date.parse("2026-04-01T00:00:00.000Z");
+/** Milliseconds per sim day. */
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * CONT-03: derive the sim-day counter from the deterministic virtual-clock
+ * `simMs` — NEVER `Date.now()` — so it is replay-stable. Clamped to `>= 0` so the
+ * initial-connect snapshot (`simMs = 0`, which predates the epoch) shows "Sim
+ * Day 0" rather than a large negative number. Pure + exported for unit testing.
+ */
+export function deriveSimDay(simMs: number): number {
+  return Math.max(0, Math.floor((simMs - EPOCH_MS) / MS_PER_DAY));
+}
+
+/**
+ * CONT-04b: the pure send-gate predicate. A tick delta is sent to a socket only
+ * when it is OPEN and its buffered amount is at/below the backpressure threshold.
+ * Exported (pure, no I/O) for unit testing; `sendRawIfOpen` applies it.
+ *
+ * NOTE: this guard is intended for TICK deltas only. The initial-connect snapshot
+ * sends at `bufferedAmount === 0` (a fresh socket), so the guard is a harmless
+ * no-op there — but a client MUST receive its first snapshot to initialize, so
+ * that path does not depend on this gate (Pitfall 4).
+ */
+export function shouldSendToSocket(socket: {
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+}): boolean {
+  if (socket.readyState !== WS_OPEN) return false;
+  if (socket.bufferedAmount > BACKPRESSURE_BYTES) return false;
+  return true;
+}
+
 function sendRawIfOpen(socket: WebSocket, payload: string): void {
-  if (socket.readyState === WS_OPEN) socket.send(payload);
+  if (shouldSendToSocket(socket)) socket.send(payload);
 }
 
 function closeIfOpen(socket: WebSocket): void {
@@ -733,6 +775,7 @@ export function attachSnapshotSocket(
               type: "snapshot",
               seq,
               simMs: 0, // resync resets the client's tween clock to the current state
+              simDay: deriveSimDay(0), // 0 — re-anchored at the connect epoch
               speed: currentSpeed(),
               payload,
             };
@@ -755,6 +798,7 @@ export function attachSnapshotSocket(
           type: "snapshot",
           seq,
           simMs: 0, // initial snapshot: sim clock starts at 0
+          simDay: deriveSimDay(0), // 0 — the first day of the sim
           speed: currentSpeed(),
           payload,
         };
@@ -784,6 +828,8 @@ export function attachSnapshotSocket(
       type: "tick",
       seq,
       simMs,
+      // CONT-03: derived from the virtual-clock simMs (never Date.now()).
+      simDay: deriveSimDay(simMs),
       speed: currentSpeed(),
       payload: delta,
     };
