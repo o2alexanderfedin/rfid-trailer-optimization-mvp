@@ -199,6 +199,9 @@ function applyEvent(
     case "TruckRefueled":
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
+    case "PackageDelivered": // Phase-22 OUT-04: zone estimates are RFID-only; the
+      // Phase-21 is_active filter already excludes delivered packages from detection
+      // scope, and PackageDelivered carries no RFID data — so this is a no-op here.
       return state;
     default:
       return assertNeverEvent(event);

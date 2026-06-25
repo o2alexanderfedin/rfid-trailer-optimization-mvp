@@ -440,6 +440,32 @@ export const packageInductedSchema = eventSchema(
   }),
 );
 
+// --- Phase-22 outbound delivery (OUT-01) ------------------------------------
+
+/**
+ * `PackageDelivered` — the TERMINAL delivery event (OUT-01 / Phase 22). Freight
+ * reaching its DESTINATION hub exits the network here, after a seeded outbound
+ * dwell (>= 1 tick from arrival, D-22-2). It DELETE-purges the package from the
+ * read-model projections (`packageLocation`, `hubInventory`, `zoneEstimate`),
+ * completing the bounded-memory story (OUT-04).
+ *
+ * DETERMINISM: emitted ONLY when `outboundDeliveryEnabled === true`. `deliveredAt`
+ * is the VIRTUAL clock ISO string canonicalized to whole minutes (never
+ * `Date.now()`). `onTime = deliveredAt <= slaDeadlineIso` is computed at emit
+ * (ISO-8601 lexicographic; D-22-5); center-origin freight without an induction
+ * deadline is `onTime: true` by convention.
+ */
+export const packageDeliveredSchema = eventSchema(
+  "PackageDelivered",
+  z.object({
+    packageId: id,
+    hubId: id,
+    deliveredAt: z.string().min(1),
+    onTime: z.boolean(),
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -475,4 +501,6 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   packageInductedSchema,
   // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
   planSupersededSchema,
+  // Phase-22 terminal delivery (OUT-01).
+  packageDeliveredSchema,
 ]);

@@ -94,6 +94,20 @@ function superseded(
   };
 }
 
+function delivered(packageId: string, hubId: string): DomainEvent {
+  return {
+    type: "PackageDelivered",
+    schemaVersion: 1,
+    payload: {
+      packageId,
+      hubId,
+      deliveredAt: "2026-06-24T12:34:00.000Z",
+      onTime: true,
+      occurredAt: "2026-06-24T12:34:00.000Z",
+    },
+  };
+}
+
 function foldHub(events: OccurredEvent[]): HubInventoryState {
   return events.reduce(hubInventoryReducer, emptyHubInventoryState);
 }
@@ -166,5 +180,40 @@ describe("hubInventoryReducer — PlanSuperseded delete-then-apply (FLOW-04 / D-
     const seed = foldHub([evt(scanned("P1", "MEM", "unload"), at(0))]);
     const e = evt(superseded("T1", ["P1"], at(1_000)), at(1_000));
     expect(hubInventoryReducer(seed, e)).toEqual(hubInventoryReducer(seed, e));
+  });
+});
+
+describe("hubInventoryReducer — PackageDelivered purge (OUT-04 / D-22-1)", () => {
+  it("purges the delivered package from hub inventory (placement removed)", () => {
+    const state = foldHub([
+      evt(arrived("P1", "MEM"), at(0)), // inbound at MEM
+      evt(delivered("P1", "MEM"), at(1_000)),
+    ]);
+    // The placement index no longer references P1, and MEM holds no buckets for it.
+    expect(state.placement.has("P1")).toBe(false);
+    const mem = state.hubs.get("MEM");
+    expect(mem?.inbound).toEqual([]);
+    expect(mem?.outbound).toEqual([]);
+    expect(mem?.staged).toEqual([]);
+  });
+
+  it("is a no-op when the package is absent (idempotent — never throws, D-22-1)", () => {
+    const before = foldHub([evt(arrived("P1", "MEM"), at(0))]);
+    // Delivering an UNKNOWN packageId must not throw and must leave state intact.
+    const after = hubInventoryReducer(
+      before,
+      evt(delivered("GHOST-99", "MEM"), at(1_000)),
+    );
+    expect(after.placement.has("P1")).toBe(true);
+    expect(after.hubs.get("MEM")?.inbound).toEqual(["P1"]);
+  });
+
+  it("re-applying the same PackageDelivered is idempotent (crash-safe replay)", () => {
+    const seed = foldHub([evt(arrived("P1", "MEM"), at(0))]);
+    const e = evt(delivered("P1", "MEM"), at(1_000));
+    const once = hubInventoryReducer(seed, e);
+    const twice = hubInventoryReducer(once, e);
+    expect(twice).toEqual(once);
+    expect(twice.placement.has("P1")).toBe(false);
   });
 });

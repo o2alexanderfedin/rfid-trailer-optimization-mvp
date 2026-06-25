@@ -73,6 +73,11 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    // Phase-22 OUT-01: PackageDelivered is the TERMINAL exit of freight — the
+    // package is LEAVING the network, so it adds NO new demand hub to the
+    // affected scope. SCOPE-NEUTRAL (the destination arrival that preceded it
+    // already scoped the hub if needed).
+    case "PackageDelivered":
       // SP2 stop events (TruckRested/TruckRefueled) are SCOPE-NEUTRAL too — a
       // rest/refuel never re-scopes the optimizer, so an absent-fuelConfig epoch
       // stays byte-identical to the pre-SP2 result.

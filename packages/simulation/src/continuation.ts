@@ -62,6 +62,19 @@ export type SimTask =
       readonly trailerId: string;
       readonly packageIds: readonly string[];
       readonly tripId: string;
+    }
+  // Phase-22 OUT-01: a ONE-SHOT terminal delivery task scheduled at a
+  // DESTINATION-hub arrival (NOT self-rescheduling). Carries ALL data needed to
+  // emit PackageDelivered — packageId, hubId, the locked `slaDeadlineIso`
+  // (undefined for center-origin freight, which gets onTime: true by convention),
+  // and the absolute `fireTick`. DATA (never a closure) so a chunk boundary
+  // landing mid-dwell resumes the pending delivery byte-identically (D-22-4).
+  | {
+      readonly kind: "deliverPackage";
+      readonly packageId: string;
+      readonly hubId: string;
+      readonly slaDeadlineIso: string | undefined;
+      readonly fireTick: number;
     };
 
 /** One queued action: fire at `fireTick`, ordered by `(fireTick, seq)`. */
@@ -120,6 +133,16 @@ export interface SerializedWorldState {
   readonly tripCounter: number;
   /** Monotonic external-induction id counter (v2.0 IND-02). 0 on a fresh run. */
   readonly inductionCounter: number;
+  /** Monotonic delivered-package counter (Phase-22 OUT-01). 0 on a fresh run. */
+  readonly deliveredCounter: number;
+  /**
+   * Phase-22 OUT-01: packageId → its locked `slaDeadlineIso` (whole-minute ISO),
+   * for inducted packages awaiting delivery. Only populated when
+   * `outboundDeliveryEnabled`; empty on the off path (byte-identical to
+   * pre-Phase-22). Cleared on `PackageDelivered` (one entry per in-flight
+   * delivery), so a resume mid-dwell can still compute `onTime` deterministically.
+   */
+  readonly slaDeadlineByPackage: readonly (readonly [string, string])[];
 }
 
 /** The raw seeded RNG sub-stream states (one `uint32` each; deterministic order). */
@@ -133,6 +156,8 @@ export interface SerializedRngStates {
   readonly fuel: number | undefined;
   /** Present only when inductionEnabled (the off path never constructs it). IND-02. */
   readonly induction: number | undefined;
+  /** Present only when outboundDeliveryEnabled (the off path never constructs it). OUT-01. */
+  readonly outbound: number | undefined;
 }
 
 /**

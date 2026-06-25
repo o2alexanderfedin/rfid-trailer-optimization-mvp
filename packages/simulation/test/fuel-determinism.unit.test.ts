@@ -4,6 +4,7 @@ import {
   FUEL_RNG_SALT,
   HOS_RNG_SALT,
   INDUCTION_RNG_SALT,
+  OUTBOUND_RNG_SALT,
   OVER_CARRY_RNG_SALT,
   RFID_RNG_SALT,
   TIMING_RNG_SALT,
@@ -72,6 +73,27 @@ describe("FUEL-01: fuelRng substream salt", () => {
     expect(INDUCTION_RNG_SALT >>> 0).not.toBe(TIMING_RNG_SALT >>> 0);
     expect(INDUCTION_RNG_SALT >>> 0).not.toBe(HOS_RNG_SALT >>> 0);
     expect(INDUCTION_RNG_SALT >>> 0).not.toBe(FUEL_RNG_SALT >>> 0);
+  });
+
+  // Phase-22 OUT-01 — the EIGHTH substream salt joins the pairwise-distinct set.
+  it("OUTBOUND_RNG_SALT is pairwise-distinct from all seven existing salts (no collision)", () => {
+    const salts = [
+      RFID_RNG_SALT,
+      OVER_CARRY_RNG_SALT,
+      TIMING_RNG_SALT,
+      HOS_RNG_SALT,
+      FUEL_RNG_SALT,
+      INDUCTION_RNG_SALT,
+      OUTBOUND_RNG_SALT,
+    ].map((s) => s >>> 0);
+    expect(new Set(salts).size).toBe(salts.length);
+    expect(salts.length).toBe(7);
+    expect(OUTBOUND_RNG_SALT >>> 0).not.toBe(RFID_RNG_SALT >>> 0);
+    expect(OUTBOUND_RNG_SALT >>> 0).not.toBe(OVER_CARRY_RNG_SALT >>> 0);
+    expect(OUTBOUND_RNG_SALT >>> 0).not.toBe(TIMING_RNG_SALT >>> 0);
+    expect(OUTBOUND_RNG_SALT >>> 0).not.toBe(HOS_RNG_SALT >>> 0);
+    expect(OUTBOUND_RNG_SALT >>> 0).not.toBe(FUEL_RNG_SALT >>> 0);
+    expect(OUTBOUND_RNG_SALT >>> 0).not.toBe(INDUCTION_RNG_SALT >>> 0);
   });
 });
 

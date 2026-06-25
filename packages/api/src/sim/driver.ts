@@ -36,7 +36,7 @@ import { performance } from "node:perf_hooks";
 import type { ApiDb } from "../routes/queries.js";
 import { PRODUCTION_DETECTION_CONFIG } from "../detection-config.js";
 import type { Broadcast } from "../ws/snapshots.js";
-import type { InductionEvent } from "../ws/envelope.js";
+import type { DeliveryEvent, InductionEvent } from "../ws/envelope.js";
 import { computeSimAdvanceMs, selectDrain } from "./pacing.js";
 import { makeCoalescedRunner } from "./coalesced-runner.js";
 
@@ -210,6 +210,20 @@ export interface DriveSimulationOptions {
    * freight spoke→center and the center cross-docks it onward.
    */
   readonly consolidationEnabled?: boolean;
+  /**
+   * Phase 20 (IND-02): OPT-IN external induction, threaded straight to `simulate`
+   * only when DEFINED. Absent/false ⇒ byte-identical (induction-off default). The
+   * live demo passes `true` so freight enters from outside at the spokes.
+   */
+  readonly inductionEnabled?: boolean;
+  /**
+   * Phase 22 (OUT-01): OPT-IN terminal delivery, threaded straight to `simulate`
+   * only when DEFINED. Absent/false ⇒ the golden stream is byte-identical (the
+   * engine default is outbound-off, the determinism keystone). The live demo
+   * passes `true` so freight reaching its destination hub fires `PackageDelivered`
+   * (and the VIZ-14 destination-hub flash + the OUT-05 KPI counters update).
+   */
+  readonly outboundDeliveryEnabled?: boolean;
 }
 
 /**
@@ -325,6 +339,29 @@ function collectInductions(
       slaClass: event.payload.slaClass,
       slaDeadlineIso: event.payload.slaDeadlineIso,
       occurredAt: event.payload.occurredAt,
+    });
+  }
+  return out;
+}
+
+/**
+ * VIZ-14: map the `PackageDelivered` events in a drained tick/frame into transient
+ * `DeliveryEvent` wire items for the tick payload. Empty when the slice has no
+ * deliveries (the common case) — the broadcast then omits the field entirely. The
+ * field is TICK-ONLY (never on a snapshot) so a reconnect does not re-flash
+ * historical deliveries (Pitfall 7).
+ */
+function collectDeliveries(
+  items: readonly SimulatedEvent[],
+): DeliveryEvent[] {
+  const out: DeliveryEvent[] = [];
+  for (const { event } of items) {
+    if (event.type !== "PackageDelivered") continue;
+    out.push({
+      packageId: event.payload.packageId,
+      hubId: event.payload.hubId,
+      deliveredAt: event.payload.deliveredAt,
+      onTime: event.payload.onTime,
     });
   }
   return out;
@@ -463,9 +500,9 @@ async function driveTickStream(
 
     // 6. Push ONE batched snapshot per tick. Supply the tick's domain timestamp
     //    as the authoritative sim-clock milliseconds for the ws envelope, plus the
-    //    tick's transient induction events (VIZ-13).
+    //    tick's transient induction (VIZ-13) + delivery (VIZ-14) events.
     if (opts.broadcast !== undefined) {
-      await opts.broadcast(tickMs, collectInductions(tick));
+      await opts.broadcast(tickMs, collectInductions(tick), collectDeliveries(tick));
     }
   }
 
@@ -503,6 +540,12 @@ export async function driveSimulation(
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
     ...(opts.consolidationEnabled !== undefined
       ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
       : {}),
   });
   const ticks = intoTicks(stream);
@@ -553,6 +596,12 @@ export async function driveSimulationPaced(
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
     ...(opts.consolidationEnabled !== undefined
       ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
       : {}),
   });
   const ticks = intoTicks(stream);
@@ -667,9 +716,10 @@ export async function driveSimulationPaced(
   let ticksSinceOpt = 0;
   let pendingOptEvents: SimulatedEvent["event"][] = [];
   let lastOptTickMs = 0;
-  // VIZ-13: induction events drained this frame, surfaced to the per-frame
-  // broadcast (read + cleared at the broadcast site).
+  // VIZ-13 / VIZ-14: induction + delivery events drained this frame, surfaced to
+  // the per-frame broadcast (read + cleared at the broadcast site).
   let pendingInductions: InductionEvent[] = [];
+  let pendingDeliveries: DeliveryEvent[] = [];
 
   // Process exactly the ticks selected for THIS frame (in order): append each
   // tick (per-tick `occurredAt`), then fold the whole batch ONCE, then fire the
@@ -685,6 +735,7 @@ export async function driveSimulationPaced(
       await appendTick(tick);
       for (const item of tick) pendingOptEvents.push(item.event);
       pendingInductions.push(...collectInductions(tick));
+      pendingDeliveries.push(...collectDeliveries(tick));
       lastOptTickMs = tickMs;
       broadcastSimMs = tickMs;
       nextIndex += 1;
@@ -739,19 +790,22 @@ export async function driveSimulationPaced(
 
     // ONE delta per FRAME — even when nothing drained — so the client clock /
     // speed envelope keeps flowing (e.g. pause reflects via simSpeed:0). Attach +
-    // clear this frame's induction events (VIZ-13).
+    // clear this frame's induction (VIZ-13) + delivery (VIZ-14) events.
     if (opts.broadcast !== undefined) {
       const frameInductions = pendingInductions;
+      const frameDeliveries = pendingDeliveries;
       pendingInductions = [];
-      await opts.broadcast(broadcastSimMs, frameInductions);
+      pendingDeliveries = [];
+      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries);
     }
   }
 
   // Drain the coalesced optimizer to idle, then a final broadcast at the clock.
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
-    await opts.broadcast(simClock, pendingInductions);
+    await opts.broadcast(simClock, pendingInductions, pendingDeliveries);
     pendingInductions = [];
+    pendingDeliveries = [];
   }
 
   return { ticks: nextIndex };
@@ -853,6 +907,12 @@ export async function driveSimulationOpenEnded(
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
     ...(opts.consolidationEnabled !== undefined
       ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
       : {}),
   };
   const chunkTicks = Math.max(1, Math.floor(opts.chunkTicks ?? DEFAULT_CHUNK_TICKS));
@@ -984,8 +1044,10 @@ export async function driveSimulationOpenEnded(
   let lastOptTickMs = 0;
   let drainedTotal = 0;
   let lastRetentionAtCount = 0;
-  // VIZ-13: induction events drained this frame, surfaced to the per-frame broadcast.
+  // VIZ-13 / VIZ-14: induction + delivery events drained this frame, surfaced to
+  // the per-frame broadcast.
   let pendingInductions: InductionEvent[] = [];
+  let pendingDeliveries: DeliveryEvent[] = [];
 
   /**
    * Keep the undrained window long enough to feed a frame by advancing the
@@ -1017,6 +1079,7 @@ export async function driveSimulationOpenEnded(
       await appendTick(tick);
       for (const item of tick) pendingOptEvents.push(item.event);
       pendingInductions.push(...collectInductions(tick));
+      pendingDeliveries.push(...collectDeliveries(tick));
       lastOptTickMs = tickMs;
       broadcastSimMs = tickMs;
       // Discard the drained tick from the front so RAM stays bounded.
@@ -1086,8 +1149,10 @@ export async function driveSimulationOpenEnded(
 
     if (opts.broadcast !== undefined) {
       const frameInductions = pendingInductions;
+      const frameDeliveries = pendingDeliveries;
       pendingInductions = [];
-      await opts.broadcast(broadcastSimMs, frameInductions);
+      pendingDeliveries = [];
+      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries);
     }
   }
 
@@ -1099,8 +1164,9 @@ export async function driveSimulationOpenEnded(
   }
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
-    await opts.broadcast(simClock, pendingInductions);
+    await opts.broadcast(simClock, pendingInductions, pendingDeliveries);
     pendingInductions = [];
+    pendingDeliveries = [];
   }
 
   return { ticks: drainedTotal };
@@ -1145,6 +1211,12 @@ export async function driveSimulationWithScenario(
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
     ...(opts.consolidationEnabled !== undefined
       ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
       : {}),
   });
 
