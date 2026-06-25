@@ -26,6 +26,10 @@
  */
 export type SimTask =
   | { readonly kind: "createPackageBatch"; readonly tick: number }
+  // v2.0 IND-02: external-induction self-rescheduling task (same tick-based shape
+  // as createPackageBatch). The pending task's absolute `fireTick` is captured by
+  // SerializedScheduled, so a resume between two inductions never loses/reorders it.
+  | { readonly kind: "inductPackage"; readonly tick: number }
   | { readonly kind: "departTrailer"; readonly trailerId: string; readonly spokeHubId: string; readonly departTick: number }
   | {
       readonly kind: "arriveTrailer";
@@ -90,6 +94,8 @@ export interface SerializedWorldState {
   readonly packageCounter: number;
   /** Monotonic trip id counter. */
   readonly tripCounter: number;
+  /** Monotonic external-induction id counter (v2.0 IND-02). 0 on a fresh run. */
+  readonly inductionCounter: number;
 }
 
 /** The raw seeded RNG sub-stream states (one `uint32` each; deterministic order). */
@@ -101,6 +107,8 @@ export interface SerializedRngStates {
   readonly hos: number;
   /** Present only when fuel is enabled (the off path never constructs it). */
   readonly fuel: number | undefined;
+  /** Present only when inductionEnabled (the off path never constructs it). IND-02. */
+  readonly induction: number | undefined;
 }
 
 /**

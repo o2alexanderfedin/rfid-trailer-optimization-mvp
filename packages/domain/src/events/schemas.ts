@@ -6,6 +6,7 @@ import {
   lonLatSchema,
   sizeClassSchema,
 } from "../entities/index.js";
+import { slaClassSchema } from "../planning/index.js";
 
 /**
  * One zod schema per Phase-1 event type, composed into a single closed
@@ -385,6 +386,34 @@ export const truckRefueledSchema = eventSchema(
   }),
 );
 
+// --- v2.0 external induction (IND-01) ---------------------------------------
+
+/**
+ * `PackageInducted` — freight enters the network FROM OUTSIDE at a spoke hub
+ * (IND-01 / v2.0). This is the first network-visible entry of externally
+ * originated freight; it COEXISTS with `PackageCreated` (internal center-origin
+ * spawn), which is unchanged.
+ *
+ * DETERMINISM: `occurredAt` is the VIRTUAL clock ISO string (never `Date.now()`).
+ * `slaDeadlineIso` is LOCKED at induction time (`occurredAt + expectedTravel
+ * (inductionHub→center→destHub) + SLA-class buffer`) and never regenerated.
+ * `externalOriginRef` is a deterministic counter id (e.g. `EXT-00001`). All
+ * fields are simulation-generated; the optimizer reads inducted freight via the
+ * `hub_inventory` projection's `inbound` bucket (Decision 3).
+ */
+export const packageInductedSchema = eventSchema(
+  "PackageInducted",
+  z.object({
+    packageId: id,
+    inductionHubId: id,
+    destHubId: id,
+    slaClass: slaClassSchema,
+    slaDeadlineIso: z.string().min(1),
+    externalOriginRef: id,
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -416,4 +445,6 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   // SP2 visible rest/fuel stop events (spec §4).
   truckRestedSchema,
   truckRefueledSchema,
+  // v2.0 external induction (IND-01).
+  packageInductedSchema,
 ]);

@@ -52,11 +52,13 @@ const SHORT_TIMING = {
 } as const;
 
 /**
- * ALL feature flags ON — rfid + over-carry + HOS + fuel. This is the maximal
- * state surface: every one of the SIX seeded sub-streams (base, rfid, overCarry,
- * timing, hos, fuel) is forced to draw, and every SimTask variant (createPackage
- * Batch, departTrailer, arriveTrailer, midLegStops, arriveOverCarriedAtCenter)
- * fires. A missed sub-stream in the continuation diverges here.
+ * ALL feature flags ON — rfid + over-carry + HOS + fuel + induction. This is the
+ * maximal state surface: every one of the SEVEN seeded sub-streams (base, rfid,
+ * overCarry, timing, hos, fuel, induction) is forced to draw, and every SimTask
+ * variant (createPackageBatch, inductPackage, departTrailer, arriveTrailer,
+ * midLegStops, arriveOverCarriedAtCenter) fires. A missed sub-stream OR a missed
+ * pending task in the continuation diverges here. Adding `inductionEnabled: true`
+ * costs ZERO additional test cases — it rides the existing chunk-1 matrix.
  */
 const ALL_ON: FeatureOpts = {
   timing: SHORT_TIMING,
@@ -70,6 +72,10 @@ const ALL_ON: FeatureOpts = {
     refuelThresholdMiles: 120,
     refuelTimeMinutes: 30,
   },
+  // v2.0 IND-02: include external induction in the maximal state surface so the
+  // SEVENTH sub-stream (induction RNG) + the inductPackage SimTask variant are
+  // exercised under the most adversarial chunk-1 / clone+freeze boundaries.
+  inductionEnabled: true,
 };
 
 /**

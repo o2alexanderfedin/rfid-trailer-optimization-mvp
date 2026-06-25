@@ -48,6 +48,28 @@ function arrived(packageId: string, hubId: string): DomainEvent {
   };
 }
 
+// v2.0 IND-01: an externally-induced package entering at a spoke hub.
+function inducted(
+  packageId: string,
+  inductionHubId: string,
+  destHubId: string,
+  occurredAt: string,
+): DomainEvent {
+  return {
+    type: "PackageInducted",
+    schemaVersion: 1,
+    payload: {
+      packageId,
+      inductionHubId,
+      destHubId,
+      slaClass: "express",
+      slaDeadlineIso: "2026-06-24T12:00:00.000Z",
+      externalOriginRef: `EXT-${packageId}`,
+      occurredAt,
+    },
+  };
+}
+
 function departed(
   trailerId: string,
   fromHubId: string,
@@ -154,6 +176,21 @@ describe("packageLocationReducer (FND-05)", () => {
     const ts = at(99_000);
     const state = foldPackage([evt(scanned("P1", "MEM", "inbound"), ts)]);
     expect(state.get("P1")?.lastSeenAt).toBe(ts);
+  });
+
+  // v2.0 IND-01: external induction places the package at its INDUCTION hub
+  // (the first network-visible sighting), keyed off `occurredAt`.
+  it("PackageInducted sets last-known-location to inductionHubId (IND-01)", () => {
+    const ts = at(7_000);
+    const state = foldPackage([
+      evt(inducted("EXT-P00001", "MEM", "DFW", ts), ts),
+    ]);
+    expect(state.get("EXT-P00001")).toEqual({
+      packageId: "EXT-P00001",
+      hubId: "MEM",
+      confidence: DIRECT_SCAN_CONFIDENCE,
+      lastSeenAt: ts,
+    });
   });
 });
 
@@ -271,6 +308,20 @@ describe("hubInventoryReducer (FND-07)", () => {
       staged: ["P3"],
       outbound: ["P4"],
     });
+  });
+
+  // IND-03 / Decision 3: externally-induced freight enters the induction hub's
+  // INBOUND bucket — the same optimizer demand path as PackageArrivedAtHub.
+  it("PackageInducted places the package in inductionHubId.inbound (IND-03)", () => {
+    const state = foldHub([
+      evt(inducted("EXT-P00001", "MEM", "DFW", at(0)), at(0)),
+    ]);
+    const mem = state.hubs.get("MEM");
+    expect(mem?.inbound).toEqual(["EXT-P00001"]);
+    expect(mem?.outbound).toEqual([]);
+    expect(mem?.staged).toEqual([]);
+    // It lands at the INDUCTION hub, not the destination hub.
+    expect(state.hubs.get("DFW")).toBeUndefined();
   });
 
   it("moving a package to a new bucket removes it from the old (no double-count)", () => {

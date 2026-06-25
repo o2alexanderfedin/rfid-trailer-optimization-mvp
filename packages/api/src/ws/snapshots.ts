@@ -15,6 +15,7 @@ import {
   diffTick,
   type ExceptionItem,
   type HubState,
+  type InductionEvent,
   type RouteState,
   type SimSpeedState,
   type SnapshotPayload,
@@ -75,9 +76,14 @@ export type SnapshotPayloadBuilder = (db: ApiDb) => Promise<SnapshotPayload>;
 /**
  * Broadcast one tick delta to all connected clients.
  * `simMs` is the authoritative sim-clock milliseconds for this tick.
- * Returns the `WsEnvelope` sent (type:"tick").
+ * `inductionEvents` (VIZ-13) are the packages inducted during this tick/frame —
+ * TRANSIENT, attached to the tick payload to drive the pulsing-marker animation
+ * (never persisted, never on a snapshot). Returns the `WsEnvelope` sent.
  */
-export type Broadcast = (simMs: number) => Promise<WsEnvelope>;
+export type Broadcast = (
+  simMs: number,
+  inductionEvents?: readonly InductionEvent[],
+) => Promise<WsEnvelope>;
 
 /** Options for {@link attachSnapshotSocket} (dependency inversion / testing). */
 export interface SnapshotSocketOptions {
@@ -813,7 +819,10 @@ export function attachSnapshotSocket(
   });
 
   /** Broadcast one tick delta to all connected clients. */
-  return async (simMs: number): Promise<WsEnvelope> => {
+  return async (
+    simMs: number,
+    inductionEvents?: readonly InductionEvent[],
+  ): Promise<WsEnvelope> => {
     const current = await build(db);
     const prev = baseline ?? emptySnapshotPayload();
     baseline = current;
@@ -822,7 +831,13 @@ export function attachSnapshotSocket(
     // immediate envelope at the right clock anchor (controller.getLastSimMs()).
     speedController.noteSimMs(simMs);
 
-    const delta: TickPayload = diffTick(prev, current);
+    const diff: TickPayload = diffTick(prev, current);
+    // VIZ-13: attach the tick's induction events (transient) onto the delta when
+    // present — never persisted, never on a snapshot.
+    const delta: TickPayload =
+      inductionEvents !== undefined && inductionEvents.length > 0
+        ? { ...diff, inductionEvents }
+        : diff;
     seq += 1;
     const envelope: WsEnvelope = {
       v: 1,

@@ -54,7 +54,7 @@
 > **Keystone constraint — determinism:** Every v2.0 feature is opt-in (flag off by default). With all v2.0 flags off, the existing seed-42 golden replay is byte-identical to pre-v2.0. New RNG salts (`INDUCTION_RNG_SALT`, `OUTBOUND_RNG_SALT`) are pairwise-distinct from all existing salts, asserted in the salt-collision test. Reducers key off `occurredAt` (virtual clock), never wall-clock. New events follow the established closed-union + Zod `.strict()` + `assertNever`-exhaustive pattern.
 
 - [x] **Phase 19: Continuous Operation Foundation** - Open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, and bidirectional route registration
-- [ ] **Phase 20: External Induction** - `PackageInducted` event, spoke-hub induction from dedicated seeded substream, SLA deadline to optimizer, pulsing map marker
+- [x] **Phase 20: External Induction** - `PackageInducted` event, spoke-hub induction from dedicated seeded substream, SLA deadline to optimizer, pulsing map marker
 - [ ] **Phase 21: Bidirectional Freight / Consolidation** - Spoke→center consolidation via `pendingAtSpoke` queue, center inbound re-sort, optimizer two-direction awareness, consolidation trailer map styling
 - [ ] **Phase 22: Outbound Delivery** - `PackageDelivered` terminal event, destination detection, `onTime` SLA flag, projection purge, delivery hub-highlight on map
 
@@ -95,7 +95,19 @@ Plans:
   2. Inducted packages carry a destination hub and SLA deadline visible in the optimizer's planning output (optional `deadlineMin` on `TwinBlock`), so urgency-driven re-optimization is observable when tight deadlines are present
   3. With `inductionEnabled: false` (default), zero `PackageInducted` events are emitted — the existing seed-42 golden is byte-identical; with the flag on, `INDUCTION_RNG_SALT` is pairwise-distinct from all other salts (asserted by the salt-collision test), and induction draws are isolated from all other RNG substreams
   4. The `PackageInducted` event passes a `validate()` round-trip test and is exhaustively handled in every `switch(event.type)` reducer, enforced at build time by `contract.assert.ts` and `assertNever` guards
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+**Wave 1**
+- [ ] 20-01-PLAN.md — PackageInducted 5-file closed-union ceremony + validate round-trip test (IND-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 20-02-PLAN.md — Engine + continuation: INDUCTION_RNG_SALT, inductPackage(), SerializedRngStates.induction, determinism tests (IND-02)
+- [ ] 20-03-PLAN.md — All 11 projection reducers: hub-inventory ACTIVE case + 10 no-ops + hub-inventory test (IND-01/IND-03)
+- [ ] 20-04-PLAN.md — Optimizer scope.ts ACTIVE classification + TwinBlock.deadlineMin? (IND-03)
+- [ ] 20-05-PLAN.md — WS envelope InductionEvent, snapshots wiring, inductionColoring.ts, layers.ts (VIZ-13)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 20-06-PLAN.md — Continuation-equivalence induction case + ALL_ON extension + full gate + VIZ-13 checkpoint (IND-02, VIZ-13)
 **UI hint**: yes
 
 ### Phase 21: Bidirectional Freight / Consolidation
@@ -129,7 +141,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 19. Continuous Operation Foundation | 8/8 | ✅ Complete | 2026-06-24 |
-| 20. External Induction | 0/? | Not started | - |
+| 20. External Induction | 6/6 | ✅ Complete | 2026-06-24 |
 | 21. Bidirectional Freight / Consolidation | 0/? | Not started | - |
 | 22. Outbound Delivery | 0/? | Not started | - |
 

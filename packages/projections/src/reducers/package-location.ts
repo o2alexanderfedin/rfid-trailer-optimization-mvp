@@ -73,6 +73,19 @@ export function packageLocationReducer(
       });
       return next;
     }
+    case "PackageInducted": {
+      // v2.0 IND-01: external induction places the package at its induction hub —
+      // the first network-visible sighting (mirrors the PackageArrivedAtHub path,
+      // but keyed off `inductionHubId`). A direct intake scan is high-confidence.
+      const next = new Map(state);
+      next.set(event.payload.packageId, {
+        packageId: event.payload.packageId,
+        hubId: event.payload.inductionHubId,
+        confidence: DIRECT_SCAN_CONFIDENCE,
+        lastSeenAt: occurredAt,
+      });
+      return next;
+    }
     // Phase-3 RFID/detection events do not change scan-derived package location
     // — the fused zone estimate is a separate read model (later Phase-3 plans).
     // Anti-P6: absence of an RFID read never changes a package's known location.

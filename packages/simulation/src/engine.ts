@@ -12,8 +12,10 @@ import type {
   LoadStarted,
   PackageArrivedAtHub,
   PackageCreated,
+  PackageInducted,
   PackageScanned,
   SizeClass,
+  SlaClass,
   TrailerArrivedAtHub,
   TrailerDeparted,
   TrailerDocked,
@@ -27,6 +29,8 @@ import {
   DEFAULT_HOS_CONFIG,
   applyDrivingLeg,
   epochMinutesToIso,
+  expectedDwellMinutes,
+  expectedTransitMinutes,
   haversineKm,
   isoToEpochMinutes,
   mayDriveNow,
@@ -101,6 +105,15 @@ export const HOS_RNG_SALT = 0x10_51_09_01;
  * so adding a draw later cannot perturb the other five streams.
  */
 export const FUEL_RNG_SALT = 0x2b_3d_91_e7;
+/**
+ * v2.0 IND-02: the SEVENTH substream salt, for external-induction draws. A NEW,
+ * DISTINCT, well-separated constant (the salt-collision test asserts it differs
+ * from all six above — hash-split, NOT `seed+1`) so inducted packages never
+ * perturb any prior stream. The `inductionRng` it seeds is constructed ONLY when
+ * `inductionEnabled` — so an induction-off run draws ZERO induction values and
+ * stays byte-identical to the golden (the determinism keystone).
+ */
+export const INDUCTION_RNG_SALT = 0x8f_2c_4a_e1;
 
 // --- Public types -----------------------------------------------------------
 
@@ -253,6 +266,19 @@ export interface SimulateOptions {
    * tick clock (no RNG salt) — fully reproducible per seed when enabled.
    */
   readonly sortWave?: SortWaveConfig;
+  /**
+   * IND-02: OPT-IN external package induction at spoke hubs. **DEFAULT FALSE —
+   * the determinism keystone.** When absent or `false`, the engine emits NO
+   * `PackageInducted` events and makes ZERO `inductionRng` draws (the substream is
+   * never even constructed), so the existing seed-1234 + seed-42 goldens are
+   * BYTE-IDENTICAL (DET-01). When `true`, a seeded substream (`INDUCTION_RNG_SALT`)
+   * drives a self-rescheduling `inductPackage` EventQueue task: freight enters the
+   * network from OUTSIDE at spoke hubs, shapes optimizer priority via a deadline
+   * locked at induction, and animates on the live map (VIZ-13). Fully resumable —
+   * the induction RNG state AND the pending self-rescheduling task are captured in
+   * the `SimContinuation`, so a chunked run is byte-identical to all-at-once.
+   */
+  readonly inductionEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -273,6 +299,31 @@ const PACKAGE_INTERVAL_TICKS = 15;
 const MAX_PACKAGES_PER_BATCH = 3;
 /** Package size classes, in a fixed order (RNG picks an index). */
 const SIZE_CLASSES: readonly SizeClass[] = ["small", "medium", "large"];
+
+// --- v2.0 external induction (IND-02/IND-03) --------------------------------
+
+/** Ticks between successive external inductions at spoke hubs (one every 30 min). */
+const INDUCTION_INTERVAL_TICKS = 30;
+/** First induction fires at tick 1 (deterministic, fixed offset; off by default). */
+const INDUCTION_START_TICK = 1;
+/** SLA classes in a fixed order (the induction RNG picks an index). */
+const SLA_CLASSES: readonly SlaClass[] = [
+  "express",
+  "priority",
+  "standard",
+  "economy",
+];
+/**
+ * IND-03: whole-minute SLA buffer added on top of the travel estimate when
+ * deriving `slaDeadlineIso`. Tighter classes get less slack — so the optimizer's
+ * slack/critical-ratio prioritization is meaningful. Deterministic per class.
+ */
+const SLA_BUFFER_MIN: Record<SlaClass, number> = {
+  express: 60,
+  priority: 120,
+  standard: 240,
+  economy: 480,
+};
 
 /**
  * SIM-HOS-03: max extra whole-minute jitter added to EACH mandatory break/rest,
@@ -435,6 +486,11 @@ export function runToHorizon(
   const fuelConfig: FuelConfig = fuel ?? DEFAULT_FUEL_CONFIG;
   const fuelOn = fuelConfig.enabled === true;
 
+  // v2.0 IND-02: external induction is OPT-IN and DEFAULT OFF. Absent/false ⇒ the
+  // engine emits NO `PackageInducted` and NEVER constructs/draws `inductionRng`,
+  // so all existing goldens are byte-identical (the determinism keystone).
+  const inductionOn = opts.inductionEnabled === true;
+
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
   const rfidEnabled = rfid !== undefined;
@@ -499,6 +555,17 @@ export function runToHorizon(
       : makeRng((seed ^ FUEL_RNG_SALT) >>> 0)
     : undefined;
   void fuelRng;
+  // v2.0 IND-02: the SEVENTH substream. Created ONLY when induction is on (the
+  // determinism keystone — an induction-off run never even constructs it). The
+  // salt is DISTINCT from the six above (asserted by the salt-collision test) so
+  // induction draws are fully reproducible per seed yet never perturb the other
+  // streams. On resume it is restored from the captured raw state so a chunked
+  // run draws the EXACT remaining sequence (continuation-equivalence keystone).
+  const inductionRng: Rng | undefined = inductionOn
+    ? restoredRng && restoredRng.induction !== undefined
+      ? makeRngFromState(restoredRng.induction)
+      : makeRng((seed ^ INDUCTION_RNG_SALT) >>> 0)
+    : undefined;
   // SP2: per-trailer odometer (miles since last refuel), init 0 at roster
   // seeding. Only mutated when `fuelOn`; an off run leaves it empty (no state).
   // On resume it is restored from the continuation's world state.
@@ -630,6 +697,9 @@ export function runToHorizon(
   // trip ids continue the same sequence (stable ids keep the stream reproducible).
   let packageCounter = resuming ? start.world.packageCounter : 0;
   let tripCounter = resuming ? start.world.tripCounter : 0;
+  // v2.0 IND-02: monotonic external-induction id counter; restored on resume so
+  // EXT ids continue the same sequence (stable ids keep the stream reproducible).
+  let inductionCounter = resuming ? start.world.inductionCounter : 0;
 
   /**
    * Emit one event onto its stream at the current domain time. CONT-01: when an
@@ -961,6 +1031,82 @@ export function runToHorizon(
     // path — captured into the continuation) or DROPPED past `durationTicks` (the
     // finite all-at-once path — byte-identical goldens, DET-01).
     scheduleNext(nextTick, { kind: "createPackageBatch", tick: nextTick });
+  };
+
+  /**
+   * v2.0 IND-02/IND-03: external induction — freight enters the network FROM
+   * OUTSIDE at a spoke hub. A self-rescheduling EventQueue task (like
+   * {@link createPackageBatch}) so the order stays single-threaded + deterministic
+   * — never an external append. Draws EXCLUSIVELY from `inductionRng` (byte-
+   * isolated from every other substream). Guards on `inductionOn` so the off path
+   * NEVER runs (the determinism keystone): zero draws, zero events.
+   *
+   * The deadline (`slaDeadlineIso`) is LOCKED at induction from the shared travel
+   * estimator: `occurredAt + expectedTransit(inductionHub→center→destHub) +
+   * center-dwell + SLA-class buffer`. All times use the VIRTUAL clock
+   * (`clock.nowIso()`) — never `Date.now()`.
+   */
+  const inductPackage = (tick: number): void => {
+    if (!inductionOn || inductionRng === undefined) return; // never runs when off
+
+    inductionCounter += 1;
+    const externalOriginRef = `EXT-${String(inductionCounter).padStart(5, "0")}`;
+    const packageId = `EXT-P${String(inductionCounter).padStart(5, "0")}`;
+
+    // Draw from inductionRng ONLY. Spoke→spoke routes via the center (Decision 2):
+    // the induction hub is a spoke; the destination is a DIFFERENT spoke.
+    const inductionHub = inductionRng.pick(spokes);
+    const destCandidates = spokes.filter((s) => s.hubId !== inductionHub.hubId);
+    // Fail-loud invariant: with the fixed 11-spoke topology there is ALWAYS at
+    // least one different spoke, so this NEVER fires for a valid run (goldens
+    // unaffected — zero extra RNG draws). A silent `: inductionHub` fallback
+    // would emit a self-destined induction (destHubId === inductionHubId),
+    // violating the `inductionHubId !== destHubId` invariant the projections and
+    // tests rely on. Throw instead of producing an impossible-but-quiet state.
+    if (destCandidates.length === 0) {
+      throw new Error(
+        `inductPackage: no destination spoke distinct from induction hub ` +
+          `"${inductionHub.hubId}" (${spokes.length} spoke(s) total) — ` +
+          `the fixed topology guarantees candidates, so this is an invalid state`,
+      );
+    }
+    const destHub = inductionRng.pick(destCandidates);
+    const slaClass = SLA_CLASSES[inductionRng.int(SLA_CLASSES.length)]!;
+
+    // Deadline = occurredAt + expectedTravel(inductionHub→center→destHub) + buffer.
+    // The same `expectedMinutes`-backed estimator the optimizer uses (one source
+    // of truth). Locked here; never regenerated.
+    const transitMin =
+      expectedTransitMinutes(inductionHub, center, timingConfig) +
+      expectedDwellMinutes("center", timingConfig) +
+      expectedTransitMinutes(center, destHub, timingConfig);
+    const occurredAtIso = clock.nowIso();
+    const deadlineMin =
+      isoToEpochMinutes(occurredAtIso) +
+      Math.round(transitMin) +
+      SLA_BUFFER_MIN[slaClass];
+    const slaDeadlineIso = epochMinutesToIso(deadlineMin);
+
+    const inducted: PackageInducted = {
+      type: "PackageInducted",
+      schemaVersion: 1,
+      payload: {
+        packageId,
+        inductionHubId: inductionHub.hubId,
+        destHubId: destHub.hubId,
+        slaClass,
+        slaDeadlineIso,
+        externalOriginRef,
+        occurredAt: occurredAtIso,
+      },
+    };
+    emit(`package-${packageId}`, inducted);
+
+    // Self-reschedule the NEXT induction at an ABSOLUTE tick (same discipline as
+    // createPackageBatch). `scheduleNext` RETAINS the task on the resumable path
+    // (captured into the continuation) or DROPS it past the horizon (finite path).
+    const nextTick = tick + INDUCTION_INTERVAL_TICKS;
+    scheduleNext(nextTick, { kind: "inductPackage", tick: nextTick });
   };
 
   /**
@@ -1491,6 +1637,9 @@ export function runToHorizon(
       case "createPackageBatch":
         createPackageBatch(task.tick);
         return;
+      case "inductPackage":
+        inductPackage(task.tick);
+        return;
       case "departTrailer":
         departTrailer(task.trailerId, hubById.get(task.spokeHubId)!, task.departTick);
         return;
@@ -1529,6 +1678,15 @@ export function runToHorizon(
         trailerId: entry.trailerId,
         spokeHubId: entry.spoke.hubId,
         departTick: entry.departTick,
+      });
+    }
+    // v2.0 IND-02: seed the first induction (off by default). On a RESUME the
+    // pending induction task is restored from the captured queue, so this is
+    // skipped — the self-rescheduling chain continues uninterrupted.
+    if (inductionOn) {
+      schedule(INDUCTION_START_TICK, {
+        kind: "inductPackage",
+        tick: INDUCTION_START_TICK,
       });
     }
   }
@@ -1579,6 +1737,7 @@ export function runToHorizon(
       sparePool: [...sparePool],
       packageCounter,
       tripCounter,
+      inductionCounter,
     };
     return {
       version: 1,
@@ -1594,6 +1753,7 @@ export function runToHorizon(
         timing: timingRng.getState(),
         hos: hosRng.getState(),
         fuel: fuelRng?.getState(),
+        induction: inductionRng?.getState(),
       },
       queue: queue.snapshot(),
       nextSeq: queue.peekNextSeq(),

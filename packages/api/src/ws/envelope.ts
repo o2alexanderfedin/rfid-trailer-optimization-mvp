@@ -120,6 +120,20 @@ export interface ExceptionItem {
   readonly simMs: number;
 }
 
+/**
+ * VIZ-13 — a package inducted at a spoke hub this tick. TRANSIENT: present only
+ * on a `TickPayload` (never `SnapshotPayload`), so a reconnect/resync does NOT
+ * re-animate all historical inductions (Pitfall 7).
+ */
+export interface InductionEvent {
+  readonly packageId: string;
+  readonly inductionHubId: string;
+  readonly destHubId: string;
+  readonly slaClass: string;
+  readonly slaDeadlineIso: string;
+  readonly occurredAt: string;
+}
+
 /** UI-04 — plan re-optimization made visible. */
 export interface PlanDelta {
   readonly trailerId: string;
@@ -202,6 +216,12 @@ export interface TickPayload {
   readonly exceptionsResolved?: readonly string[];
   /** Plan deltas from a re-optimization event. */
   readonly planChanges?: readonly PlanDelta[];
+  /**
+   * VIZ-13 — packages inducted at spoke hubs this tick (TRANSIENT). Drives the
+   * pulsing induction-marker animation. Present ONLY here, never on
+   * `SnapshotPayload` (a reconnect must not re-flash historical inductions).
+   */
+  readonly inductionEvents?: readonly InductionEvent[];
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,22 @@ function arrived(trailerId: string, hubId: string): DomainEvent {
   };
 }
 
+function inducted(inductionHubId: string, destHubId: string): DomainEvent {
+  return {
+    type: "PackageInducted",
+    schemaVersion: 1,
+    payload: {
+      packageId: "EXT-P00001",
+      inductionHubId,
+      destHubId,
+      slaClass: "express",
+      slaDeadlineIso: "2026-06-24T12:00:00.000Z",
+      externalOriginRef: "EXT-00001",
+      occurredAt: "2026-06-24T08:00:00.000Z",
+    },
+  };
+}
+
 describe("detectAffectedScope (OPT-05 scoped epoch)", () => {
   it("collects ONLY the hubs/trailers referenced by the events, not the whole network", () => {
     const events: DomainEvent[] = [
@@ -68,6 +84,14 @@ describe("detectAffectedScope (OPT-05 scoped epoch)", () => {
   it("yields an EMPTY scope for an empty event batch (nothing affected)", () => {
     const scope = detectAffectedScope([], EPOCH);
     expect(scope.hubIds).toEqual([]);
+    expect(scope.trailerIds).toEqual([]);
+  });
+
+  // v2.0 IND-03: a PackageInducted event re-scopes the optimizer to BOTH the
+  // induction hub (new demand origin) and the destination hub — not [] (Pitfall 3).
+  it("PackageInducted scopes to [inductionHubId, destHubId] (IND-03)", () => {
+    const scope = detectAffectedScope([inducted("HA", "HB")], EPOCH);
+    expect([...scope.hubIds].sort()).toEqual(["HA", "HB"]);
     expect(scope.trailerIds).toEqual([]);
   });
 });

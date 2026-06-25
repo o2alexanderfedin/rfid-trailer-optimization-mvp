@@ -240,6 +240,9 @@ function describeEvent(e: DomainEvent): string {
       return e.payload.trailerId;
     case "TruckRefueled":
       return e.payload.trailerId;
+    // v2.0 external induction (IND-01).
+    case "PackageInducted":
+      return e.payload.packageId;
     default:
       return assertNever(e);
   }
@@ -304,7 +307,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 22 literal discriminators", () => {
+  it("DomainEventType is the union of the 23 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -330,6 +333,8 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       // SP2 (v1.3) rest/fuel stop events.
       | "TruckRested"
       | "TruckRefueled"
+      // v2.0 external induction (IND-01).
+      | "PackageInducted"
     >();
   });
 

@@ -10,6 +10,7 @@ import type { HubState, RouteState, TrailerKeyframe, TrailerStop } from "@mm/api
 import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
 import { classifyDutyBucket } from "./dutyColoring.js";
 import { stopStyle } from "./stopColoring.js";
+import { inductionStyle } from "./inductionColoring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -232,6 +233,44 @@ export function createTrailerStopLayer(): Layer {
  * may show successive stops along a trip without collision. */
 function stopFeatureId(s: TrailerStop): string {
   return `stop:${s.trailerId}:${s.tripId}:${s.startMs}`;
+}
+
+/**
+ * Create the (initially empty) induction-event layer (VIZ-13). A `PackageInducted`
+ * ws message adds a transient pulsing feature here via {@link flashInduction}; a
+ * `setTimeout` removes it after ~2000 ms. The source is never blindly cleared —
+ * features are added + removed individually (same discipline as the stop layer).
+ */
+export function createInductionLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  const layer = new VectorLayer({ source, style: inductionStyle });
+  return { layer, source };
+}
+
+/**
+ * Flash an induction marker at `[lon, lat]` for `durationMs` (default 2000): add a
+ * transient Point feature, then remove it after the timeout. `Date.now()` is used
+ * ONLY for feature-id uniqueness (markers just need to not collide per flash) — it
+ * is NOT a virtual-clock concern, so this is correct here.
+ */
+export function flashInduction(
+  source: VectorSource,
+  inductionHubId: string,
+  lon: number,
+  lat: number,
+  durationMs = 2000,
+): void {
+  const featureId = `induction:${inductionHubId}:${Date.now()}:${Math.random()}`;
+  const feature = new Feature({
+    geometry: new Point(fromLonLat([lon, lat])),
+    inductionHubId,
+  });
+  feature.setId(featureId);
+  source.addFeature(feature);
+  setTimeout(() => {
+    const f = source.getFeatureById(featureId);
+    if (f !== null) source.removeFeature(f);
+  }, durationMs);
 }
 
 /**

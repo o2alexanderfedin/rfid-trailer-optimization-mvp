@@ -32,6 +32,12 @@ function hubsOf(event: DomainEvent): readonly string[] {
       return [event.payload.fromHubId, event.payload.toHubId];
     case "PackageCreated":
       return [event.payload.originHubId, event.payload.destHubId];
+    // v2.0 IND-03 (Pitfall 3): external induction re-scopes the optimizer to BOTH
+    // the induction hub (new demand origin) AND the destination hub — same shape
+    // as PackageCreated. Classifying it scope-neutral would silently defeat the
+    // optimizer demand path (inducted freight never prioritized).
+    case "PackageInducted":
+      return [event.payload.inductionHubId, event.payload.destHubId];
     case "PackageScanned":
     case "PackageArrivedAtHub":
     case "TrailerArrivedAtHub":

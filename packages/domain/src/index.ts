@@ -77,6 +77,7 @@ export type {
   UnloadCompleted,
   TruckRested,
   TruckRefueled,
+  PackageInducted,
 } from "./events/index.js";
 export {
   assertNever,
@@ -105,6 +106,7 @@ export {
   unloadCompletedSchema,
   truckRestedSchema,
   truckRefueledSchema,
+  packageInductedSchema,
 } from "./events/index.js";
 
 // --- Shared FUEL contract (SP2 §4 — sim odometer + optimizer fuel-awareness) --
