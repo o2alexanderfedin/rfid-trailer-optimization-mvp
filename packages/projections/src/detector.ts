@@ -82,6 +82,47 @@ interface PlannedAppend {
 }
 
 /**
+ * FLOW-04 (Phase 21) — the ACTIVE-package read scope.
+ *
+ * The detector signal only ever comes from a trailer that is meaningfully in
+ * play: wrong-trailer is observed against an *assigned* trailer, and
+ * missed-unload is already POST-departure gated on `status === "in_transit"`.
+ * An IDLE trailer's stale assignment produces no in-transit detection signal —
+ * so an inactive/terminal row is pure cost, never a result.
+ *
+ * Under continuous bidirectional freight, the unscoped `selectAll()` reads in
+ * {@link makeProjectionReads} grow with EVERY trailer/observation ever folded,
+ * making detection cost scale with total-ever state (the
+ * detection-cost-scales-with-state debt). We scope the reads to ACTIVE rows so
+ * detection cost tracks the active set, not the historical total.
+ *
+ * A3 — WHERE "active" lives (resolved): a not-yet-terminal PREDICATE over the
+ * EXISTING `trailer_state.status` column (`"in_transit" | "arrived" | "docked"`),
+ * NOT a new `is_active` column or a schema migration. This keeps the change a
+ * pure read-query concern (DIP-clean): the {@link DetectorReads} port shape and
+ * the pure {@link planDetection} core are untouched. It composes with a future
+ * per-package terminal purge (a later phase may DELETE terminal projection rows)
+ * WITHOUT this code depending on any such terminal event —
+ * `ACTIVE_TRAILER_STATUSES` is the sole coupling point.
+ *
+ * Scope = `in_transit` only. Both detection predicates draw their signal from
+ * freight that is currently moving toward a destination: missed-unload is ALREADY
+ * `in_transit`-gated (an `arrived`/`docked` trailer has reached a hub and its
+ * freight is being unloaded/re-sorted, not over-carried in flight), and a
+ * wrong-trailer disagreement is meaningful for in-flight freight. The vast,
+ * unbounded read is `zone_estimate` — one row per (package, trailer) EVER
+ * observed; scoping its packages to those still aboard an `in_transit` trailer
+ * is what bounds detection cost. The active-set equivalence test witnesses that
+ * this changes COST, not RESULTS.
+ */
+export const ACTIVE_TRAILER_STATUSES = ["in_transit"] as const;
+
+/** True iff a trailer status can still produce a detection signal (A3 scope). */
+export function isActiveTrailerStatus(status: string): boolean {
+  return (ACTIVE_TRAILER_STATUSES as readonly string[]).includes(status);
+}
+
+/**
  * The PURE detection core: given the two layers + the departed hubs + the
  * already-recorded exception ids, decide which exception events to append.
  * No I/O, no clock, no RNG — same inputs ⇒ same appends (auditable, testable).
@@ -171,7 +212,16 @@ export function makeProjectionReads(
   // package index (a tiny PackageCreated fold) — DIP keeps this package acyclic.
   return {
     readPlannedAssignments: async () => {
-      const trailers = await db.selectFrom("trailer_state").selectAll().execute();
+      // `trailer_state` is keyed by `trailer_id` (PK) so it is FLEET-bounded, not
+      // total-ever — but only ACTIVE (`in_transit`) trailers carry in-flight
+      // freight that yields a detection signal. Scope to active trailers; their
+      // assignments cover every package the (now active-scoped) observations can
+      // reference, so the active-set results are unchanged (A3 / FLOW-04).
+      const trailers = await db
+        .selectFrom("trailer_state")
+        .selectAll()
+        .where("status", "in", [...ACTIVE_TRAILER_STATUSES])
+        .execute();
       const out: PlannedAssignment[] = [];
       for (const t of trailers) {
         for (const packageId of t.assigned_package_ids) {
@@ -183,7 +233,25 @@ export function makeProjectionReads(
       return out;
     },
     readObserved: async () => {
-      const rows = await db.selectFrom("zone_estimate").selectAll().execute();
+      // The UNBOUNDED read: one `zone_estimate` row per (package, trailer) EVER
+      // observed. Scope to observations aboard an ACTIVE (`in_transit`) trailer —
+      // the only ones that can produce a CURRENT detection signal — so detection
+      // cost tracks the active set, not total-ever (the
+      // detection-cost-scales-with-state debt under continuous bidirectional
+      // freight). Inactive/terminal observations produce no signal anyway, so
+      // this changes COST, not RESULTS (A3 / FLOW-04).
+      const rows = await db
+        .selectFrom("zone_estimate")
+        .selectAll()
+        .where(
+          "trailer_id",
+          "in",
+          db
+            .selectFrom("trailer_state")
+            .select("trailer_id")
+            .where("status", "in", [...ACTIVE_TRAILER_STATUSES]),
+        )
+        .execute();
       return rows.map((r) => ({
         packageId: r.package_id,
         trailerId: r.trailer_id,
@@ -202,10 +270,15 @@ export function makeProjectionReads(
       // MVP gate; Plan 07 drives detection from the sim loop and can inject the
       // EXACT just-departed hub via this same `readDepartedHubs` port (DIP), so
       // the gate tightens with zero change to the detector core.
-      const trailers = await db.selectFrom("trailer_state").selectAll().execute();
+      // Already `in_transit`-gated; push the predicate into SQL so the read is
+      // bounded by the active fleet, not total-ever rows (A3 / FLOW-04).
+      const trailers = await db
+        .selectFrom("trailer_state")
+        .selectAll()
+        .where("status", "in", [...ACTIVE_TRAILER_STATUSES])
+        .execute();
       const hubs = new Set<string>();
       for (const t of trailers) {
-        if (t.status !== "in_transit") continue;
         for (const packageId of t.assigned_package_ids) {
           const destHubId = deps.readDestHub(packageId);
           if (destHubId !== undefined) hubs.add(destHubId);
