@@ -2,7 +2,7 @@ import { createDb, migrate } from "@mm/event-store";
 import { PROJECTIONS_SCHEMA_SQL } from "@mm/projections";
 import { sql } from "kysely";
 import { buildServer } from "./server.js";
-import { driveSimulationPaced } from "./sim/driver.js";
+import { driveSimulationPaced, driveSimulationOpenEnded } from "./sim/driver.js";
 import {
   DEMO_RFID_CONFIG,
   DEMO_OVER_CARRY_CONFIG,
@@ -71,6 +71,26 @@ async function main(): Promise<void> {
   // byte-identical; this env wiring affects ONLY the demo.
   const outboundDeliveryEnabled = process.env.OUTBOUND_DELIVERY_ENABLED !== "0";
   const inductionEnabled = process.env.INDUCTION_ENABLED !== "0";
+  // Phase 21 (FLOW-01/02): spoke→center consolidation on the LIVE demo (DEFAULT
+  // ON; set CONSOLIDATION_ENABLED=0 to disable). When on, spoke-origin trailers
+  // carry real freight to the center, which re-sorts it for onward distribution —
+  // so the full bidirectional freight lifecycle (induction → consolidation →
+  // center re-sort → distribution → delivery) runs live. Off-by-default in the
+  // ENGINE keeps the unit goldens byte-identical; this env wiring affects ONLY the demo.
+  const consolidationEnabled = process.env.CONSOLIDATION_ENABLED !== "0";
+  // Phase 19 (CONT-01/02): continuous open-ended operation on the LIVE demo.
+  // OPT-IN (DEFAULT OFF — the default demo keeps the finite paced run that all
+  // existing tooling expects). Set RUN_UNTIL_STOPPED=1 to drive the resumable
+  // `driveSimulationOpenEnded` path instead: ONE bounded `SimContinuation`
+  // advanced by chunks, broadcasting forever until the process is stopped — so the
+  // full v2.0 lifecycle (induction → consolidation → distribution → delivery)
+  // runs indefinitely on the live map. Engine determinism goldens are untouched
+  // (they call `simulate` directly; this env wiring affects ONLY the demo).
+  // NOTE: bounded persisted retention (event-log pruning) is a DEEPER opt-in and
+  // is intentionally left OFF here — enabling it requires materializing the
+  // delivery-KPI aggregate first (see v2.0-MILESTONE-AUDIT.md tech-debt), since
+  // the on-demand KPI COUNTs over the `events` log a prune would shrink.
+  const runUntilStopped = process.env.RUN_UNTIL_STOPPED === "1";
   const { app, broadcast, loop, speedController, worker } = await buildServer({
     db,
     simSeed: seed,
@@ -90,8 +110,13 @@ async function main(): Promise<void> {
   // instance is started — addHook("onClose", ...) would throw
   // FST_ERR_INSTANCE_ALREADY_LISTENING. Tear the DB down on process termination
   // (SIGINT/SIGTERM) instead, closing the server first so in-flight requests drain.
+  // CONT-01: cooperative stop flag for the open-ended driver — flipped on the
+  // first termination signal so `driveSimulationOpenEnded({ stopped })` exits its
+  // frame loop cleanly at the next boundary (no-op for the finite paced path).
+  let stopping = false;
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`${signal} received — shutting down`);
+    stopping = true;
     try {
       // `app.close()` already terminates the worker via its onClose hook; we also
       // close it explicitly (idempotent) so the worker thread never outlives the
@@ -139,7 +164,11 @@ async function main(): Promise<void> {
   // (reads → fused zone estimates → per-tick detector → exception feed).
   // F-07 / SNS-05: also enable the seeded over-carry so the missed-unload feed is
   // live — the UNCHANGED detector fires on spoke-origin over-carry return legs.
-  driveSimulationPaced({
+  // Options shared by BOTH drive paths. `driveSimulationOpenEnded` extends
+  // `driveSimulationPacedOptions` (a clean superset), so the whole live wiring —
+  // broadcast, optimizer loop, frame pacing, live speed control, and every v2.0
+  // feature flag — is identical; only the run shape (finite vs. continuous) differs.
+  const driveOpts = {
     db,
     seed,
     durationTicks,
@@ -150,10 +179,13 @@ async function main(): Promise<void> {
     // SP2: drive the engine with fuel ON (per FUEL_ENABLED) so the live stream
     // carries TruckRested/TruckRefueled and the geo-track renders mid-route stops.
     fuel: fuelConfig,
-    // Phase 20/22: induction + terminal delivery on the live demo so freight
-    // enters at the spokes, flows through the network, and fires PackageDelivered
-    // at its destination (VIZ-14 flash + OUT-05 KPI).
+    // Phase 20/21/22: induction + consolidation + terminal delivery on the live
+    // demo so freight enters at the spokes, consolidates spoke→center, re-sorts,
+    // distributes, and fires PackageDelivered at its destination — the full v2.0
+    // freight lifecycle live (VIZ-13 induction flash + VIZ-12 consolidation +
+    // VIZ-14 delivery flash + OUT-05 KPI).
     inductionEnabled,
+    consolidationEnabled,
     outboundDeliveryEnabled,
     fleetPerSpoke,
     optimizerEveryTicks,
@@ -163,8 +195,19 @@ async function main(): Promise<void> {
     maxTicksPerFrame,
     getMultiplier: () => speedController.getMultiplier(),
     isPaused: () => speedController.isPaused(),
-  }).catch((err: unknown) => {
-    app.log.error(err, "paced sim driver error");
+  };
+  app.log.info(
+    `run mode: ${runUntilStopped ? "CONTINUOUS (open-ended, until stopped)" : "finite paced"}`,
+  );
+  // Drive the sim AFTER listen so every connected client receives live ticks.
+  // Enable seeded RFID emission so the WHOLE Phase-3 pipeline fires end-to-end
+  // (reads → fused zone estimates → per-tick detector → exception feed). F-07 /
+  // SNS-05: seeded over-carry keeps the missed-unload feed live too.
+  const drive = runUntilStopped
+    ? driveSimulationOpenEnded({ ...driveOpts, stopped: () => stopping })
+    : driveSimulationPaced(driveOpts);
+  drive.catch((err: unknown) => {
+    app.log.error(err, "sim driver error");
   });
 }
 
