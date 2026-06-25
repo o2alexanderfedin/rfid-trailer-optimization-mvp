@@ -1,8 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  DEFAULT_TIMING_CONFIG,
-  type PackageDelivered,
-} from "@mm/domain";
+import { DEFAULT_TIMING_CONFIG } from "@mm/domain";
 import { simulate, type TimingConfig } from "@mm/simulation";
 import {
   buildServer,
@@ -42,7 +39,7 @@ function expectedKpi(): DeliveryKpiDto {
   for (const { event } of stream) {
     if (event.type !== "PackageDelivered") continue;
     deliveredCount += 1;
-    if ((event as PackageDelivered).payload.onTime) onTimeCount += 1;
+    if ((event).payload.onTime) onTimeCount += 1;
   }
   return { deliveredCount, onTimeCount };
 }

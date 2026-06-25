@@ -82,14 +82,14 @@ describe("OUT-02 / OUT-03: outbound delivery (flag-on)", () => {
     for (let i = 0; i < s.length; i += 1) {
       const e = s[i];
       if (e === undefined || e.event.type !== "PackageDelivered") continue;
-      const packageId = (e.event as PackageDelivered).payload.packageId;
+      const packageId = (e.event).payload.packageId;
       // There must be an earlier PackageArrivedAtHub for the SAME packageId.
       const priorArrival = s
         .slice(0, i)
         .some(
           (p) =>
             p.event.type === "PackageArrivedAtHub" &&
-            (p.event as PackageArrivedAtHub).payload.packageId === packageId,
+            (p.event).payload.packageId === packageId,
         );
       expect(priorArrival).toBe(true);
     }
