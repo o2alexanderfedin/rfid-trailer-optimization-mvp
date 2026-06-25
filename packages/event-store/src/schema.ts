@@ -70,8 +70,10 @@ export type HubRow = Selectable<HubsTable>;
  *  - `claimed_at` is DB-defaulted; `completed_at` is set on COMPLETED/FAILED.
  */
 export interface OptimizerIdempotencyTable {
-  horizon_start: ColumnType<string, string | number | bigint, never>;
-  horizon_end: ColumnType<string, string | number | bigint, never>;
+  // Minute horizons are small integers (well within JS safe-integer range); typed
+  // as `number` end-to-end so WHERE/insert accept the sim-time horizon directly.
+  horizon_start: ColumnType<number, number, number>;
+  horizon_end: ColumnType<number, number, number>;
   scope_hash: string;
   status: ColumnType<string, string | undefined, string>;
   plan_id: ColumnType<string | null, string | null | undefined, string | null>;
