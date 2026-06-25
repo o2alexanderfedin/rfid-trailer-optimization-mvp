@@ -74,17 +74,20 @@ function claimableDb(claimReturns: { scope_hash: string } | undefined): Kysely<D
     select: () => chain,
     where: () => chain,
     set: () => chain,
-    executeTakeFirst: async (): Promise<unknown> =>
+    executeTakeFirst: (): Promise<unknown> =>
       // The insert claim resolves to `claimReturns`; the trailer_state read
       // resolves to undefined (no row ⇒ staged = []). We disambiguate by the
       // presence of `scope_hash` on the canned claim row.
-      claimReturns,
-    execute: async (): Promise<unknown[]> => [],
+      Promise.resolve(claimReturns),
+    execute: (): Promise<unknown[]> => Promise.resolve([]),
   };
   const db = {
     insertInto: () => chain,
     updateTable: () => chain,
-    selectFrom: () => ({ ...chain, executeTakeFirst: async () => undefined }),
+    selectFrom: () => ({
+      ...chain,
+      executeTakeFirst: (): Promise<unknown> => Promise.resolve(undefined),
+    }),
   };
   return db as unknown as Kysely<Database>;
 }
