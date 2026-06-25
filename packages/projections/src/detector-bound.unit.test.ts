@@ -81,14 +81,22 @@ function harness(
   const activeTrailerIds = new Set(
     trailers.filter((t) => isActiveTrailerStatus(t.status)).map((t) => t.trailerId),
   );
-  const activeObserved = scope
-    ? observed.filter((o) => activeTrailerIds.has(o.trailerId))
-    : observed;
+  // PLANNED layer: scope to assignments on an active trailer (mirrors the SQL
+  // `trailer_state WHERE status IN (active)` filter).
   const activePlanned = scope
     ? planned.filter(
         (p) => p.plannedTrailerId !== null && activeTrailerIds.has(p.plannedTrailerId),
       )
     : planned;
+  // OBSERVED layer: scope by the ACTIVE PACKAGE set (packages aboard an active
+  // trailer) — NOT the observed trailer's status — mirroring the SQL adapter's
+  // `zone_estimate WHERE package_id IN (active packages)`. The observed trailer
+  // may be ANY trailer (wrong-trailer is a cross-trailer observation), so the
+  // observed trailerId is never a scope key (FLOW-04 fix).
+  const activePackageIds = new Set(activePlanned.map((p) => p.packageId));
+  const activeObserved = scope
+    ? observed.filter((o) => activePackageIds.has(o.packageId))
+    : observed;
 
   return {
     readPlannedAssignments: () => Promise.resolve(activePlanned),
@@ -124,22 +132,30 @@ async function timeDetect(reads: DetectorReads, runs = 5): Promise<number> {
 }
 
 describe("detector active-scoping is signal-preserving (FLOW-04 equivalence)", () => {
-  it("scope = in_transit only (the active predicate)", () => {
-    expect([...ACTIVE_TRAILER_STATUSES]).toEqual(["in_transit"]);
+  it("scope = every NON-TERMINAL trailer status (the active predicate)", () => {
+    // FLOW-04 fix: arrived/docked trailers still carry detectable freight
+    // (over-carry past a drop hub is precisely an arrived/docked trailer with
+    // stale cargo). All three live lifecycle statuses are ACTIVE; only a future
+    // terminal/retired status is excluded by the predicate.
+    expect([...ACTIVE_TRAILER_STATUSES]).toEqual(["in_transit", "arrived", "docked"]);
     expect(isActiveTrailerStatus("in_transit")).toBe(true);
-    expect(isActiveTrailerStatus("arrived")).toBe(false);
-    expect(isActiveTrailerStatus("docked")).toBe(false);
+    expect(isActiveTrailerStatus("arrived")).toBe(true);
+    expect(isActiveTrailerStatus("docked")).toBe(true);
+    // A status outside the live lifecycle (a future terminal/retired trailer) is
+    // excluded for free — the predicate is the sole coupling point.
+    expect(isActiveTrailerStatus("retired")).toBe(false);
   });
 
   it("scoped reads detect EXACTLY the same exceptions as an unscoped read over the active set", async () => {
-    // Active set: one wrong-trailer (PKG-W observed on the wrong in_transit
-    // trailer) + one missed-unload (PKG-M still aboard an in_transit trailer
-    // after its dest hub departed). Plus terminal noise that must not change
-    // the active-set result either way.
+    // Active set: one wrong-trailer (PKG-W observed on the wrong active
+    // trailer) + one missed-unload (PKG-M still aboard an ARRIVED trailer after
+    // over-carrying past its DFW drop hub — exactly the case the in_transit-only
+    // scope wrongly suppressed). Plus terminal noise that must not change the
+    // active-set result either way.
     const trailers: TrailerRow[] = [
       { trailerId: "TRL-ACT-1", status: "in_transit" },
-      { trailerId: "TRL-ACT-2", status: "in_transit" },
-      { trailerId: "TRL-DONE", status: "arrived" }, // terminal — no signal
+      { trailerId: "TRL-ACT-2", status: "arrived" }, // active (signal-bearing)
+      { trailerId: "TRL-DONE", status: "retired" }, // terminal — no signal
     ];
     const planned: PlannedAssignment[] = [
       plan("PKG-W", "TRL-ACT-1", "LAX"),
@@ -147,8 +163,12 @@ describe("detector active-scoping is signal-preserving (FLOW-04 equivalence)", (
       plan("PKG-OLD", "TRL-DONE", "ATL"), // terminal assignment
     ];
     const observed: ZoneEstimate[] = [
-      obs("PKG-W", "TRL-ACT-2", 0.9), // wrong trailer (planned TRL-ACT-1)
-      obs("PKG-M", "TRL-ACT-2", 0.92), // still aboard after DFW departed
+      // Wrong-trailer: PKG-W (planned TRL-ACT-1) seen on a SYNTHETIC trailer with
+      // NO active state row — the exact case the in_transit/trailer-status scope
+      // wrongly dropped. It is still in play because PKG-W is on an active
+      // trailer; scoping by the active PACKAGE set keeps the disagreement.
+      obs("PKG-W", "TRL-NO-STATE", 0.9),
+      obs("PKG-M", "TRL-ACT-2", 0.92), // still aboard the arrived trailer (over-carry)
       obs("PKG-OLD", "TRL-DONE", 0.95), // terminal observation — inactive
     ];
     const departedHubs = ["DFW"];
@@ -158,12 +178,15 @@ describe("detector active-scoping is signal-preserving (FLOW-04 equivalence)", (
     );
     // Reference: the SAME active set, read WITHOUT scoping, but supplied only the
     // active-set rows (the inactive TRL-DONE rows removed). Identical results.
-    const activeTrailers = trailers.filter((t) => t.status === "in_transit");
+    const activeTrailers = trailers.filter((t) => isActiveTrailerStatus(t.status));
     const activeIds = new Set(activeTrailers.map((t) => t.trailerId));
     const refPlanned = planned.filter(
       (p) => p.plannedTrailerId !== null && activeIds.has(p.plannedTrailerId),
     );
-    const refObserved = observed.filter((o) => activeIds.has(o.trailerId));
+    // Reference scope is by the ACTIVE PACKAGE set (packages on an active
+    // trailer), NOT the observed trailerId — matching the production read.
+    const refPackageIds = new Set(refPlanned.map((p) => p.packageId));
+    const refObserved = observed.filter((o) => refPackageIds.has(o.packageId));
     const reference = await detect(
       harness(activeTrailers, refPlanned, refObserved, departedHubs, false),
     );
@@ -190,7 +213,7 @@ describe("detector active-scoping is signal-preserving (FLOW-04 equivalence)", (
     const trailers: TrailerRow[] = [
       { trailerId: "TRL-ACTIVE", status: "in_transit" },
       { trailerId: "TRL-OTHER", status: "in_transit" },
-      { trailerId: "TRL-TERMINAL", status: "arrived" },
+      { trailerId: "TRL-TERMINAL", status: "retired" },
     ];
     const planned: PlannedAssignment[] = [];
     const observed: ZoneEstimate[] = [];
@@ -201,7 +224,7 @@ describe("detector active-scoping is signal-preserving (FLOW-04 equivalence)", (
       planned.push(plan(pkg, "TRL-ACTIVE", "LAX"));
       observed.push(obs(pkg, "TRL-OTHER", 0.9));
     }
-    // Inactive bulk: terminal observations on an `arrived` trailer — pure cost
+    // Inactive bulk: terminal observations on a `retired` trailer — pure cost
     // when unscoped, zero cost (and zero signal) when scoped out.
     for (let i = 0; i < INACTIVE; i++) {
       const pkg = `PKG-T-${i}`;
@@ -209,7 +232,7 @@ describe("detector active-scoping is signal-preserving (FLOW-04 equivalence)", (
       observed.push(obs(pkg, "TRL-TERMINAL", 0.95));
     }
 
-    const activeOnlyTrailers = trailers.filter((t) => t.status === "in_transit");
+    const activeOnlyTrailers = trailers.filter((t) => isActiveTrailerStatus(t.status));
     const activeOnlyPlanned = planned.filter((p) => p.plannedTrailerId !== "TRL-TERMINAL");
     const activeOnlyObserved = observed.filter((o) => o.trailerId !== "TRL-TERMINAL");
 

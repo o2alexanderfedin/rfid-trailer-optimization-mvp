@@ -86,9 +86,10 @@ interface PlannedAppend {
  *
  * The detector signal only ever comes from a trailer that is meaningfully in
  * play: wrong-trailer is observed against an *assigned* trailer, and
- * missed-unload is already POST-departure gated on `status === "in_transit"`.
- * An IDLE trailer's stale assignment produces no in-transit detection signal —
- * so an inactive/terminal row is pure cost, never a result.
+ * missed-unload fires when a trailer has reached a hub still carrying freight
+ * that should have unloaded earlier. A trailer is "in play" for the whole live
+ * lifecycle (`in_transit | arrived | docked`); only a future TERMINAL/retired
+ * trailer would be pure cost, never a result.
  *
  * Under continuous bidirectional freight, the unscoped `selectAll()` reads in
  * {@link makeProjectionReads} grow with EVERY trailer/observation ever folded,
@@ -105,21 +106,50 @@ interface PlannedAppend {
  * WITHOUT this code depending on any such terminal event —
  * `ACTIVE_TRAILER_STATUSES` is the sole coupling point.
  *
- * Scope = `in_transit` only. Both detection predicates draw their signal from
- * freight that is currently moving toward a destination: missed-unload is ALREADY
- * `in_transit`-gated (an `arrived`/`docked` trailer has reached a hub and its
- * freight is being unloaded/re-sorted, not over-carried in flight), and a
- * wrong-trailer disagreement is meaningful for in-flight freight. The vast,
- * unbounded read is `zone_estimate` — one row per (package, trailer) EVER
- * observed; scoping its packages to those still aboard an `in_transit` trailer
- * is what bounds detection cost. The active-set equivalence test witnesses that
- * this changes COST, not RESULTS.
+ * Scope = every NON-TERMINAL trailer status (`in_transit | arrived | docked`).
+ * Both detection predicates draw their signal from freight that is still in play
+ * at a trailer that has not been retired: missed-unload fires when a trailer
+ * REACHES a hub (`arrived`/`docked`) still carrying a package that should have
+ * unloaded at a prior hub — over-carry is precisely an arrived/docked trailer
+ * with stale freight aboard — and a wrong-trailer disagreement is meaningful for
+ * any package still aboard a live trailer (in flight OR just arrived). Scoping to
+ * `in_transit` ALONE wrongly dropped arrived/docked trailers, suppressing the
+ * very missed-unload / wrong-trailer / exception signals the detectors exist to
+ * raise (the Phase-21 regression). The vast, unbounded read is `zone_estimate` —
+ * one row per (package, trailer) EVER observed; scoping its packages to those
+ * still aboard a NON-TERMINAL trailer is what bounds detection cost without
+ * dropping results. `TrailerStatus` today has NO terminal value, so this set is
+ * all of it; the predicate is the sole coupling point for a future terminal
+ * status (e.g. a retired/purged trailer), which would then be excluded for free.
+ * The active-set equivalence test witnesses that this changes COST, not RESULTS.
  */
-export const ACTIVE_TRAILER_STATUSES = ["in_transit"] as const;
+export const ACTIVE_TRAILER_STATUSES = ["in_transit", "arrived", "docked"] as const;
 
 /** True iff a trailer status can still produce a detection signal (A3 scope). */
 export function isActiveTrailerStatus(status: string): boolean {
   return (ACTIVE_TRAILER_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * The ACTIVE package set: every package id aboard a non-terminal trailer. This
+ * is the scope key for the unbounded `zone_estimate` read — a package is "in
+ * play" (detectable) iff it is still assigned to an active trailer, regardless
+ * of which trailer it is *observed* on (wrong-trailer is, by definition, a
+ * cross-trailer observation). FLEET-bounded (one row per active trailer), so it
+ * bounds detection cost to the active set (A3 / FLOW-04). Sorted for a stable,
+ * deterministic `IN (...)` list.
+ */
+async function readActivePackageIds(db: Kysely<ProjectionDb>): Promise<string[]> {
+  const trailers = await db
+    .selectFrom("trailer_state")
+    .select("assigned_package_ids")
+    .where("status", "in", [...ACTIVE_TRAILER_STATUSES])
+    .execute();
+  const ids = new Set<string>();
+  for (const t of trailers) {
+    for (const packageId of t.assigned_package_ids) ids.add(packageId);
+  }
+  return [...ids].sort(compareStr);
 }
 
 /**
@@ -213,10 +243,10 @@ export function makeProjectionReads(
   return {
     readPlannedAssignments: async () => {
       // `trailer_state` is keyed by `trailer_id` (PK) so it is FLEET-bounded, not
-      // total-ever — but only ACTIVE (`in_transit`) trailers carry in-flight
-      // freight that yields a detection signal. Scope to active trailers; their
-      // assignments cover every package the (now active-scoped) observations can
-      // reference, so the active-set results are unchanged (A3 / FLOW-04).
+      // total-ever — but only NON-TERMINAL trailers (`in_transit | arrived |
+      // docked`) carry freight that yields a detection signal. Scope to those
+      // active trailers; their assignments cover every package the (likewise
+      // active-scoped) observations can reference (A3 / FLOW-04).
       const trailers = await db
         .selectFrom("trailer_state")
         .selectAll()
@@ -234,23 +264,25 @@ export function makeProjectionReads(
     },
     readObserved: async () => {
       // The UNBOUNDED read: one `zone_estimate` row per (package, trailer) EVER
-      // observed. Scope to observations aboard an ACTIVE (`in_transit`) trailer —
-      // the only ones that can produce a CURRENT detection signal — so detection
-      // cost tracks the active set, not total-ever (the
+      // observed. Both detection predicates index an observation by its
+      // `packageId` (then consult the PLANNED assignment by that id) — the
+      // OBSERVED `trailerId` is NOT a scope key: wrong-trailer is precisely a
+      // package seen on a trailer it was NOT assigned to (which may be any
+      // trailer, even one with no active state row), so scoping by the observed
+      // trailer's status wrongly dropped the disagreement (the Phase-21
+      // regression). The signal-bearing observations are those whose PACKAGE is
+      // still aboard a NON-TERMINAL trailer (`in_transit | arrived | docked`) —
+      // the active package set. Scope `zone_estimate` to those package ids so
+      // detection cost tracks the active set, not total-ever (the
       // detection-cost-scales-with-state debt under continuous bidirectional
-      // freight). Inactive/terminal observations produce no signal anyway, so
-      // this changes COST, not RESULTS (A3 / FLOW-04).
+      // freight) WHILE preserving every wrong-trailer / missed-unload signal —
+      // COST, not RESULTS (A3 / FLOW-04).
+      const activePackageIds = await readActivePackageIds(db);
+      if (activePackageIds.length === 0) return [];
       const rows = await db
         .selectFrom("zone_estimate")
         .selectAll()
-        .where(
-          "trailer_id",
-          "in",
-          db
-            .selectFrom("trailer_state")
-            .select("trailer_id")
-            .where("status", "in", [...ACTIVE_TRAILER_STATUSES]),
-        )
+        .where("package_id", "in", activePackageIds)
         .execute();
       return rows.map((r) => ({
         packageId: r.package_id,
@@ -263,15 +295,15 @@ export function makeProjectionReads(
       }));
     },
     readDepartedHubs: async () => {
-      // Post-departure gate (SNS-05): a trailer in `in_transit` HAS departed its
-      // last hub. trailer-state does not retain WHICH hub, so this adapter gates
-      // on the destinations of packages still aboard an in-transit trailer — the
-      // hubs a still-loaded package was meant to unload at. This is the pragmatic
-      // MVP gate; Plan 07 drives detection from the sim loop and can inject the
-      // EXACT just-departed hub via this same `readDepartedHubs` port (DIP), so
-      // the gate tightens with zero change to the detector core.
-      // Already `in_transit`-gated; push the predicate into SQL so the read is
-      // bounded by the active fleet, not total-ever rows (A3 / FLOW-04).
+      // Post-departure gate (SNS-05): a non-terminal trailer HAS departed its
+      // origin hub. trailer-state does not retain WHICH hub, so this adapter gates
+      // on the destinations of packages still aboard a live trailer — the hubs a
+      // still-loaded package was meant to unload at (incl. an `arrived`/`docked`
+      // trailer over-carrying past its drop hub). This is the pragmatic MVP gate;
+      // Plan 07 drives detection from the sim loop and can inject the EXACT
+      // just-departed hub via this same `readDepartedHubs` port (DIP), so the
+      // gate tightens with zero change to the detector core. Push the active-fleet
+      // predicate into SQL so the read is bounded, not total-ever (A3 / FLOW-04).
       const trailers = await db
         .selectFrom("trailer_state")
         .selectAll()
