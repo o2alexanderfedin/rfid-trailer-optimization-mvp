@@ -62,6 +62,15 @@ async function main(): Promise<void> {
   // unit determinism goldens byte-identical; this env wiring affects ONLY the demo.
   const fuelEnabled = resolveDemoFuelEnabled();
   const fuelConfig: FuelConfig = { ...DEFAULT_FUEL_CONFIG, enabled: fuelEnabled };
+  // Phase 22 (OUT-01): terminal delivery on the LIVE demo (DEFAULT ON; set
+  // OUTBOUND_DELIVERY_ENABLED=0 to disable). When on, freight reaching its
+  // destination hub fires PackageDelivered after a seeded dwell — driving the
+  // VIZ-14 destination-hub flash + the OUT-05 delivery KPI counters. Induction is
+  // enabled alongside it so externally-inducted freight (with SLA deadlines) also
+  // flows to delivery. Off-by-default in the ENGINE keeps the unit goldens
+  // byte-identical; this env wiring affects ONLY the demo.
+  const outboundDeliveryEnabled = process.env.OUTBOUND_DELIVERY_ENABLED !== "0";
+  const inductionEnabled = process.env.INDUCTION_ENABLED !== "0";
   const { app, broadcast, loop, speedController, worker } = await buildServer({
     db,
     simSeed: seed,
@@ -141,6 +150,11 @@ async function main(): Promise<void> {
     // SP2: drive the engine with fuel ON (per FUEL_ENABLED) so the live stream
     // carries TruckRested/TruckRefueled and the geo-track renders mid-route stops.
     fuel: fuelConfig,
+    // Phase 20/22: induction + terminal delivery on the live demo so freight
+    // enters at the spokes, flows through the network, and fires PackageDelivered
+    // at its destination (VIZ-14 flash + OUT-05 KPI).
+    inductionEnabled,
+    outboundDeliveryEnabled,
     fleetPerSpoke,
     optimizerEveryTicks,
     broadcast,

@@ -141,6 +141,22 @@ export interface InductionEvent {
   readonly occurredAt: string;
 }
 
+/**
+ * VIZ-14 — a package delivered at its DESTINATION hub this tick. TRANSIENT:
+ * present only on a `TickPayload` (never `SnapshotPayload`), so a reconnect/
+ * resync does NOT re-animate all historical deliveries (Pitfall 7 — the same
+ * rule as {@link InductionEvent}).
+ */
+export interface DeliveryEvent {
+  readonly packageId: string;
+  /** The destination hub the package was delivered at. */
+  readonly hubId: string;
+  /** Whole-minute ISO (epochMinutesToIso canonical) of the delivery tick. */
+  readonly deliveredAt: string;
+  /** True iff `deliveredAt <= slaDeadlineIso` (D-22-5). */
+  readonly onTime: boolean;
+}
+
 /** UI-04 — plan re-optimization made visible. */
 export interface PlanDelta {
   readonly trailerId: string;
@@ -197,6 +213,9 @@ export interface SnapshotPayload {
    */
   readonly kpis?: KpiSnapshot;
   readonly exceptionsOpen: readonly ExceptionItem[];
+  // NOTE: `deliveryEvents` (and `inductionEvents`) MUST NOT be added here —
+  // Pitfall 7: a reconnect/resync sends the snapshot, and any transient flash
+  // field on it would re-animate ALL historical inductions/deliveries.
 }
 
 /** Per-tick delta — only what changed since the prior tick. */
@@ -229,6 +248,13 @@ export interface TickPayload {
    * `SnapshotPayload` (a reconnect must not re-flash historical inductions).
    */
   readonly inductionEvents?: readonly InductionEvent[];
+  /**
+   * VIZ-14 — packages delivered at destination hubs this tick (TRANSIENT). Drives
+   * the destination-hub flash animation. Present ONLY here, never on
+   * `SnapshotPayload` (a reconnect must NOT re-flash historical deliveries — the
+   * same Pitfall-7 rule as `inductionEvents`).
+   */
+  readonly deliveryEvents?: readonly DeliveryEvent[];
 }
 
 // ---------------------------------------------------------------------------
