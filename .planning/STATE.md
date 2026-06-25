@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: 20 — External Induction (next)
+Phase: 21 — Bidirectional Freight / Consolidation (next)
 Plan: —
 Status: Ready to execute
 Last activity: 2026-06-24 -- Phase 20 planning complete

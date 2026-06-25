@@ -35,9 +35,9 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 
 ### External induction (IND)
 
-- [ ] **IND-01**: A new **`PackageInducted`** domain event joins the closed event union (per-event Zod `.strict()` schema, `contract.assert.ts` updated, `validate()` round-trip tested). It **coexists** with `PackageCreated` (Decision 1).
-- [ ] **IND-02**: Freight is **inducted at spoke hubs** (not center-only) on a repeating schedule, drawn from a **dedicated seeded RNG substream** (`INDUCTION_RNG_SALT`, asserted pairwise-distinct from all existing salts). `inductionEnabled: false` → zero new events.
-- [ ] **IND-03**: Inducted packages carry a **destination hub** (`destHubId`) and an **SLA deadline** (`slaDeadlineIso`); the deadline flows to the optimizer (optional additive `TwinBlock.deadlineMin`) so induction shapes planning priority.
+- [x] **IND-01**: A new **`PackageInducted`** domain event joins the closed event union (per-event Zod `.strict()` schema, `contract.assert.ts` updated, `validate()` round-trip tested). It **coexists** with `PackageCreated` (Decision 1).
+- [x] **IND-02**: Freight is **inducted at spoke hubs** (not center-only) on a repeating schedule, drawn from a **dedicated seeded RNG substream** (`INDUCTION_RNG_SALT`, asserted pairwise-distinct from all existing salts). `inductionEnabled: false` → zero new events.
+- [x] **IND-03**: Inducted packages carry a **destination hub** (`destHubId`) and an **SLA deadline** (`slaDeadlineIso`); the deadline flows to the optimizer (optional additive `TwinBlock.deadlineMin`) so induction shapes planning priority.
 
 ### Bidirectional freight / consolidation (FLOW)
 
@@ -58,7 +58,7 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 ### Visualization (VIZ) — continues from VIZ-11
 
 - [ ] **VIZ-12**: Spoke→center **consolidation trailers render with non-empty freight manifests** and **distinct direction styling** on the live map (Phase 21 / FLOW).
-- [ ] **VIZ-13**: **Induction events animate on the map** — a pulsing marker at the induction hub on `PackageInducted` (Phase 20 / IND).
+- [x] **VIZ-13**: **Induction events animate on the map** — a pulsing marker at the induction hub on `PackageInducted` (Phase 20 / IND).
 - [ ] **VIZ-14**: **Delivery events animate on the map** — a destination-hub highlight on `PackageDelivered` (Phase 22 / OUT).
 
 ---
@@ -109,10 +109,10 @@ Phase mapping confirmed by roadmapper 2026-06-24. Continues numbering from v1.2'
 | CONT-05 (P2) | Phase 19 | Complete |
 | DET-01 | Phase 19 | Complete |
 | DET-02 | Phase 19 | Complete |
-| IND-01 | Phase 20 | Pending |
-| IND-02 | Phase 20 | Pending |
-| IND-03 | Phase 20 | Pending |
-| VIZ-13 | Phase 20 | Pending |
+| IND-01 | Phase 20 | Complete |
+| IND-02 | Phase 20 | Complete |
+| IND-03 | Phase 20 | Complete |
+| VIZ-13 | Phase 20 | Complete |
 | FLOW-01 | Phase 21 | Pending |
 | FLOW-02 | Phase 21 | Pending |
 | FLOW-03 | Phase 21 | Pending |
