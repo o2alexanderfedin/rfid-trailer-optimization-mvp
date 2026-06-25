@@ -12,6 +12,7 @@ import type {
   LoadStarted,
   PackageArrivedAtHub,
   PackageCreated,
+  PackageDelivered,
   PackageInducted,
   PackageScanned,
   SizeClass,
@@ -114,6 +115,16 @@ export const FUEL_RNG_SALT = 0x2b_3d_91_e7;
  * stays byte-identical to the golden (the determinism keystone).
  */
 export const INDUCTION_RNG_SALT = 0x8f_2c_4a_e1;
+
+/**
+ * Phase-22 OUT-01: the EIGHTH substream salt, for outbound-delivery dwell draws.
+ * A NEW, DISTINCT, well-separated constant (the salt-collision test asserts it
+ * differs from all seven above — hash-split, NOT `seed+1`) so delivered packages
+ * never perturb any prior stream. The `outboundRng` it seeds is constructed ONLY
+ * when `outboundDeliveryEnabled === true` — so an outbound-off run draws ZERO
+ * outbound values and stays byte-identical to the golden (the determinism keystone).
+ */
+export const OUTBOUND_RNG_SALT = 0xc4_f8_32_b6;
 
 // --- Public types -----------------------------------------------------------
 
@@ -298,6 +309,22 @@ export interface SimulateOptions {
    * byte-identical to all-at-once.
    */
   readonly consolidationEnabled?: boolean;
+
+  /**
+   * OUT-01: OPT-IN terminal delivery at destination hubs. **DEFAULT FALSE —
+   * the determinism keystone.** When absent or `false`, the engine emits NO
+   * `PackageDelivered` events and makes ZERO `outboundRng` draws (the substream
+   * is never even constructed), so the existing seed-1234 + seed-42 goldens are
+   * BYTE-IDENTICAL (DET-01). When `true`, a seeded one-shot `deliverPackage`
+   * EventQueue task fires after a seeded dwell (>= 1 tick, D-22-2) from a
+   * DESTINATION-hub arrival; an `onTime` SLA flag is computed at emit (D-22-5).
+   * Fully resumable — the outbound RNG state, pending-delivery task(s),
+   * `deliveredCounter`, and `slaDeadlineByPackage` map are captured in
+   * `SimContinuation`. The flag gates ALL outbound behavior; it is checked with
+   * a STRICT `=== true` comparison (never `??` or `||`, which would make an
+   * absent flag accidentally truthy and perturb the golden).
+   */
+  readonly outboundDeliveryEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -343,6 +370,19 @@ const SLA_BUFFER_MIN: Record<SlaClass, number> = {
   standard: 240,
   economy: 480,
 };
+
+// --- Phase-22 outbound delivery (OUT-01/OUT-02) -----------------------------
+
+/**
+ * OUT-01: the EXCLUSIVE upper bound for the seeded outbound dwell. The dwell is
+ * `1 + outboundRng.int(OUTBOUND_DWELL_TICKS_MAX)` ⇒ a STRICTLY-POSITIVE 1..20
+ * tick window (D-22-2): delivery always fires at a strictly-later tick than the
+ * destination `PackageArrivedAtHub` that scheduled it, so the existing
+ * `(fireTick, seq)` comparator orders arrival-before-delete with NO change.
+ * Tuned (Claude's discretion) so deliveries are watchable in the demo without
+ * instantly draining hubs.
+ */
+const OUTBOUND_DWELL_TICKS_MAX = 20;
 
 /**
  * SIM-HOS-03: max extra whole-minute jitter added to EACH mandatory break/rest,
@@ -518,6 +558,13 @@ export function runToHorizon(
   // so NO new substream/salt is introduced — selection/cadence are deterministic.
   const consolidationOn = opts.consolidationEnabled === true;
 
+  // Phase-22 OUT-01: outbound delivery is OPT-IN and DEFAULT OFF. Absent/false ⇒
+  // the engine emits NO `PackageDelivered`, NEVER constructs/draws `outboundRng`,
+  // populates NO `slaDeadlineByPackage`, and schedules NO `deliverPackage` task,
+  // so all existing goldens are byte-identical (the determinism keystone). STRICT
+  // `=== true` — never `??`/`||` (an absent flag must stay falsy).
+  const outboundOn = opts.outboundDeliveryEnabled === true;
+
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
   const rfidEnabled = rfid !== undefined;
@@ -592,6 +639,17 @@ export function runToHorizon(
     ? restoredRng && restoredRng.induction !== undefined
       ? makeRngFromState(restoredRng.induction)
       : makeRng((seed ^ INDUCTION_RNG_SALT) >>> 0)
+    : undefined;
+  // Phase-22 OUT-01: the EIGHTH substream. Created ONLY when outbound delivery is
+  // on (the determinism keystone — an outbound-off run never even constructs it).
+  // The salt is DISTINCT from the seven above (asserted by the salt-collision
+  // test) so dwell draws are reproducible per seed yet never perturb the other
+  // streams. On resume it is restored from the captured raw state so a chunked run
+  // draws the EXACT remaining sequence (continuation-equivalence keystone).
+  const outboundRng: Rng | undefined = outboundOn
+    ? restoredRng && restoredRng.outbound !== undefined
+      ? makeRngFromState(restoredRng.outbound)
+      : makeRng((seed ^ OUTBOUND_RNG_SALT) >>> 0)
     : undefined;
   // SP2: per-trailer odometer (miles since last refuel), init 0 at roster
   // seeding. Only mutated when `fuelOn`; an off run leaves it empty (no state).
@@ -727,6 +785,15 @@ export function runToHorizon(
   // v2.0 IND-02: monotonic external-induction id counter; restored on resume so
   // EXT ids continue the same sequence (stable ids keep the stream reproducible).
   let inductionCounter = resuming ? start.world.inductionCounter : 0;
+  // Phase-22 OUT-01: monotonic delivered-package counter; restored on resume.
+  let deliveredCounter = resuming ? start.world.deliveredCounter : 0;
+  // Phase-22 OUT-01: packageId → locked slaDeadlineIso (whole-minute ISO) for
+  // inducted packages awaiting delivery. Only populated when `outboundOn`; empty
+  // on the off path (byte-identical to pre-Phase-22). Restored on resume so a
+  // mid-dwell continuation can still compute `onTime` deterministically.
+  const slaDeadlineByPackage = new Map<string, string>(
+    resuming ? start.world.slaDeadlineByPackage.map(([k, v]) => [k, v]) : [],
+  );
 
   /**
    * Emit one event onto its stream at the current domain time. CONT-01: when an
@@ -1156,6 +1223,16 @@ export function runToHorizon(
     };
     emit(`package-${packageId}`, inducted);
 
+    // Phase-22 OUT-01: when outbound delivery is ON, retain this inducted
+    // package's LOCKED slaDeadlineIso so the later one-shot `deliverPackage` task
+    // can compute `onTime` deterministically (even across a continuation boundary).
+    // Gated on `outboundOn` so the off path keeps `slaDeadlineByPackage` empty
+    // (byte-identical to pre-Phase-22). Reuses the already-derived deadline — NO
+    // new RNG draw, NO new event.
+    if (outboundOn) {
+      slaDeadlineByPackage.set(packageId, slaDeadlineIso);
+    }
+
     // FLOW-01/02: when consolidation is ON, stage this spoke-origin package into
     // the induction hub's consolidation manifest so a spoke→center consolidation
     // trailer carries it to the center, where it cross-docks into
@@ -1173,6 +1250,45 @@ export function runToHorizon(
     // (captured into the continuation) or DROPS it past the horizon (finite path).
     const nextTick = tick + INDUCTION_INTERVAL_TICKS;
     scheduleNext(nextTick, { kind: "inductPackage", tick: nextTick });
+  };
+
+  /**
+   * OUT-01: the ONE-SHOT terminal delivery. Fired by a `deliverPackage` queue
+   * task (scheduled at a DESTINATION-hub arrival after a seeded dwell >= 1 tick).
+   * Emits `PackageDelivered` carrying the whole-minute-canonical `deliveredAt`
+   * and the computed `onTime` SLA flag, then purges the package's deadline from
+   * world state.
+   *
+   * Determinism: guarded by `outboundOn` + a constructed `outboundRng` so the off
+   * path never reaches here (no event, no draw). `deliveredAt` is canonicalized to
+   * whole minutes via `epochMinutesToIso(isoToEpochMinutes(...))` so it matches the
+   * `slaDeadlineIso` format (both `YYYY-MM-DDTHH:MM:00.000Z`) and avoids sub-minute
+   * key-order/formatting drift across a continuation boundary (D-22-5). `onTime`
+   * is the ISO-8601 LEXICOGRAPHIC comparison `deliveredAt <= slaDeadlineIso`;
+   * center-origin freight with no induction deadline is `onTime: true` by
+   * convention. This is ONE-SHOT — NO `scheduleNext` here (the key difference from
+   * `inductPackage`).
+   */
+  const deliverPackage = (
+    packageId: string,
+    hubId: string,
+    slaDeadlineIso: string | undefined,
+  ): void => {
+    if (!outboundOn || outboundRng === undefined) return; // never runs when off
+
+    deliveredCounter += 1;
+    const deliveredAt = epochMinutesToIso(isoToEpochMinutes(clock.nowIso()));
+    const onTime =
+      slaDeadlineIso !== undefined ? deliveredAt <= slaDeadlineIso : true;
+    const delivered: PackageDelivered = {
+      type: "PackageDelivered",
+      schemaVersion: 1,
+      payload: { packageId, hubId, deliveredAt, onTime, occurredAt: deliveredAt },
+    };
+    emit(`package-${packageId}`, delivered);
+    // Clean up the in-flight deadline so `slaDeadlineByPackage` stays bounded
+    // (one entry per in-flight delivery). A missing key is a natural no-op.
+    slaDeadlineByPackage.delete(packageId);
   };
 
   /**
@@ -1557,6 +1673,26 @@ export function runToHorizon(
         payload: { packageId, hubId: spoke.hubId },
       };
       emit(`package-${packageId}`, atHub);
+
+      // Phase-22 OUT-01: a package unloaded at this spoke has reached its
+      // DESTINATION hub (in a hub-and-spoke network a package only lands at a
+      // spoke when that spoke is its destination; center arrivals are
+      // transshipment and never schedule delivery). When outbound delivery is ON,
+      // schedule a ONE-SHOT `deliverPackage` after a seeded dwell >= 1 tick — so
+      // `PackageDelivered` fires at a STRICTLY-LATER tick than this arrival
+      // (D-22-2). The task is DATA (carries the locked slaDeadlineIso, undefined
+      // for center-origin freight) so a chunk boundary mid-dwell is byte-identical.
+      if (outboundOn && outboundRng !== undefined) {
+        const dwell = 1 + outboundRng.int(OUTBOUND_DWELL_TICKS_MAX); // >= 1
+        const fireTick = arriveTick + dwell;
+        scheduleNext(fireTick, {
+          kind: "deliverPackage",
+          packageId,
+          hubId: spoke.hubId,
+          slaDeadlineIso: slaDeadlineByPackage.get(packageId),
+          fireTick,
+        });
+      }
     }
 
     // SIM-HOS-05: UnloadCompleted follows the last unload scan at this spoke
@@ -1860,6 +1996,12 @@ export function runToHorizon(
       case "arriveConsolidationAtCenter":
         arriveConsolidationAtCenter(task.trailerId, task.packageIds, task.tripId);
         return;
+      case "deliverPackage":
+        // Phase-22 OUT-01: one-shot terminal delivery. The locked slaDeadlineIso
+        // travels on the DATA task (undefined for center-origin freight), so a
+        // resume mid-dwell computes `onTime` identically without the world map.
+        deliverPackage(task.packageId, task.hubId, task.slaDeadlineIso);
+        return;
     }
   }
 
@@ -1948,6 +2090,14 @@ export function runToHorizon(
       packageCounter,
       tripCounter,
       inductionCounter,
+      // Phase-22 OUT-01: the delivered counter + the in-flight delivery deadline
+      // map, captured so a chunked run that crosses a boundary mid-dwell is
+      // byte-identical to all-at-once. Empty/0 on the off path (byte-identical to
+      // pre-Phase-22), so this does not perturb the off-path stream.
+      deliveredCounter,
+      slaDeadlineByPackage: [...slaDeadlineByPackage.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
     };
     return {
       version: 1,
@@ -1964,6 +2114,7 @@ export function runToHorizon(
         hos: hosRng.getState(),
         fuel: fuelRng?.getState(),
         induction: inductionRng?.getState(),
+        outbound: outboundRng?.getState(),
       },
       queue: queue.snapshot(),
       nextSeq: queue.peekNextSeq(),

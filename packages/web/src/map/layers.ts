@@ -11,6 +11,7 @@ import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
 import { classifyDutyBucket } from "./dutyColoring.js";
 import { stopStyle } from "./stopColoring.js";
 import { inductionStyle } from "./inductionColoring.js";
+import { deliveryStyle } from "./deliveryColoring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -268,6 +269,46 @@ export function flashInduction(
   const feature = new Feature({
     geometry: new Point(fromLonLat([lon, lat])),
     inductionHubId,
+  });
+  feature.setId(featureId);
+  source.addFeature(feature);
+  setTimeout(() => {
+    const f = source.getFeatureById(featureId);
+    if (f !== null) source.removeFeature(f);
+  }, durationMs);
+}
+
+/**
+ * Create the (initially empty) outbound-delivery layer (VIZ-14). A
+ * `PackageDelivered` ws message adds a transient feature here via
+ * {@link flashDelivery}; a `setTimeout` removes it after ~2000 ms. The source is
+ * never blindly cleared — features are added + removed individually (same
+ * discipline as the induction + stop layers).
+ */
+export function createDeliveryLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  const layer = new VectorLayer({ source, style: deliveryStyle });
+  return { layer, source };
+}
+
+/**
+ * Flash a delivery marker at `[lon, lat]` for `durationMs` (default 2000): add a
+ * transient Point feature at the destination hub, then remove it after the
+ * timeout. `Date.now()` is used ONLY for feature-id uniqueness (markers just need
+ * to not collide per flash) — it is NOT a virtual-clock concern, so this is
+ * correct here (mirrors {@link flashInduction}).
+ */
+export function flashDelivery(
+  source: VectorSource,
+  deliveryHubId: string,
+  lon: number,
+  lat: number,
+  durationMs = 2000,
+): void {
+  const featureId = `delivery:${deliveryHubId}:${Date.now()}:${Math.random()}`;
+  const feature = new Feature({
+    geometry: new Point(fromLonLat([lon, lat])),
+    deliveryHubId,
   });
   feature.setId(featureId);
   source.addFeature(feature);

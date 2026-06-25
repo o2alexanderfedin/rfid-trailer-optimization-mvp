@@ -20,6 +20,7 @@ import { TrailerDetail } from "./TrailerDetail.js";
 import { AuditTimeline } from "./AuditTimeline.js";
 import { HubDetail } from "./HubDetail.js";
 import { KpiDashboard } from "./KpiDashboard.js";
+import { DeliveryKpi } from "./DeliveryKpi.js";
 import { MoneySlide } from "./MoneySlide.js";
 import { SpeedControl } from "./SpeedControl.js";
 import type { FeedEntry } from "./AlertFeed.js";
@@ -170,7 +171,10 @@ export function RightRail({
 
         <div className="right-rail__detail-scroll">
           {activeTab === "kpis" ? (
-            <KpiDashboard />
+            <>
+              <DeliveryKpi />
+              <KpiDashboard />
+            </>
           ) : activeTab === "money" ? (
             <MoneySlide />
           ) : activeTab === "hub" ? (

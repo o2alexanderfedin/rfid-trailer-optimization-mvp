@@ -212,6 +212,7 @@ export function geoTrackReducer(
     case "UnloadCompleted":
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
+    case "PackageDelivered": // Phase-22 OUT-01: delivery carries no geo-track keyframe
       return { state, keyframes: [] };
     default:
       return assertNeverGeo(event);

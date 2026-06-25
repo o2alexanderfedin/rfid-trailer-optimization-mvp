@@ -256,6 +256,27 @@ export async function fetchKpis(signal?: AbortSignal): Promise<KpiSnapshot> {
   return (await res.json()) as KpiSnapshot;
 }
 
+/** `GET /api/delivery-kpi` (OUT-05 / D-22-3) — event-derived delivery counters. */
+export interface DeliveryKpiDto {
+  readonly deliveredCount: number;
+  readonly onTimeCount: number;
+}
+
+/**
+ * `GET /api/delivery-kpi` (OUT-05 P2 / D-22-3) — the delivered-out + on-time
+ * counters for the operator panel `DeliveryKpi` widget. Event-derived (folded over
+ * the immutable event log), NOT a row-count over the DELETE-purged package tables.
+ */
+export async function fetchDeliveryKpi(
+  signal?: AbortSignal,
+): Promise<DeliveryKpiDto> {
+  const res = await fetch("/api/delivery-kpi", signal ? { signal } : {});
+  if (!res.ok) {
+    throw new Error(`GET /api/delivery-kpi failed: ${res.status}`);
+  }
+  return (await res.json()) as DeliveryKpiDto;
+}
+
 /**
  * `GET /api/kpis/comparison` (UI-04) — seed-deterministic baseline-vs-optimizer
  * comparison (the "money slide").

@@ -13,6 +13,7 @@ import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
 import {
   diffTick,
+  type DeliveryEvent,
   type ExceptionItem,
   type HubState,
   type InductionEvent,
@@ -83,6 +84,7 @@ export type SnapshotPayloadBuilder = (db: ApiDb) => Promise<SnapshotPayload>;
 export type Broadcast = (
   simMs: number,
   inductionEvents?: readonly InductionEvent[],
+  deliveryEvents?: readonly DeliveryEvent[],
 ) => Promise<WsEnvelope>;
 
 /** Options for {@link attachSnapshotSocket} (dependency inversion / testing). */
@@ -832,6 +834,7 @@ export function attachSnapshotSocket(
   return async (
     simMs: number,
     inductionEvents?: readonly InductionEvent[],
+    deliveryEvents?: readonly DeliveryEvent[],
   ): Promise<WsEnvelope> => {
     const current = await build(db);
     const prev = baseline ?? emptySnapshotPayload();
@@ -842,12 +845,17 @@ export function attachSnapshotSocket(
     speedController.noteSimMs(simMs);
 
     const diff: TickPayload = diffTick(prev, current);
-    // VIZ-13: attach the tick's induction events (transient) onto the delta when
-    // present — never persisted, never on a snapshot.
-    const delta: TickPayload =
+    // VIZ-13 / VIZ-14: attach the tick's transient induction + delivery events
+    // onto the delta when present — never persisted, never on a snapshot (the
+    // Pitfall-7 guard: these fields exist ONLY on a TickPayload).
+    const withInduction: TickPayload =
       inductionEvents !== undefined && inductionEvents.length > 0
         ? { ...diff, inductionEvents }
         : diff;
+    const delta: TickPayload =
+      deliveryEvents !== undefined && deliveryEvents.length > 0
+        ? { ...withInduction, deliveryEvents }
+        : withInduction;
     seq += 1;
     const envelope: WsEnvelope = {
       v: 1,

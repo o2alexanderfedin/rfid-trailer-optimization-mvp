@@ -217,4 +217,40 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     });
     expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
+
+  // Phase 22 (OUT-01/OUT-02): outbound delivery is OPT-IN and DEFAULT OFF. The
+  // off path must add ZERO new behavior — `outboundDeliveryEnabled: false` is
+  // byte-identical to the flag being absent (the determinism keystone).
+  it("explicit outboundDeliveryEnabled: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      outboundDeliveryEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // The NON-NEGOTIABLE acceptance gate: with outbound delivery absent, the
+  // seed-42 10k-tick run still hashes to the committed golden — proving the
+  // Phase-22 additions are fully inert when the flag is off.
+  it("outboundDeliveryEnabled ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256")
+      .update(JSON.stringify(stream))
+      .digest("hex");
+    expect(hash).toBe(
+      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
+    );
+  });
+
+  // ...and the EXPLICIT false 10k-tick run is byte-identical to the absent run.
+  it("outboundDeliveryEnabled: false is byte-identical to absent over the 10k golden run", () => {
+    const absent = simulate({ seed: 42, durationTicks: 10000 });
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      outboundDeliveryEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
 });

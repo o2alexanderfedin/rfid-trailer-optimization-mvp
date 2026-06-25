@@ -9,6 +9,7 @@ import type {
   missedUnloadDetectedSchema,
   packageArrivedAtHubSchema,
   packageCreatedSchema,
+  packageDeliveredSchema,
   packageInductedSchema,
   packageScannedSchema,
   planAcceptedSchema,
@@ -156,6 +157,18 @@ export type PackageInducted = z.infer<typeof packageInductedSchema>;
  */
 export type PlanSuperseded = z.infer<typeof planSupersededSchema>;
 
+// --- Phase-22 outbound delivery (OUT-01) ------------------------------------
+
+/**
+ * The TERMINAL delivery event (OUT-01 / Phase 22). Freight reaching its
+ * DESTINATION hub exits the network here after a seeded outbound dwell. It
+ * DELETE-purges the package from the read-model projections (`packageLocation`,
+ * `hubInventory`, `zoneEstimate`), completing the bounded-memory story (OUT-04).
+ * `onTime` carries the SLA flag computed at emit (D-22-5). Emitted ONLY when
+ * `outboundDeliveryEnabled === true` (the determinism keystone).
+ */
+export type PackageDelivered = z.infer<typeof packageDeliveredSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -191,7 +204,9 @@ export type DomainEvent =
   // v2.0 external induction (IND-01).
   | PackageInducted
   // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
-  | PlanSuperseded;
+  | PlanSuperseded
+  // Phase-22 terminal delivery event (OUT-01).
+  | PackageDelivered;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

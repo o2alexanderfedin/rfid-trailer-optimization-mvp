@@ -56,7 +56,7 @@
 - [x] **Phase 19: Continuous Operation Foundation** - Open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, and bidirectional route registration
 - [x] **Phase 20: External Induction** - `PackageInducted` event, spoke-hub induction from dedicated seeded substream, SLA deadline to optimizer, pulsing map marker
 - [x] **Phase 21: Bidirectional Freight / Consolidation** - Spoke→center consolidation via `pendingAtSpoke` queue, center inbound re-sort, optimizer two-direction awareness, consolidation trailer map styling
-- [ ] **Phase 22: Outbound Delivery** - `PackageDelivered` terminal event, destination detection, `onTime` SLA flag, projection purge, delivery hub-highlight on map
+- [x] **Phase 22: Outbound Delivery** - `PackageDelivered` terminal event, destination detection, `onTime` SLA flag, projection purge, delivery hub-highlight on map
 
 ## Phase Details
 
@@ -147,7 +147,24 @@ Plans:
   3. `PackageDelivered` carries an `onTime` flag (`deliveredAt <= slaDeadlineIso`) and, in a sustained multi-cycle run, the fraction of on-time deliveries reflects optimizer effectiveness on SLA deadlines drawn from inducted packages
   4. `PackageDelivered` purges the package from all projections (`packageLocation`, `hubInventory`, `zoneEstimate` — DELETE, not upsert), keeping projection table size bounded during a continuous multi-cycle run with `outboundDeliveryEnabled: false` (default) preserving the existing golden byte-identical
   5. (P2) A delivered-out counter and on-time % KPI panel widget shows cumulative delivery performance as a live metric in the operator UI
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+**Wave 1** *(parallel — no shared files)*
+- [ ] 22-01-PLAN.md — PackageDelivered 5-file domain ceremony + OUTBOUND_RNG_SALT + continuation.ts TS types + salt test + continuation-equivalence stub (OUT-01, D-22-4)
+- [ ] 22-02-PLAN.md — Wave-0 RED test stubs: outbound-determinism, ws-delivery, deliveryLayer, hub-inventory extensions (OUT-02, OUT-03, OUT-04, VIZ-14)
+
+**Wave 2** *(blocked on Wave 1 — parallel with each other)*
+- [ ] 22-03-PLAN.md — Engine: outboundOn, outboundRng, slaDeadlineByPackage, deliverPackage(), arriveTrailer hook, captureContinuation + golden DET-01 gate + continuation-equivalence "outbound" activation (OUT-02, OUT-03, D-22-4)
+- [ ] 22-04-PLAN.md — Projection purge reducers (package-location, hub-inventory, zone-estimate) + delivery-kpi.ts new reducer (OUT-04, OUT-05)
+
+**Wave 3** *(blocked on Wave 2)*
+- [ ] 22-05-PLAN.md — WS DeliveryEvent + Broadcast extension + GET /api/delivery-kpi endpoint (VIZ-14, OUT-05)
+
+**Wave 4** *(blocked on Wave 3)*
+- [ ] 22-06-PLAN.md — Web VIZ-14 layer (deliveryColoring + flashDelivery) + DeliveryKpi.tsx panel (VIZ-14, OUT-05)
+
+**Wave 5** *(blocked on Wave 4)*
+- [ ] 22-07-PLAN.md — MapView.tsx: createDeliveryLayer() construction + deliveryEvents WS handler calling flashDelivery() + human-verify checkpoint (VIZ-14 end-to-end wiring)
 **UI hint**: yes
 
 ## Progress
@@ -157,7 +174,7 @@ Plans:
 | 19. Continuous Operation Foundation | 8/8 | ✅ Complete | 2026-06-24 |
 | 20. External Induction | 6/6 | ✅ Complete | 2026-06-24 |
 | 21. Bidirectional Freight / Consolidation | 9/9 | ✅ Complete | 2026-06-24 |
-| 22. Outbound Delivery | 0/? | Not started | - |
+| 22. Outbound Delivery | 7/7 | ✅ Complete | 2026-06-25 |
 
 | Milestone | Phases | Status | Shipped |
 |-----------|--------|--------|---------|

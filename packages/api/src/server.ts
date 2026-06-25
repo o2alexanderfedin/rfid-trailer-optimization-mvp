@@ -11,6 +11,7 @@ import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
 import { registerHubDetailRoutes } from "./routes/hub-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
+import { registerDeliveryKpiRoutes } from "./routes/delivery-kpi.js";
 import { registerScenarioRoutes } from "./routes/scenario.js";
 import { registerSimSpeedRoutes } from "./routes/sim-speed.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
@@ -173,6 +174,11 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // Pass `optimizer` so the KPI endpoint can read the latest rolling-epoch result
   // for the rehandle score (SIM-04 critical live wiring).
   registerKpiRoutes(app, deps.db, optimizer);
+
+  // Phase 22 (OUT-05 P2 / D-22-3): GET /api/delivery-kpi — the event-derived
+  // delivered-out + on-time counters (folded over the immutable events log, NOT
+  // a row-count over the DELETE-purged package tables).
+  registerDeliveryKpiRoutes(app, deps.db);
 
   // SIM-04 / OPT-02: The live rolling-optimizer loop (Plan 05-02).
   // `buildSnapshot` reads the current live projections to assemble the TwinSnapshot.
