@@ -1057,10 +1057,20 @@ export function runToHorizon(
     // the induction hub is a spoke; the destination is a DIFFERENT spoke.
     const inductionHub = inductionRng.pick(spokes);
     const destCandidates = spokes.filter((s) => s.hubId !== inductionHub.hubId);
-    const destHub =
-      destCandidates.length > 0
-        ? inductionRng.pick(destCandidates)
-        : inductionHub;
+    // Fail-loud invariant: with the fixed 11-spoke topology there is ALWAYS at
+    // least one different spoke, so this NEVER fires for a valid run (goldens
+    // unaffected — zero extra RNG draws). A silent `: inductionHub` fallback
+    // would emit a self-destined induction (destHubId === inductionHubId),
+    // violating the `inductionHubId !== destHubId` invariant the projections and
+    // tests rely on. Throw instead of producing an impossible-but-quiet state.
+    if (destCandidates.length === 0) {
+      throw new Error(
+        `inductPackage: no destination spoke distinct from induction hub ` +
+          `"${inductionHub.hubId}" (${spokes.length} spoke(s) total) — ` +
+          `the fixed topology guarantees candidates, so this is an invalid state`,
+      );
+    }
+    const destHub = inductionRng.pick(destCandidates);
     const slaClass = SLA_CLASSES[inductionRng.int(SLA_CLASSES.length)]!;
 
     // Deadline = occurredAt + expectedTravel(inductionHub→center→destHub) + buffer.

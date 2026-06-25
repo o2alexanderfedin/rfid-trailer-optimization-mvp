@@ -52,11 +52,13 @@ const SHORT_TIMING = {
 } as const;
 
 /**
- * ALL feature flags ON — rfid + over-carry + HOS + fuel. This is the maximal
- * state surface: every one of the SIX seeded sub-streams (base, rfid, overCarry,
- * timing, hos, fuel) is forced to draw, and every SimTask variant (createPackage
- * Batch, departTrailer, arriveTrailer, midLegStops, arriveOverCarriedAtCenter)
- * fires. A missed sub-stream in the continuation diverges here.
+ * ALL feature flags ON — rfid + over-carry + HOS + fuel + induction. This is the
+ * maximal state surface: every one of the SEVEN seeded sub-streams (base, rfid,
+ * overCarry, timing, hos, fuel, induction) is forced to draw, and every SimTask
+ * variant (createPackageBatch, inductPackage, departTrailer, arriveTrailer,
+ * midLegStops, arriveOverCarriedAtCenter) fires. A missed sub-stream OR a missed
+ * pending task in the continuation diverges here. Adding `inductionEnabled: true`
+ * costs ZERO additional test cases — it rides the existing chunk-1 matrix.
  */
 const ALL_ON: FeatureOpts = {
   timing: SHORT_TIMING,

@@ -31,6 +31,7 @@ import { render } from "vitest-browser-react";
 import VectorSource from "ol/source/Vector.js";
 import VectorLayer from "ol/layer/Vector.js";
 import Point from "ol/geom/Point.js";
+import { fromLonLat } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import type Feature from "ol/Feature.js";
 import type { WsEnvelope } from "@mm/api";
@@ -130,6 +131,25 @@ function findHubFeature(map: OlMap, hubId: string): Feature | null {
     if (feature !== null) return feature;
   }
   return null;
+}
+
+/**
+ * Collect every transient induction-flash feature across the captured map's
+ * layers (VIZ-13). `flashInduction` ids them `induction:<hubId>:...`; the feature
+ * carries the `inductionHubId` property the marker style/handler set.
+ */
+function findInductionFeatures(map: OlMap): Feature[] {
+  const out: Feature[] = [];
+  for (const layer of map.getLayers().getArray()) {
+    if (!(layer instanceof VectorLayer)) continue;
+    const src: unknown = layer.getSource();
+    if (!(src instanceof VectorSource)) continue;
+    for (const feature of src.getFeatures()) {
+      const id = feature.getId();
+      if (typeof id === "string" && id.startsWith("induction:")) out.push(feature);
+    }
+  }
+  return out;
 }
 
 /**
@@ -491,6 +511,84 @@ describe("MapView (browser behaviour)", () => {
       // ORD has no driver data → no duty bucket → falls back to volume coloring.
       expect(findHubFeature(map, "ORD")?.get("dutyBucket")).toBeUndefined();
     });
+  });
+
+  it("VIZ-13: a tick carrying inductionEvents flashes a marker at the induction hub's coords", async () => {
+    const host = makeHost();
+    const ctx = makeTestWsContext();
+
+    const screen = await render(
+      <WsContext.Provider value={ctx}>
+        <MapView />
+      </WsContext.Provider>,
+      { container: host },
+    );
+
+    const el = screen.getByTestId("map").element();
+    // Wait for the MSW geo fetch so hubLonLatRef is populated (the handler looks
+    // up the induction hub's lon/lat from this cache before flashing a marker).
+    await vi.waitFor(() => {
+      expect(capturedMap).not.toBeNull();
+      expect(el.getAttribute("data-hub-count")).toBe("3");
+    });
+    const map = capturedMap;
+    if (map === null) throw new Error("map not captured");
+
+    // No induction markers before any envelope.
+    expect(findInductionFeatures(map)).toHaveLength(0);
+
+    // Drive a tick carrying ONE induction event at DFW. This is the VIZ-13 wiring
+    // neither rival covered: the onEnvelope handler must CALL flashInduction with
+    // the hub's looked-up coords, adding a transient marker to the induction layer.
+    const inductionTick: WsEnvelope = {
+      v: 1,
+      type: "tick",
+      seq: 4,
+      simMs: 12_000,
+      simDay: 0,
+      speed: WS_SNAPSHOT.speed,
+      payload: {
+        inductionEvents: [
+          {
+            packageId: "EXT-P00001",
+            inductionHubId: "DFW",
+            destHubId: "LAX",
+            slaClass: "standard",
+            slaDeadlineIso: "2026-06-20T06:00:00.000Z",
+            occurredAt: "2026-06-20T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+    dispatchEnvelope(ctx, inductionTick);
+
+    // The handler called flashInduction → exactly one transient marker appears,
+    // tagged with the induction hub id, positioned at DFW's projected coords.
+    const flashed = findInductionFeatures(map);
+    expect(flashed).toHaveLength(1);
+    expect(flashed[0]?.get("inductionHubId")).toBe("DFW");
+    const geom = flashed[0]?.getGeometry();
+    const coord = geom instanceof Point ? geom.getCoordinates() : null;
+    // DFW = [lon -97.0403, lat 32.8998]; fromLonLat → EPSG:3857 metres. Assert the
+    // marker sits at DFW's exact projected position (the right hub was chosen).
+    const expected = fromLonLat([-97.0403, 32.8998]);
+    expect(coord).not.toBeNull();
+    expect(coord?.[0]).toBeCloseTo(expected[0] ?? 0, 3);
+    expect(coord?.[1]).toBeCloseTo(expected[1] ?? 0, 3);
+
+    // An UNKNOWN induction hub is skipped (no marker, no crash) — defensive lookup.
+    const unknownTick: WsEnvelope = {
+      ...inductionTick,
+      seq: 5,
+      payload: {
+        inductionEvents: [
+          { ...inductionTick.payload.inductionEvents![0]!, inductionHubId: "ZZZ" },
+        ],
+      },
+    };
+    dispatchEnvelope(ctx, unknownTick);
+    // Still exactly the one DFW marker (the ZZZ event added nothing).
+    expect(findInductionFeatures(map)).toHaveLength(1);
   });
 
   it("unmount teardown: disposes the live map so net-live (created − disposed) returns to 0", async () => {
