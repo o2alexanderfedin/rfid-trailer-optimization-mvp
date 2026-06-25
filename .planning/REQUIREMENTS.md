@@ -49,17 +49,17 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 
 ### Outbound / last-mile delivery (OUT)
 
-- [ ] **OUT-01**: A new **`PackageDelivered`** terminal domain event joins the closed union (Zod `.strict()`, `validate()` round-trip tested), firing **after** `PackageArrivedAtHub` at the destination hub following a seeded outbound dwell (`OUTBOUND_RNG_SALT`, pairwise-distinct).
-- [ ] **OUT-02**: **Destination-hub detection** triggers delivery — `PackageArrivedAtHub` is no longer terminal, and every package reaches `PackageDelivered` when outbound delivery is enabled (terminal-completeness verified).
-- [ ] **OUT-03**: `PackageDelivered` carries an **`onTime` SLA flag** (`deliveredAt <= slaDeadlineIso`).
-- [ ] **OUT-04**: `PackageDelivered` **purges the package from all projections** (`packageLocation`, `hubInventory`, `zoneEstimate` DELETE, not upsert) — the bounded-memory mechanism that makes continuous induction sustainable.
-- [ ] **OUT-05** *(P2)*: A **delivered-out counter + on-time %** KPI panel widget surfaces the new outbound flow as a live metric.
+- [x] **OUT-01**: A new **`PackageDelivered`** terminal domain event joins the closed union (Zod `.strict()`, `validate()` round-trip tested), firing **after** `PackageArrivedAtHub` at the destination hub following a seeded outbound dwell (`OUTBOUND_RNG_SALT`, pairwise-distinct).
+- [x] **OUT-02**: **Destination-hub detection** triggers delivery — `PackageArrivedAtHub` is no longer terminal, and every package reaches `PackageDelivered` when outbound delivery is enabled (terminal-completeness verified).
+- [x] **OUT-03**: `PackageDelivered` carries an **`onTime` SLA flag** (`deliveredAt <= slaDeadlineIso`).
+- [x] **OUT-04**: `PackageDelivered` **purges the package from all projections** (`packageLocation`, `hubInventory`, `zoneEstimate` DELETE, not upsert) — the bounded-memory mechanism that makes continuous induction sustainable.
+- [x] **OUT-05** *(P2)*: A **delivered-out counter + on-time %** KPI panel widget surfaces the new outbound flow as a live metric.
 
 ### Visualization (VIZ) — continues from VIZ-11
 
 - [x] **VIZ-12**: Spoke→center **consolidation trailers render with non-empty freight manifests** and **distinct direction styling** on the live map (Phase 21 / FLOW).
 - [x] **VIZ-13**: **Induction events animate on the map** — a pulsing marker at the induction hub on `PackageInducted` (Phase 20 / IND).
-- [ ] **VIZ-14**: **Delivery events animate on the map** — a destination-hub highlight on `PackageDelivered` (Phase 22 / OUT).
+- [x] **VIZ-14**: **Delivery events animate on the map** — a destination-hub highlight on `PackageDelivered` (Phase 22 / OUT).
 
 ---
 
@@ -119,12 +119,12 @@ Phase mapping confirmed by roadmapper 2026-06-24. Continues numbering from v1.2'
 | FLOW-04 | Phase 21 | Complete |
 | VIZ-12 | Phase 21 | Complete |
 | FLOW-05 (P2) | Phase 21 | Complete |
-| OUT-01 | Phase 22 | Pending |
-| OUT-02 | Phase 22 | Pending |
-| OUT-03 | Phase 22 | Pending |
-| OUT-04 | Phase 22 | Pending |
-| VIZ-14 | Phase 22 | Pending |
-| OUT-05 (P2) | Phase 22 | Pending |
+| OUT-01 | Phase 22 | Complete |
+| OUT-02 | Phase 22 | Complete |
+| OUT-03 | Phase 22 | Complete |
+| OUT-04 | Phase 22 | Complete |
+| VIZ-14 | Phase 22 | Complete |
+| OUT-05 (P2) | Phase 22 | Complete |
 
 **Coverage:**
 - v2.0 requirements: 23 total (20 P1 + 3 P2)
