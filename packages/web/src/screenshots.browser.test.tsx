@@ -119,6 +119,7 @@ vi.mock("./map/animate.js", async () => {
 const HUB_ID = "MEM";
 const HUB_DETAIL: HubDetailDto = {
   hubId: HUB_ID,
+  inventoryBalance: { inbound: 0, outbound: 0 },
   trailers: [
     {
       trailerId: "T-014",
