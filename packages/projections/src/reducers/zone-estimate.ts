@@ -198,6 +198,7 @@ function applyEvent(
     case "TruckRested":
     case "TruckRefueled":
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
+    case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
       return state;
     default:
       return assertNeverEvent(event);

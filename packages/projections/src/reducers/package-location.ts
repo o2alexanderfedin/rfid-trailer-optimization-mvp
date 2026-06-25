@@ -113,6 +113,7 @@ export function packageLocationReducer(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
       return state;
     default:
       return assertNeverEvent(event);
