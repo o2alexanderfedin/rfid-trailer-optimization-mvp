@@ -319,7 +319,42 @@ describe("GET /hubs/:id/detail (HUBQ-01..07)", () => {
     app = await buildApp(baseData());
     const res = await app.inject({ method: "GET", url: "/hubs/NOWHERE/detail" });
     expect(res.statusCode).toBe(200);
-    expect(res.json<HubDetailDto>()).toEqual({ hubId: "NOWHERE", trailers: [] });
+    const body = res.json<HubDetailDto>();
+    expect(body.hubId).toBe("NOWHERE");
+    expect(body.trailers).toEqual([]);
+  });
+
+  // FLOW-05 (P2): per-hub inbound/outbound inventory balance (cross-dock heat)
+  // from the hub_inventory projection — the same projection the optimizer
+  // consumes (Decision 3). Surfaces the consolidation value numerically.
+  it("FLOW-05: surfaces the hub's inbound/outbound inventory balance from hub_inventory", async () => {
+    app = await buildApp(
+      baseData({
+        hubInventoryRows: [
+          { hub_id: "MEM", inbound: ["A", "B", "C"], outbound: ["X", "Y"], staged: ["S"] },
+        ],
+      }),
+    );
+    const body = (
+      await app.inject({ method: "GET", url: "/hubs/MEM/detail" })
+    ).json<HubDetailDto>();
+    expect(body.inventoryBalance).toEqual({ inbound: 3, outbound: 2 });
+  });
+
+  it("FLOW-05: an unseen hub returns a zero balance without throwing", async () => {
+    app = await buildApp(baseData());
+    const res = await app.inject({ method: "GET", url: "/hubs/NOWHERE/detail" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<HubDetailDto>();
+    expect(body.inventoryBalance).toEqual({ inbound: 0, outbound: 0 });
+  });
+
+  it("FLOW-05: a hub with no hub_inventory row reports a zero balance", async () => {
+    app = await buildApp(baseData({ hubInventoryRows: [] }));
+    const body = (
+      await app.inject({ method: "GET", url: "/hubs/MEM/detail" })
+    ).json<HubDetailDto>();
+    expect(body.inventoryBalance).toEqual({ inbound: 0, outbound: 0 });
   });
 
   it("sorts trailers by id for a stable panel (P3)", async () => {

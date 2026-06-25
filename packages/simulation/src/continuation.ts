@@ -52,6 +52,16 @@ export type SimTask =
       readonly trailerId: string;
       readonly packageId: string;
       readonly tripId: string;
+    }
+  // FLOW-02: a spoke→center CONSOLIDATION trailer's center arrival. Carries the
+  // drained `packageIds` ARRAY (the whole manifest) — DATA, never a closure — so a
+  // resume between a consolidation departure and its center arrival reconstructs
+  // the re-sort/cross-dock exactly (the continuation-equivalence keystone).
+  | {
+      readonly kind: "arriveConsolidationAtCenter";
+      readonly trailerId: string;
+      readonly packageIds: readonly string[];
+      readonly tripId: string;
     };
 
 /** One queued action: fire at `fireTick`, ordered by `(fireTick, seq)`. */
@@ -80,6 +90,20 @@ export interface SerializedHosClock {
 export interface SerializedWorldState {
   /** Per-spoke FIFO manifest of pending package ids (hubId → packageId[]). */
   readonly pendingBySpoke: readonly (readonly [string, readonly string[]])[];
+  /**
+   * FLOW-01: per-spoke manifest of spoke-origin freight awaiting a spoke→center
+   * CONSOLIDATION trailer (the mirror of `pendingBySpoke`). Only populated when
+   * `consolidationEnabled`; every spoke maps to `[]` on the off path so the
+   * serialized form is byte-identical to pre-Phase-21.
+   */
+  readonly pendingAtSpoke: readonly (readonly [string, readonly string[]])[];
+  /**
+   * FLOW-02: consolidation package id → its onward (post-center) destination spoke
+   * hub id, so a resume between staging at a spoke and the center re-sort
+   * cross-docks the package to the same spoke. Only populated when
+   * `consolidationEnabled`; empty on the off path (byte-identical to pre-Phase-21).
+   */
+  readonly consolidationDestByPackage: readonly (readonly [string, string])[];
   /** Per-trailer odometer miles since last refuel (only populated when fuel on). */
   readonly odometerByTrailer: readonly (readonly [string, number])[];
   /** Trailer → currently-bound driver (HOS on). */

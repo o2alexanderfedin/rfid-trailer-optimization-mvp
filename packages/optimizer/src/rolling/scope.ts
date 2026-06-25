@@ -57,9 +57,13 @@ function hubsOf(event: DomainEvent): readonly string[] {
     // sim emission + optimizer awareness land in later phases). Classifying them
     // as scope-neutral keeps the closed-union exhaustive + the rolling epoch
     // unchanged until those phases wire them in.
+    // FLOW-04 / D-21-1: PlanSuperseded is an optimizer-internal supersession marker
+    // grouped here — it names no NEW demand hub (the superseding PlanAccepted + its
+    // scope already cover the affected hubs), so it is SCOPE-NEUTRAL.
     case "WrongTrailerDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "PlanSuperseded":
     case "DriverRegistered":
     case "DriverAssignedToTrip":
     case "DriverDutyStateChanged":

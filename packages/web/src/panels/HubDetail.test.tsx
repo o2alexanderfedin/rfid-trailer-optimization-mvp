@@ -53,6 +53,7 @@ function trailer(over: Partial<HubTrailerDto> & Pick<HubTrailerDto, "trailerId">
 
 const HUB_DETAIL: HubDetailDto = {
   hubId: "DAL",
+  inventoryBalance: { inbound: 0, outbound: 0 },
   trailers: [
     trailer({
       trailerId: "TRL-014",
@@ -269,7 +270,7 @@ describe("HubDetail render — loaded hub", () => {
   });
 
   it("renders the empty state for a hub with no trailers", async () => {
-    mockHubDetail({ hubId: "EMPTY", trailers: [] });
+    mockHubDetail({ hubId: "EMPTY", trailers: [], inventoryBalance: { inbound: 0, outbound: 0 } });
     renderHub("EMPTY");
     expect(await screen.findByTestId("hub-detail-empty")).toBeInTheDocument();
   });

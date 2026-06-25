@@ -47,3 +47,20 @@ CREATE TABLE IF NOT EXISTS hubs (
   lat    DOUBLE PRECISION NOT NULL,
   lon    DOUBLE PRECISION NOT NULL
 );
+
+-- Durable optimizer idempotency (FLOW-04 / Phase 21). Replaces the in-memory
+-- LruMap so a rolling-epoch claim survives a process restart. The unique key is
+-- the scope HORIZON (not epochId) + scope_hash, so a restart at the same sim-time
+-- re-claims the SAME row. `status` (PROCESSING/COMPLETED/FAILED) enables
+-- crash-mid-epoch recovery. Claim atomically via INSERT ... ON CONFLICT DO
+-- NOTHING RETURNING (0 rows == already claimed).
+CREATE TABLE IF NOT EXISTS optimizer_idempotency (
+  horizon_start BIGINT      NOT NULL,
+  horizon_end   BIGINT      NOT NULL,
+  scope_hash    TEXT        NOT NULL,
+  status        TEXT        NOT NULL DEFAULT 'PROCESSING',
+  plan_id       TEXT,
+  claimed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at  TIMESTAMPTZ,
+  CONSTRAINT uq_optimizer_idempotency UNIQUE (horizon_start, horizon_end, scope_hash)
+);

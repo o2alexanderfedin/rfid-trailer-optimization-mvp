@@ -58,6 +58,40 @@ function noWriteDb(): Kysely<Database> {
   return {} as Kysely<Database>;
 }
 
+/**
+ * A minimal chainable fake Kysely for the ACCEPT path: the durable epoch claim
+ * (`insertInto(optimizer_idempotency)…returning…executeTakeFirst` ⇒ a fresh row),
+ * the prior-staged read (`selectFrom(trailer_state)…executeTakeFirst` ⇒ no row ⇒
+ * `[]`), and the COMPLETED status update (`updateTable…execute`). `appendWithRetry`
+ * is spied separately, so this only needs to satisfy the claim + staged + finish
+ * calls. `claimReturns` controls the fresh-vs-duplicate claim outcome.
+ */
+function claimableDb(claimReturns: { scope_hash: string } | undefined): Kysely<Database> {
+  const chain = {
+    values: () => chain,
+    onConflict: () => chain,
+    returning: () => chain,
+    select: () => chain,
+    where: () => chain,
+    set: () => chain,
+    executeTakeFirst: (): Promise<unknown> =>
+      // The insert claim resolves to `claimReturns`; the trailer_state read
+      // resolves to undefined (no row ⇒ staged = []). We disambiguate by the
+      // presence of `scope_hash` on the canned claim row.
+      Promise.resolve(claimReturns),
+    execute: (): Promise<unknown[]> => Promise.resolve([]),
+  };
+  const db = {
+    insertInto: () => chain,
+    updateTable: () => chain,
+    selectFrom: () => ({
+      ...chain,
+      executeTakeFirst: (): Promise<unknown> => Promise.resolve(undefined),
+    }),
+  };
+  return db as unknown as Kysely<Database>;
+}
+
 describe("RollingOptimizerService — RunEpochFn port", () => {
   it("(a) inline default == runEpoch: same EpochResult as the pure core", async () => {
     const epoch: Epoch = { epochId: "e1", nowMin: 1, freezeWindowMin: 10 };
@@ -128,7 +162,12 @@ describe("RollingOptimizerService — RunEpochFn port", () => {
       .spyOn(eventStore, "appendWithRetry")
       .mockResolvedValue(undefined as unknown as Awaited<ReturnType<typeof eventStore.appendWithRetry>>);
 
-    const service = new RollingOptimizerService({ db: noWriteDb(), runEpochFn });
+    // The ACCEPT path now durably claims the epoch (INSERT…ON CONFLICT…RETURNING)
+    // before appending; a fresh claim row (`{ scope_hash }`) ⇒ the append fires once.
+    const service = new RollingOptimizerService({
+      db: claimableDb({ scope_hash: "h-accept" }),
+      runEpochFn,
+    });
     const epoch: Epoch = { epochId: "e1", nowMin: 1, freezeWindowMin: 10 };
     const input: EpochInput = { events: [trailerEvent("T001")], twinSnapshot: SNAPSHOT };
 

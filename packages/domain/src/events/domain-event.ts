@@ -13,6 +13,7 @@ import type {
   packageScannedSchema,
   planAcceptedSchema,
   planGeneratedSchema,
+  planSupersededSchema,
   rfidObservedSchema,
   routeRegisteredSchema,
   severitySchema,
@@ -143,6 +144,18 @@ export type TruckRefueled = z.infer<typeof truckRefueledSchema>;
  */
 export type PackageInducted = z.infer<typeof packageInductedSchema>;
 
+// --- Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1) -------
+
+/**
+ * The SOLE stage-mutating plan event (FLOW-04 / D-21-1). Emitted by the
+ * optimizer in the SAME atomic append as the new `PlanAccepted` that supersedes
+ * a prior plan. Carries HOLISTIC scope state (`supersededPackageIds`) so the
+ * hub-inventory reducer's dumb pure delete-then-apply wipes the prior plan's
+ * staged freight without stranding old-plan-only items. `priorPlanId` + `reason`
+ * give a replayable audit trail.
+ */
+export type PlanSuperseded = z.infer<typeof planSupersededSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -176,7 +189,9 @@ export type DomainEvent =
   | TruckRested
   | TruckRefueled
   // v2.0 external induction (IND-01).
-  | PackageInducted;
+  | PackageInducted
+  // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+  | PlanSuperseded;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

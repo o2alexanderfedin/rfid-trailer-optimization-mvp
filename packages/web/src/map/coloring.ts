@@ -258,13 +258,30 @@ const TRAILER_STYLE_CACHE: ReadonlyMap<string, Style> = new Map(
 const TRAILER_STYLE_DEFAULT = makeTrailerStyle("#9aa0a6");
 
 /**
+ * VIZ-12 — distinct fill for a CONSOLIDATION trailer (spoke→center). Cyan/teal:
+ * distinct from the trailer-state colors (green/amber/red/grey), the induction
+ * marker (purple), and the hub/stop markers. Outbound distribution trailers keep
+ * the state-keyed coloring; only consolidation legs get this dedicated color so
+ * both flow directions read at a glance on the live map.
+ */
+export const CONSOLIDATION_COLOR = "#0891b2";
+
+/** Pre-allocate ONE consolidation Style at module load (zero per-frame alloc). */
+const TRAILER_STYLE_CONSOLIDATION = makeTrailerStyle(CONSOLIDATION_COLOR);
+
+/**
  * Zero-allocation `StyleFunction` for live trailer (Point) features.
  *
- * Reads `feature.get("state")` and returns the cached `Style` for that state, or
- * the default for an unknown/missing state. Mutating a trailer's state via
- * `feature.set("state", s)` re-invokes this on the next render — no new Style.
+ * VIZ-12: a `direction === "consolidation"` feature returns the dedicated
+ * consolidation Style (spoke→center freight reads distinctly). Otherwise it
+ * reads `feature.get("state")` and returns the cached `Style` for that state, or
+ * the default for an unknown/missing state. Mutating a trailer's state/direction
+ * via `feature.set(...)` re-invokes this on the next render — no new Style is
+ * allocated (every branch returns a pre-allocated cached reference).
  */
 export function trailerStyle(feature: FeatureLike): Style {
+  const direction: unknown = feature.get("direction");
+  if (direction === "consolidation") return TRAILER_STYLE_CONSOLIDATION;
   const state: unknown = feature.get("state");
   if (typeof state === "string") {
     const cached = TRAILER_STYLE_CACHE.get(state);

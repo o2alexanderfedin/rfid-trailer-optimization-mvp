@@ -8,7 +8,7 @@ import {
   readOpenExceptions,
 } from "@mm/projections";
 import { assertNever, type Severity } from "@mm/domain";
-import { EPOCH_MS } from "@mm/simulation";
+import { EPOCH_MS, MEMPHIS } from "@mm/simulation";
 import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
 import {
@@ -302,8 +302,16 @@ export function buildTrailerKeyframes(
 ): TrailerKeyframe[] {
   // tripId → `route-FROM-TO` for every currently in-flight leg.
   const routeIdByTrip = new Map<string, string>();
+  // VIZ-12: tripId → flow direction. A leg from the center (MEMPHIS) is an
+  // outbound distribution leg; any other origin (a spoke) is a spoke→center
+  // consolidation leg. Derived purely from the leg origin — deterministic.
+  const directionByTrip = new Map<string, "outbound" | "consolidation">();
   for (const trip of inflightTrips) {
     routeIdByTrip.set(trip.trip_id, legRouteId(trip.from_hub_id, trip.to_hub_id));
+    directionByTrip.set(
+      trip.trip_id,
+      trip.from_hub_id === MEMPHIS.hubId ? "outbound" : "consolidation",
+    );
   }
 
   const departures = new Map<string, { tripId: string; ms: number }>();
@@ -332,12 +340,14 @@ export function buildTrailerKeyframes(
         const estMinutes = legMinutesByRoute.get(routeId);
         const fallbackEtaMs =
           dep.ms + (estMinutes !== undefined && estMinutes > 0 ? estMinutes * 60_000 : 3_600_000);
+        const direction = directionByTrip.get(dep.tripId);
         return {
           id,
           routeId,
           departMs: dep.ms,
           etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : fallbackEtaMs,
           state: trailerStateFor(id, "onTime", implicatedTrailerIds),
+          ...(direction !== undefined ? { direction } : {}),
         };
       }
       // Only an arrive keyframe → trailer is idle at a hub (positional, not risk).

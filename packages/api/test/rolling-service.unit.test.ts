@@ -10,16 +10,18 @@ import type { Epoch, EpochInput, EpochResult, TwinSnapshot } from "@mm/optimizer
 type DepsDb = RollingOptimizerDeps["db"];
 
 /**
- * CONT-04c — the rolling optimizer's idempotency memo stays bounded over an
- * indefinite (continuous-operation) run.
+ * FLOW-04 (Phase 21) — the rolling optimizer's idempotency is now DURABLE
+ * (the `optimizer_idempotency` Postgres table), replacing the in-memory
+ * `LruMap(500)` (CONT-04c, v1.0 debt). The cross-restart idempotency property the
+ * LruMap could NOT provide is exercised against a real Postgres in
+ * `optimizer/rolling-service.int.test.ts`.
  *
- * With distinct `(epochId, scopeHash)` keys for every run, the in-memory memo
- * would grow without bound under the old plain `Map`. Backed by `LruMap(500)` it
- * must cap at exactly 500 entries no matter how many epochs run.
- *
- * Pure unit (no Postgres): the injected `runEpochFn` returns a minimal result
- * with `accepted: null`, so the service never appends to the event store — the
- * `db` handle is never touched.
+ * This pure unit asserts the keystone the durable table preserves: a NON-accepting
+ * epoch (the common empty-scope tick) writes NOTHING and holds NO unbounded
+ * in-memory idempotency state — the service no longer accumulates a per-epoch memo
+ * at all, so an indefinite continuous run cannot grow without bound. The injected
+ * `runEpochFn` returns `accepted: null`, so the service never appends and the `db`
+ * handle is never touched.
  */
 
 const EMPTY_TWIN: TwinSnapshot = {
@@ -29,13 +31,15 @@ const EMPTY_TWIN: TwinSnapshot = {
 };
 
 function makeService(): RollingOptimizerService {
-  // Distinct scopeHash per epoch so each runOnce creates a NEW memo entry.
+  // Distinct scopeHash per epoch — under the old plain `Map` this would grow
+  // without bound; with `accepted:null` the durable-claim service writes nothing
+  // and keeps NO per-epoch memo, so there is nothing to bound.
   const runEpochFn: RunEpochFn = (epoch: Epoch): Promise<EpochResult> =>
     Promise.resolve({
       epochId: epoch.epochId,
       scopeHash: `scope-${epoch.epochId}`,
       generated: null,
-      accepted: null, // no commit ⇒ no DB write ⇒ db untouched
+      accepted: null, // no commit ⇒ no claim ⇒ db untouched
       recommendations: [],
     });
   const db = {} as unknown as DepsDb;
@@ -50,56 +54,28 @@ function input(): EpochInput {
   return { events: [], twinSnapshot: EMPTY_TWIN };
 }
 
-describe("RollingOptimizerService memo LRU cap (CONT-04c)", () => {
-  it("memo stays bounded at 500 entries after 600 distinct runOnce calls", async () => {
+describe("RollingOptimizerService durable idempotency (FLOW-04 / CONT-04c closed)", () => {
+  it("a non-accepting epoch never touches the db and is committed:false", async () => {
+    const service = makeService();
+    const outcome = await service.runOnce(epoch("e0"), input());
+    expect(outcome.committed).toBe(false);
+  });
+
+  it("600 distinct non-accepting epochs write nothing and never throw (no unbounded memo, db untouched)", async () => {
     const service = makeService();
     for (let i = 0; i < 600; i += 1) {
-      await service.runOnce(epoch(`e${i}`), input());
+      const { committed } = await service.runOnce(epoch(`e${i}`), input());
+      expect(committed).toBe(false);
     }
-    expect(service.memoSize()).toBe(500);
+    // The empty `{}` db handle was never used — no claim/append on the no-accept
+    // path — so 600 distinct epochs neither write nor grow any in-memory cache.
   });
 
-  it("re-running an already-memoized epoch does not grow the memo", async () => {
+  it("re-running the same non-accepting epoch stays committed:false (no side effect to dedupe)", async () => {
     const service = makeService();
-    await service.runOnce(epoch("dup"), input());
-    const sizeAfterFirst = service.memoSize();
-    // Same epochId ⇒ same memo key ⇒ memoized hit, no growth.
-    const outcome = await service.runOnce(epoch("dup"), input());
-    expect(outcome.committed).toBe(false);
-    expect(service.memoSize()).toBe(sizeAfterFirst);
-  });
-
-  // Plan 19-08 Task D (folded from p19-r2): an EVICTED epoch must RE-COMPUTE — the
-  // LRU eviction must not produce a false-positive idempotency hit. We count
-  // compute calls: after seeding "e0", pushing 600 distinct epochs evicts it
-  // (cap 500), so re-running "e0" calls the compute AGAIN (not a memo hit).
-  it("re-running an EVICTED epoch re-computes (no false-positive idempotency hit)", async () => {
-    let calls = 0;
-    const runEpochFn: RunEpochFn = (e: Epoch): Promise<EpochResult> => {
-      calls += 1;
-      return Promise.resolve({
-        epochId: e.epochId,
-        scopeHash: `scope-${e.epochId}`,
-        generated: null,
-        accepted: null,
-        recommendations: [],
-      });
-    };
-    const db = {} as unknown as RollingOptimizerDeps["db"];
-    const service = new RollingOptimizerService({ db, runEpochFn });
-
-    await service.runOnce(epoch("e0"), input());
-    const callsAfterSeed = calls;
-    // Push 600 distinct epochs (cap 500) so "e0" is evicted.
-    for (let i = 1; i <= 600; i += 1) {
-      await service.runOnce(epoch(`x${i}`), input());
-    }
-    const before = calls;
-    // "e0" was evicted ⇒ re-running it must re-compute (calls increments), and the
-    // memo stays capped (no unbounded growth).
-    await service.runOnce(epoch("e0"), input());
-    expect(calls).toBe(before + 1);
-    expect(calls).toBeGreaterThan(callsAfterSeed);
-    expect(service.memoSize()).toBe(500);
+    const first = await service.runOnce(epoch("dup"), input());
+    const second = await service.runOnce(epoch("dup"), input());
+    expect(first.committed).toBe(false);
+    expect(second.committed).toBe(false);
   });
 });

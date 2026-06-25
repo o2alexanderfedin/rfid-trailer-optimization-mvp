@@ -238,6 +238,32 @@ export const planAcceptedSchema = eventSchema(
   }),
 );
 
+/**
+ * `PlanSuperseded` — the SOLE stage-mutating plan event (FLOW-04 / D-21-1). The
+ * optimizer emits it in the SAME atomic append as the new `PlanAccepted` that
+ * replaces the prior plan; the hub-inventory reducer stays a dumb pure
+ * delete-then-apply over `supersededPackageIds`.
+ *
+ * D-21-1 (RESOLVED): the explicit event gives absolute determinism (state
+ * depends only on stream facts), a clean audit trail (`priorPlanId` + `reason`),
+ * and trivial replay-from-zero. The payload carries HOLISTIC scope state —
+ * `supersededPackageIds` is every packageId the prior plan staged for this
+ * scope — so items present in the OLD plan but absent in the NEW are wiped, not
+ * stranded. Carries identifiers + clock only (no RNG; determinism keystone).
+ */
+export const planSupersededSchema = eventSchema(
+  "PlanSuperseded",
+  z.object({
+    epochId: id,
+    scopeHash: id,
+    priorPlanId: id,
+    trailerId: id,
+    supersededPackageIds: z.array(id),
+    reason: z.string().min(1),
+    occurredAt,
+  }),
+);
+
 // --- Phase-9 (v1.2) driver-lifecycle events (EVT-01) ------------------------
 
 /**
@@ -447,4 +473,6 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   truckRefueledSchema,
   // v2.0 external induction (IND-01).
   packageInductedSchema,
+  // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+  planSupersededSchema,
 ]);

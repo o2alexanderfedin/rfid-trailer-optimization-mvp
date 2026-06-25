@@ -791,4 +791,28 @@ describe("buildTrailerKeyframes — routeId resolves to the route geometry key (
     // Real arrival (7h) wins over the 10h estimate.
     expect((kf!.etaMs - kf!.departMs) / 60_000).toBe(420);
   });
+
+  // VIZ-12: direction is derived from the leg origin — center (MEM) ⇒ outbound
+  // distribution; a spoke origin ⇒ consolidation (spoke→center).
+  it("a leg departing the center (MEM) has direction 'outbound'", () => {
+    const keyframes = [
+      { trailerId: "T1", tripId: "TRIP1", kind: "depart" as const, t: "2026-04-01T00:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP1", from_hub_id: "MEM", to_hub_id: "ORD" }];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set());
+
+    expect(kf?.direction).toBe("outbound");
+  });
+
+  it("a leg departing a spoke (toward the center) has direction 'consolidation'", () => {
+    const keyframes = [
+      { trailerId: "T2", tripId: "TRIP2", kind: "depart" as const, t: "2026-04-01T00:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP2", from_hub_id: "ORD", to_hub_id: "MEM" }];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set());
+
+    expect(kf?.direction).toBe("consolidation");
+  });
 });

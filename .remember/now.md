@@ -1,3 +1,3 @@
 
-## 18:11 | feature/phase-20-external-induction
-p20-r2 selected VIZ-13 tiebreak, merged + 3 fold-ins (engine fail-loud invariant, adv-test doc, MapView wiring test), auth gate ✓, Phase 21 next.
+## 21:43 | feature/phase-21-bidirectional-freight
+Phase 21 impl merged (d3861d0, 1465 unit tests + determinism verified), detection `is_active` scoping regression found in integration tests, debug-fix subagent dispatched for remediation before feature finish.

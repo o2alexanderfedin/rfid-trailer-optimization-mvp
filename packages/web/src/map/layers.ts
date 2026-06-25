@@ -158,6 +158,9 @@ export function upsertTrailerKeyframe(
     existing.set("etaMs", keyframe.etaMs);
     existing.set("state", keyframe.state);
     if (keyframe.util !== undefined) existing.set("util", keyframe.util);
+    // VIZ-12: thread the flow direction so trailerStyle can color consolidation
+    // trailers distinctly. Optional+additive — absent ⇒ the state-keyed style.
+    if (keyframe.direction !== undefined) existing.set("direction", keyframe.direction);
     return;
   }
   // New trailer: create placeholder feature (point at origin until first tween).
@@ -170,6 +173,7 @@ export function upsertTrailerKeyframe(
     state: keyframe.state,
   });
   if (keyframe.util !== undefined) feature.set("util", keyframe.util);
+  if (keyframe.direction !== undefined) feature.set("direction", keyframe.direction);
   feature.setId(id);
   source.addFeature(feature);
 }
