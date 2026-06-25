@@ -438,19 +438,22 @@ it("rejects an extra field (.strict payload)", () => {
 | A4 | Consolidation reuses existing freight ⇒ no new RNG (CONTEXT-locked, re-verified) | RNG Decision | LOW — locked by CONTEXT; this research confirms no induction/center freight needs a new draw. If discretionary "which spoke consolidates" is made random rather than deterministic, A4 breaks — keep it deterministic. |
 | A5 | `optimizer_idempotency` key is `(horizon_start, horizon_end, scope_hash)` | Pattern 5 | LOW — directly from Google-consult item 4; epoch identity in code is `${epochId}:${scopeHash}` (rolling-service.ts:142), where `epochId` derives from `simMs` — confirm the horizon columns map to the epoch horizon, not `epochId`, in planning. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `PlanAccepted` begin staging freight in `hub_inventory.staged`, or does supersession target a new plan-staging projection?**
+   - **RESOLVED:** `PlanAccepted` STAYS A NO-OP for `hub_inventory.staged` — its payload (`{ epochId, scopeHash, planId, trailerId, occurredAt }`, schemas.ts:230) carries NO packageIds, so it cannot stage. `PlanSuperseded` is the ONLY stage-mutating plan event: a dumb pure delete-then-apply over its `supersededPackageIds` (the prior plan's holistic staged scope) — wiping items in the OLD plan but absent in the NEW, never stranding. The existing unload-scan staging path (`PackageScanned scanType="unload"` → `staged`, hub-inventory.ts:144) is UNCHANGED, with a regression test proving both paths coexist (21-03; D-21-1).
    - What we know: today `staged` = `PackageScanned scanType="unload"` (hub-inventory.ts:144); `PlanAccepted` is a no-op there (hub-inventory.ts:212). The CONTEXT frames `staged` as "optimizer-plan-staged."
    - What's unclear: whether Phase 21 repurposes `staged` (a behavior change) or adds a new projection.
    - Recommendation: repurpose `staged` per D-21-1 (dumb delete-then-apply), but make this an explicit planning decision and add a regression test that the unload-scan staging path still works for non-plan freight. **This is the single most important design decision for FLOW-04.**
 
 2. **`epochId` (from `simMs`) vs the idempotency table's horizon columns.**
+   - **RESOLVED:** key on the scope horizon — `horizon_start/end` come from `scope.horizonStartMin`/`horizonEndMin` (scope.ts:125-126), NOT `epochId`, so a restart at the same sim-time re-claims the same row. Locked in 21-05 (UNIQUE(horizon_start,horizon_end,scope_hash)).
    - What we know: the memo key is `${epochId}:${scopeHash}` (rolling-service.ts:142); the consult specifies `UNIQUE(horizon_start, horizon_end, scope_hash)`.
    - What's unclear: whether `horizon_start/end` come from `epoch.nowMin`/`+DEFAULT_HORIZON_MIN` (scope.ts:125-126) or from `epochId`.
    - Recommendation: key on the scope horizon (`scope.horizonStartMin`/`horizonEndMin`) + `scope_hash` so a restart at the same sim-time re-claims the same row; confirm in planning.
 
 3. **Empty-return threshold (Google-consult item 2).**
+   - **RESOLVED:** simplest deterministic rule — a consolidation departure fires on the same trailer re-dispatch cadence the demo already uses; an empty manifest just departs empty (no special threshold). Locked in 21-04 (deterministic cadence / empty-departure rule).
    - What we know: empty `pendingAtSpoke` is VALID (locked), but the consult warns against *silently* emitting empty returns.
    - What's unclear: the deterministic threshold (downstream-demand horizon vs trailer-starvation guard).
    - Recommendation: simplest deterministic rule — a consolidation departure fires on the same trailer re-dispatch cadence the demo already uses; an empty manifest just departs empty (no special threshold) UNLESS the planner wants the richer guard. Keep it deterministic either way.

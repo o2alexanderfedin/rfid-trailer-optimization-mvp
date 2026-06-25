@@ -4,14 +4,14 @@ milestone: v2.0
 milestone_name: Complete Simulation Model
 status: executing
 stopped_at: roadmap written for v2.0 (Phases 19–22)
-last_updated: "2026-06-24T23:44:31.343Z"
-last_activity: 2026-06-24 -- Phase 20 planning complete
+last_updated: "2026-06-25T02:09:52.087Z"
+last_activity: 2026-06-25 -- Phase 21 planning complete
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 14
+  total_plans: 22
   completed_plans: 7
-  percent: 50
+  percent: 32
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 Phase: 21 — Bidirectional Freight / Consolidation (next)
 Plan: —
 Status: Ready to execute
-Last activity: 2026-06-24 -- Phase 20 planning complete
+Last activity: 2026-06-25 -- Phase 21 planning complete
 
 ## Performance Metrics
 
