@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Complete Simulation Model — Phases 19–22
-status: executing
+status: Awaiting next milestone
 stopped_at: context exhaustion at 75% (2026-06-25)
-last_updated: "2026-06-25T07:56:57.054Z"
-last_activity: 2026-06-25 -- Phase 22 planning complete
+last_updated: "2026-06-25T10:09:42.552Z"
+last_activity: 2026-06-25 — Milestone v2.0 completed and archived
 progress:
   total_phases: 4
   completed_phases: 0
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-22)
 
 ## Current Position
 
-Phase: 22 — Outbound Delivery (next)
+Phase: Milestone v2.0 complete
 Plan: —
-Status: Ready to execute
-Last activity: 2026-06-25 -- Phase 22 planning complete
+Status: Awaiting next milestone
+Last activity: 2026-06-25 — Milestone v2.0 completed and archived
 
 ## Performance Metrics
 
@@ -100,4 +100,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- v2.0 roadmap created 2026-06-24 (Phases 19–22). Next: `/gsd-plan-phase 19`
+- Start the next milestone with /gsd-new-milestone

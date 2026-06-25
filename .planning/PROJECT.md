@@ -221,4 +221,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-23 — v2.0 milestone (Complete Simulation Model) defined; requirements + roadmap pending (resume /gsd-new-milestone planning in a fresh session)*
+*Last updated: 2026-06-25 — v2.0 "Complete Simulation Model" (Phases 19–22) ✅ SHIPPED: continuous operation, external induction, bidirectional consolidation, and outbound delivery — the full freight lifecycle runs end-to-end, deterministically, on the live map. See .planning/MILESTONES.md + milestones/v2.0-ROADMAP.md.*
