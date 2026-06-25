@@ -414,12 +414,19 @@ export async function buildTwinSnapshot(
   //    SOFT-prefer more-rested drivers. OPT-HOS-02 (GAP-1 fix): ALSO read the full
   //    `hos_clock` JSONB so the optimizer's HARD HOS gate can re-walk every driving
   //    leg. Read deterministically — no recompute, no clock, no RNG.
+  // FLOW-04 / Phase 21 (scopeHash determinism): explicit ORDER BY over a stable
+  // key. `canonicalize` (freeze-idempotency.ts) sorts object KEYS but PRESERVES
+  // array order, so the SQL read order is load-bearing for `scopeHash`. With BOTH
+  // flow directions (distribution + consolidation) populating `hub_inventory`, an
+  // unordered read returns rows in arbitrary physical order across restarts ⇒
+  // `scopeHash` shifts ⇒ a frozen epoch re-fires. Order by the PRIMARY KEY of each.
   const [trailerRows, hubInventoryRows, driverStatusRows] = await Promise.all([
-    db.selectFrom("trailer_state").selectAll().execute(),
-    db.selectFrom("hub_inventory").selectAll().execute(),
+    db.selectFrom("trailer_state").selectAll().orderBy("trailer_id").execute(),
+    db.selectFrom("hub_inventory").selectAll().orderBy("hub_id").execute(),
     db
       .selectFrom("driver_status")
       .select(["driver_id", "remaining_drive_minutes", "hos_clock"])
+      .orderBy("driver_id")
       .execute(),
   ]);
 

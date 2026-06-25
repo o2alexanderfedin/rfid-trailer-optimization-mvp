@@ -59,11 +59,34 @@ export interface HubsTable {
 
 export type HubRow = Selectable<HubsTable>;
 
+/**
+ * Durable optimizer-epoch idempotency (FLOW-04 / Phase 21). Replaces the
+ * in-memory LruMap so a rolling-epoch claim survives a process restart.
+ *
+ *  - `(horizon_start, horizon_end, scope_hash)` is the UNIQUE claim key: a
+ *    restart at the same sim-time + scope re-claims the SAME row (Open Q2/A5 —
+ *    key on the HORIZON, not `epochId`).
+ *  - `status` (PROCESSING/COMPLETED/FAILED) enables crash-mid-epoch recovery.
+ *  - `claimed_at` is DB-defaulted; `completed_at` is set on COMPLETED/FAILED.
+ */
+export interface OptimizerIdempotencyTable {
+  horizon_start: ColumnType<string, string | number | bigint, never>;
+  horizon_end: ColumnType<string, string | number | bigint, never>;
+  scope_hash: string;
+  status: ColumnType<string, string | undefined, string>;
+  plan_id: ColumnType<string | null, string | null | undefined, string | null>;
+  claimed_at: ColumnType<Date, string | Date | undefined, never>;
+  completed_at: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+}
+
+export type OptimizerIdempotencyRow = Selectable<OptimizerIdempotencyTable>;
+
 export interface Database {
   streams: StreamsTable;
   events: EventsTable;
   projection_checkpoints: ProjectionCheckpointsTable;
   hubs: HubsTable;
+  optimizer_idempotency: OptimizerIdempotencyTable;
 }
 
 /**
@@ -121,5 +144,22 @@ CREATE TABLE IF NOT EXISTS hubs (
   name   TEXT             NOT NULL,
   lat    DOUBLE PRECISION NOT NULL,
   lon    DOUBLE PRECISION NOT NULL
+);
+
+-- Durable optimizer idempotency (FLOW-04 / Phase 21). Replaces the in-memory
+-- LruMap so a rolling-epoch claim survives a process restart. The unique key is
+-- the scope HORIZON (not epochId) + scope_hash, so a restart at the same sim-time
+-- re-claims the SAME row. \`status\` (PROCESSING/COMPLETED/FAILED) enables
+-- crash-mid-epoch recovery. Claim atomically via INSERT ... ON CONFLICT DO
+-- NOTHING RETURNING (0 rows == already claimed).
+CREATE TABLE IF NOT EXISTS optimizer_idempotency (
+  horizon_start BIGINT      NOT NULL,
+  horizon_end   BIGINT      NOT NULL,
+  scope_hash    TEXT        NOT NULL,
+  status        TEXT        NOT NULL DEFAULT 'PROCESSING',
+  plan_id       TEXT,
+  claimed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at  TIMESTAMPTZ,
+  CONSTRAINT uq_optimizer_idempotency UNIQUE (horizon_start, horizon_end, scope_hash)
 );
 `;

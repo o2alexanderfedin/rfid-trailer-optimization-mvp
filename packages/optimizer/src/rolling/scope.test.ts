@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DomainEvent } from "@mm/domain";
 
 import { detectAffectedScope } from "./scope.js";
+import { isFrozen } from "./freeze-idempotency.js";
 import type { Epoch } from "./types.js";
 
 /**
@@ -93,5 +94,46 @@ describe("detectAffectedScope (OPT-05 scoped epoch)", () => {
     const scope = detectAffectedScope([inducted("HA", "HB")], EPOCH);
     expect([...scope.hubIds].sort()).toEqual(["HA", "HB"]);
     expect(scope.trailerIds).toEqual([]);
+  });
+
+  // FLOW-04 / Phase 21 (bidirectional freight): a spoke→center consolidation
+  // TrailerDeparted scopes to EXACTLY [spokeHubId, centerId] — `hubsOf` reads
+  // `[fromHubId, toHubId]` direction-agnostically, so the added return direction
+  // is scoped identically to the center→spoke distribution leg. This is the
+  // committed witness that the optimizer reacts to BOTH directions (no spoke→center
+  // leg is silently dropped from the affected scope).
+  const SPOKE = "DALLAS";
+  const CENTER = "MEMPHIS";
+  it("scopes a spoke→center consolidation leg to EXACTLY [spokeHubId, centerId] (both directions)", () => {
+    const consolidation = detectAffectedScope(
+      [departed("T1", SPOKE, CENTER)],
+      EPOCH,
+    );
+    expect([...consolidation.hubIds].sort()).toEqual([CENTER, SPOKE].sort());
+    expect(consolidation.hubIds).toHaveLength(2);
+    expect(consolidation.trailerIds).toEqual(["T1"]);
+
+    // The mirror distribution leg (center→spoke) scopes to the SAME two hubs —
+    // proving the scoping is direction-agnostic (no direction silently dropped).
+    const distribution = detectAffectedScope(
+      [departed("T1", CENTER, SPOKE)],
+      EPOCH,
+    );
+    expect([...distribution.hubIds].sort()).toEqual([...consolidation.hubIds].sort());
+  });
+
+  // FLOW-04 / Phase 21: the freeze window is meaningful for spoke→center RETURN
+  // trailers too. A consolidation return trailer departing within
+  // [nowMin, nowMin + freezeWindowMin] is FROZEN (the optimizer must not re-plan a
+  // near-departure return), while one departing beyond the window is NOT — the
+  // freeze-window boundary aligns exactly across the added direction (Google-consult
+  // item 5: a misaligned boundary would silently shift the scopeHash).
+  it("validates isFrozen for a spoke→center return trailer (freeze-window alignment)", () => {
+    // EPOCH.nowMin = 100, freezeWindowMin = 15 ⇒ window is [100, 115].
+    expect(isFrozen(105, EPOCH)).toBe(true); // return departs inside the window ⇒ frozen
+    expect(isFrozen(100, EPOCH)).toBe(true); // at nowMin (inclusive) ⇒ frozen
+    expect(isFrozen(115, EPOCH)).toBe(true); // at the window end (inclusive) ⇒ frozen
+    expect(isFrozen(130, EPOCH)).toBe(false); // departs beyond the window ⇒ free to re-plan
+    expect(isFrozen(95, EPOCH)).toBe(false); // already departed (< nowMin) ⇒ not frozen
   });
 });
