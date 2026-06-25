@@ -102,14 +102,30 @@ describe("OUT-02 / OUT-03: outbound delivery (flag-on)", () => {
     }
   });
 
-  it("terminal-completeness: every package that arrives at a hub eventually reaches PackageDelivered", () => {
+  it("terminal-completeness: every package that arrives with dwell headroom reaches PackageDelivered", () => {
     const s = simulate({ ...ON_OPTS });
-    const arrivedIds = new Set(arrivedEvents(s).map((e) => e.payload.packageId));
     const deliveredIds = new Set(
       deliveredEvents(s).map((e) => e.payload.packageId),
     );
-    expect(arrivedIds.size).toBeGreaterThan(0);
-    for (const id of arrivedIds) {
+    // The whole-minute virtual clock advances 1 minute per tick. A package that
+    // arrives within the final OUTBOUND_DWELL_TICKS_MAX (=20) ticks of the horizon
+    // may have its seeded dwell push PackageDelivered PAST the horizon — a benign
+    // horizon-edge truncation, not a lost delivery. So terminal-completeness holds
+    // for every package that arrives with at least the max dwell of headroom.
+    const MAX_DWELL_MIN = 20;
+    const runEndMs = Math.max(...s.map((e) => Date.parse(e.occurredAt)));
+    const cutoffMs = runEndMs - MAX_DWELL_MIN * 60_000;
+    const arrivedWithHeadroom = new Set(
+      s
+        .filter(
+          (e) =>
+            e.event.type === "PackageArrivedAtHub" &&
+            Date.parse(e.occurredAt) <= cutoffMs,
+        )
+        .map((e) => (e.event as PackageArrivedAtHub).payload.packageId),
+    );
+    expect(arrivedWithHeadroom.size).toBeGreaterThan(0);
+    for (const id of arrivedWithHeadroom) {
       expect(deliveredIds.has(id)).toBe(true);
     }
   });
