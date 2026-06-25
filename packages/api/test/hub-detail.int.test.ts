@@ -253,7 +253,11 @@ describe("GET /hubs/:id/detail + ws driver buckets (HUBQ-01..08) over real Postg
   it("returns an empty list for a hub with no trailers (not a 404)", async () => {
     const res = await built.app.inject({ method: "GET", url: `/hubs/${ATL}/detail` });
     expect(res.statusCode).toBe(200);
-    expect(res.json<HubDetailDto>()).toEqual({ hubId: ATL, trailers: [] });
+    const body = res.json<HubDetailDto>();
+    expect(body.hubId).toBe(ATL);
+    expect(body.trailers).toEqual([]);
+    // FLOW-05: a zero balance for a hub with no inventory (a valid empty answer).
+    expect(body.inventoryBalance).toEqual({ inbound: 0, outbound: 0 });
   });
 
   it("HUBQ-02: idx_trailer_state_current_hub exists and backs the current_hub_id filter", async () => {

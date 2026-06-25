@@ -87,11 +87,31 @@ export interface HubTrailerDto {
   readonly etaIsEstimate: boolean;
 }
 
-/** The `GET /hubs/:id/detail` response (HUBQ-01..07). */
+/**
+ * FLOW-05 (P2): the hub's inbound/outbound inventory balance — the cross-dock
+ * "heat" of consolidation. Counts (not ids) of the `hub_inventory` projection's
+ * `inbound`/`outbound` buckets (the SAME projection the optimizer consumes —
+ * Decision 3). A center under active consolidation shows inbound from
+ * consolidation legs balanced against outbound to distribution legs.
+ */
+export interface HubInventoryBalanceDto {
+  /** Number of packages currently inbound at this hub (arriving freight). */
+  readonly inbound: number;
+  /** Number of packages currently outbound at this hub (departing freight). */
+  readonly outbound: number;
+}
+
+/** The `GET /hubs/:id/detail` response (HUBQ-01..07 + FLOW-05 balance). */
 export interface HubDetailDto {
   readonly hubId: string;
   /** Trailers at the hub, sorted by `trailerId` for a stable panel (P3). */
   readonly trailers: readonly HubTrailerDto[];
+  /**
+   * FLOW-05 (P2): inbound/outbound inventory balance (cross-dock heat) from
+   * `hub_inventory`. A zero balance for an unseen hub or a hub with no
+   * inventory row (a valid empty answer, never a throw).
+   */
+  readonly inventoryBalance: HubInventoryBalanceDto;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +157,25 @@ async function readArrivedAtMs(
     .limit(1)
     .executeTakeFirst();
   return row === undefined ? null : toMs(row.occurred_at);
+}
+
+/**
+ * FLOW-05 (P2) — the hub's inbound/outbound inventory balance: the COUNTS of the
+ * `hub_inventory.inbound`/`outbound` JSONB buckets for `hubId`. A hub with no
+ * inventory row (unseen or never-touched) yields a zero balance (no throw) — the
+ * established hub-detail valid-empty discipline. Parameterized read, no full scan.
+ */
+async function readInventoryBalance(
+  db: ApiDb,
+  hubId: string,
+): Promise<HubInventoryBalanceDto> {
+  const row = await db
+    .selectFrom("hub_inventory")
+    .select(["inbound", "outbound"])
+    .where("hub_id", "=", hubId)
+    .executeTakeFirst();
+  if (row === undefined) return { inbound: 0, outbound: 0 };
+  return { inbound: row.inbound.length, outbound: row.outbound.length };
 }
 
 /**
@@ -211,27 +250,37 @@ export function registerHubDetailRoutes(
       // HUBQ-01/02: the trailers AT this hub (index-backed reverse lookup), the
       // shared reconstruction inputs, the route legs, and the hub geo — read in
       // parallel (each is an independent read).
-      const [trailerRows, hubOutboundIndex, routeDestHubs, routeLegs, hubs] =
-        await Promise.all([
-          db
-            .selectFrom("trailer_state")
-            .selectAll()
-            .where("current_hub_id", "=", hubId)
-            .execute(),
-          readHubOutboundIndex(db),
-          readRouteDestHubs(db, hubId),
-          db
-            .selectFrom("events")
-            .select(["data"])
-            .where("event_type", "=", "RouteRegistered")
-            .orderBy("global_seq", "asc")
-            .execute(),
-          readHubsFromLog(db),
-        ]);
+      const [
+        trailerRows,
+        hubOutboundIndex,
+        routeDestHubs,
+        routeLegs,
+        hubs,
+        inventoryBalance,
+      ] = await Promise.all([
+        db
+          .selectFrom("trailer_state")
+          .selectAll()
+          .where("current_hub_id", "=", hubId)
+          .execute(),
+        readHubOutboundIndex(db),
+        readRouteDestHubs(db, hubId),
+        db
+          .selectFrom("events")
+          .select(["data"])
+          .where("event_type", "=", "RouteRegistered")
+          .orderBy("global_seq", "asc")
+          .execute(),
+        readHubsFromLog(db),
+        // FLOW-05 (P2): inbound/outbound balance read alongside the rest.
+        readInventoryBalance(db, hubId),
+      ]);
 
       if (trailerRows.length === 0) {
-        // Valid empty answer for an unseen / empty hub (not a 404).
-        return { hubId, trailers: [] };
+        // Valid empty answer for an unseen / empty hub (not a 404). The balance
+        // still reports the hub's inventory (a center can hold freight with no
+        // trailer currently docked).
+        return { hubId, trailers: [], inventoryBalance };
       }
 
       const hubById = new Map<string, Hub>(hubs.map((h) => [h.hubId, h]));
@@ -317,7 +366,7 @@ export function registerHubDetailRoutes(
         a.trailerId < b.trailerId ? -1 : a.trailerId > b.trailerId ? 1 : 0,
       );
 
-      return { hubId, trailers };
+      return { hubId, trailers, inventoryBalance };
     },
   );
 }
