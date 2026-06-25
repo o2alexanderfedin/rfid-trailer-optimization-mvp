@@ -70,6 +70,10 @@ const ALL_ON: FeatureOpts = {
     refuelThresholdMiles: 120,
     refuelTimeMinutes: 30,
   },
+  // v2.0 IND-02: include external induction in the maximal state surface so the
+  // SEVENTH sub-stream (induction RNG) + the inductPackage SimTask variant are
+  // exercised under the most adversarial chunk-1 / clone+freeze boundaries.
+  inductionEnabled: true,
 };
 
 /**
