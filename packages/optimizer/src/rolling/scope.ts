@@ -32,6 +32,12 @@ function hubsOf(event: DomainEvent): readonly string[] {
       return [event.payload.fromHubId, event.payload.toHubId];
     case "PackageCreated":
       return [event.payload.originHubId, event.payload.destHubId];
+    // v2.0 IND-03 (Pitfall 3): external induction re-scopes the optimizer to BOTH
+    // the induction hub (new demand origin) AND the destination hub — same shape
+    // as PackageCreated. Classifying it scope-neutral would silently defeat the
+    // optimizer demand path (inducted freight never prioritized).
+    case "PackageInducted":
+      return [event.payload.inductionHubId, event.payload.destHubId];
     case "PackageScanned":
     case "PackageArrivedAtHub":
     case "TrailerArrivedAtHub":
@@ -51,9 +57,13 @@ function hubsOf(event: DomainEvent): readonly string[] {
     // sim emission + optimizer awareness land in later phases). Classifying them
     // as scope-neutral keeps the closed-union exhaustive + the rolling epoch
     // unchanged until those phases wire them in.
+    // FLOW-04 / D-21-1: PlanSuperseded is an optimizer-internal supersession marker
+    // grouped here — it names no NEW demand hub (the superseding PlanAccepted + its
+    // scope already cover the affected hubs), so it is SCOPE-NEUTRAL.
     case "WrongTrailerDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    case "PlanSuperseded":
     case "DriverRegistered":
     case "DriverAssignedToTrip":
     case "DriverDutyStateChanged":
@@ -61,6 +71,16 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
+    case "PackageDelivered":
+      // SP2 stop events (TruckRested/TruckRefueled) are SCOPE-NEUTRAL — a
+      // rest/refuel never re-scopes the optimizer, so an absent-fuelConfig epoch
+      // stays byte-identical to the pre-SP2 result.
+      // Phase-22 OUT-01: PackageDelivered is the TERMINAL exit of freight — the
+      // package is LEAVING the network, so it adds NO new demand hub to the
+      // affected scope. SCOPE-NEUTRAL (the destination arrival that preceded it
+      // already scoped the hub if needed).
       return [];
     default: {
       // Exhaustiveness guard — a new event type must be classified here.

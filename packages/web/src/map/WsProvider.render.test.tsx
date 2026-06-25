@@ -61,6 +61,7 @@ const SNAPSHOT: WsEnvelope = {
   type: "snapshot",
   seq: 1,
   simMs: 1_000,
+  simDay: 0,
   speed: SPEED,
   payload: {
     trailers: [
@@ -88,6 +89,7 @@ const TICK: WsEnvelope = {
   type: "tick",
   seq: 2,
   simMs: 1_500,
+  simDay: 0,
   speed: SPEED,
   payload: {
     trailers: [
@@ -410,6 +412,7 @@ describe("<WsProvider /> (jsdom ui lane)", () => {
       type: "tick",
       seq: 5,
       simMs: 2_000,
+      simDay: 0,
       speed: SPEED,
       payload: {
         trailers: [

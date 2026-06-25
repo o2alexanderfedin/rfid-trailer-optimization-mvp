@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Driver HOS & Hub Detail
+milestone: v2.0
+milestone_name: Complete Simulation Model — Phases 19–22
 status: Awaiting next milestone
-stopped_at: v1.2 milestone close complete — awaiting next milestone.
-last_updated: "2026-06-22T04:12:01.801Z"
-last_activity: 2026-06-22 — Milestone v1.2 completed and archived
+stopped_at: context exhaustion at 75% (2026-06-25)
+last_updated: "2026-06-25T10:09:42.552Z"
+last_activity: 2026-06-25 — Milestone v2.0 completed and archived
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 29
+  completed_plans: 7
+  percent: 24
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-22)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** v1.2 (Driver HOS & Hub Detail) shipped 2026-06-22 and archived. Awaiting the next milestone — run `/gsd-new-milestone` for v1.3.
+**Current focus:** v2.0 Complete Simulation Model — Phase 19 ✅ complete (continuous operation + resumable engine + bounded retention). Phase 20 (External Induction) is next.
 
 ## Current Position
 
-Phase: Milestone v1.2 complete (Phases 9–18, 35/35 requirements) — shipped & archived 2026-06-22
+Phase: Milestone v2.0 complete
 Plan: —
-Status: Awaiting next milestone (run /gsd-new-milestone for v1.3)
-Last activity: 2026-06-22 — Milestone v1.2 completed and archived
+Status: Awaiting next milestone
+Last activity: 2026-06-25 — Milestone v2.0 completed and archived
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ Recent decisions affecting current work:
 - [Phase 1]: Pull the simulation engine (SIM-01/02) and a thin geo-only map slice (VIZ-01) into Phase 1 — the sim is the only data source for everything, and the early map slice de-risks the OpenLayers centerpiece before the optimizer lands.
 - [Phase 2]: Load planner is the "if all else fails" deliverable; independent LIFO validator + naive baseline (LOAD-09) designed in here, sharing KPI plumbing for the eventual before/after "money slide."
 - [Phase 4]: Custom min-cost flow + VRPTW in TS (no maintained JS lib) with glpk.js held as a correctness oracle — concentrated engineering risk; flagged for /gsd-research-phase.
+- [v2.0 2026-06-24]: Three design decisions resolved: (1) PackageInducted COEXISTS with PackageCreated; (2) spoke→spoke freight routes via center hub; (3) optimizer picks up inducted freight automatically via hub_inventory projection. Zero new runtime dependencies.
 
 ### Pending Todos
 
@@ -74,7 +75,7 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
-None — all v1.0 phase blockers resolved at ship. (Phase 4 settled on custom SSP min-cost-flow + VRPTW with a glpk.js correctness oracle; Phase 5 OpenLayers perf resolved via flat-heap postrender animation, soak-proven.) Carried technical debt is tracked in PROJECT.md and `milestones/v1.0-MILESTONE-AUDIT.md`.
+None — v1.2 shipped clean. v2.0 roadmap research confirmed zero new runtime dependencies. Phase 21 (FLOW-*) is the highest-integration phase; the `PlanSuperseded`/supersession-aware `PlanAccepted` design decision must be resolved during Phase 21 planning. Detection-cost-scales-with-state tech debt will be addressed in Phase 21 via `is_active` filter.
 
 ### Quick Tasks Completed
 
@@ -93,10 +94,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-22 — v1.2 (Driver HOS & Hub Detail) shipped and archived; 10 phases (9–18), 35/35 requirements; final gate green (test:all 1473/139).
-Stopped at: v1.2 milestone close complete — awaiting next milestone.
+Last session: 2026-06-25T06:34:15.177Z
+Stopped at: context exhaustion at 75% (2026-06-25)
 Resume file: None
 
 ## Operator Next Steps
 
-- v1.2 shipped 2026-06-22; awaiting next milestone. Run /gsd-new-milestone for v1.3.
+- Start the next milestone with /gsd-new-milestone

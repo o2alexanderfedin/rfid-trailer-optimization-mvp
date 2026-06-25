@@ -124,6 +124,15 @@ export type {
 } from "./reducers/geo-track.js";
 export { emptyGeoTrackState, geoTrackReducer, legKey } from "./reducers/geo-track.js";
 
+// --- SP2: trailer fuel state (milesSinceRefuel for the planning twin) ---------
+export type { TrailerFuel, TrailerFuelState } from "./reducers/trailer-fuel.js";
+export {
+  emptyTrailerFuelState,
+  geometryMiles,
+  getTrailerMiles,
+  trailerFuelReducer,
+} from "./reducers/trailer-fuel.js";
+
 // --- Operational twin: schema + inline applier + rebuild driver --------------
 export type {
   ProjectionDatabase,
@@ -176,7 +185,13 @@ export type {
   ProjectionReadDeps,
   RunDetectionOptions,
 } from "./detector.js";
-export { makeProjectionReads, planDetection, runDetection } from "./detector.js";
+export {
+  ACTIVE_TRAILER_STATUSES,
+  isActiveTrailerStatus,
+  makeProjectionReads,
+  planDetection,
+  runDetection,
+} from "./detector.js";
 
 // Re-export the (pure) detection config + types from @mm/sensor-fusion so the
 // API/sim composition root can configure detection WITHOUT taking a direct

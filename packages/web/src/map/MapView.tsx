@@ -16,6 +16,12 @@ import {
   createHubLayer,
   createRouteLayer,
   createTrailerLayer,
+  createTrailerStopLayer,
+  createInductionLayer,
+  createDeliveryLayer,
+  applyTrailerStops,
+  flashInduction,
+  flashDelivery,
   upsertTrailerKeyframe,
   removeTrailerFeature,
   applyHubBuckets,
@@ -84,9 +90,18 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
   const trailerSourceRef = useRef<VectorSource | null>(null);
   const hubSourceRef = useRef<VectorSource | null>(null);
   const routeSourceRef = useRef<VectorSource | null>(null);
+  // SP2 (spec §8): the parked/refueling stop-marker source.
+  const stopSourceRef = useRef<VectorSource | null>(null);
+  // VIZ-13: the transient external-induction pulsing-marker source.
+  const inductionSourceRef = useRef<VectorSource | null>(null);
+  // VIZ-14: the transient outbound-delivery flash layer source.
+  const deliverySourceRef = useRef<VectorSource | null>(null);
 
   /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
   const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
+
+  /** Hub lon/lat cached (hubId → [lon, lat]) for VIZ-13 induction marker placement. */
+  const hubLonLatRef = useRef<Map<string, readonly [number, number]>>(new Map());
 
   /** Per-trailer animation targets (mutated in place by envelope handler). */
   const trailerAnimsRef = useRef<Map<string, TrailerAnim>>(new Map());
@@ -142,11 +157,31 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     trailerSourceInstancesRef.current += 1;
     setAttr("data-trailer-source-instances", trailerSourceInstancesRef.current);
 
+    // SP2 (spec §8): the parked/refueling STOP layer, ABOVE the moving-trailer
+    // layer so a stationary stop marker sits on top of its (paused) truck marker.
+    const stop = createTrailerStopLayer();
+    stopSourceRef.current = stop.source;
+
+    // VIZ-13: the transient external-induction layer, ABOVE the stop layer so a
+    // pulsing induction marker reads on top (it self-removes after ~2s).
+    const induction = createInductionLayer();
+    inductionSourceRef.current = induction.source;
+
+    // VIZ-14: the transient outbound-delivery layer, ABOVE the induction layer so
+    // a delivery flash (green ✓) reads on top at the destination hub; it
+    // self-removes after ~2s. Distinct from VIZ-13 induction purple / consolidation
+    // cyan.
+    const delivery = createDeliveryLayer();
+    deliverySourceRef.current = delivery.source;
+
     const map = new OlMap({
       target: container,
       layers: [
         new TileLayer({ source: new OSM({ crossOrigin: "anonymous" }) }),
         trailer.layer,
+        stop.layer,
+        induction.layer,
+        delivery.layer,
       ],
       view: new View({
         center: fromLonLat([USA_CENTER[0], USA_CENTER[1]]),
@@ -227,6 +262,11 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
           routeDtosRef.current.set(r.routeId, r);
         }
 
+        // VIZ-13: cache hub lon/lat for placing induction markers by hubId.
+        for (const h of hubs) {
+          hubLonLatRef.current.set(h.hubId, [h.lon, h.lat]);
+        }
+
         const hubLayer = createHubLayer(hubs);
         const routeLayer = createRouteLayer(routes);
         hubSourceRef.current = hubLayer.source;
@@ -272,8 +312,12 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       trailerSourceRef.current = null;
       hubSourceRef.current = null;
       routeSourceRef.current = null;
+      stopSourceRef.current = null;
+      inductionSourceRef.current = null;
+      deliverySourceRef.current = null;
       trailerAnimsRef.current.clear();
       routeDtosRef.current.clear();
+      hubLonLatRef.current.clear();
     };
   }, [setAttr]);
 
@@ -283,6 +327,9 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       const trailerSource = trailerSourceRef.current;
       const hubSource = hubSourceRef.current;
       const routeSource = routeSourceRef.current;
+      const stopSource = stopSourceRef.current;
+      const inductionSource = inductionSourceRef.current;
+      const deliverySource = deliverySourceRef.current;
       if (trailerSource === null) return;
 
       // Drive the local clock's PLAYBACK RATE from the server's effective speed
@@ -316,6 +363,8 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
         // Apply hub + route buckets.
         if (hubSource !== null) applyHubBuckets(hubSource, payload.hubs);
         if (routeSource !== null) applyRouteBuckets(routeSource, payload.routes);
+        // SP2 (spec §8): render the parked/refueling stop markers (full set).
+        if (stopSource !== null) applyTrailerStops(stopSource, payload.trailerStops ?? []);
       } else {
         // Delta tick: upsert + delete.
         const payload = envelope.payload;
@@ -337,6 +386,35 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
         }
         if (routeSource !== null && payload.routes !== undefined) {
           applyRouteBuckets(routeSource, payload.routes);
+        }
+        // SP2 (spec §8): the tick carries the FULL stop set whenever it changed —
+        // reconcile the parked-marker layer wholesale (undefined ⇒ unchanged).
+        if (stopSource !== null && payload.trailerStops !== undefined) {
+          applyTrailerStops(stopSource, payload.trailerStops);
+        }
+        // VIZ-13: flash a transient pulsing marker at each induction hub for ~2s
+        // (freight entering from outside). Hub lon/lat looked up from the static
+        // hub cache; an unknown hub is skipped (no marker rather than a crash).
+        if (inductionSource !== null && payload.inductionEvents !== undefined) {
+          for (const ev of payload.inductionEvents) {
+            const lonLat = hubLonLatRef.current.get(ev.inductionHubId);
+            if (lonLat !== undefined) {
+              flashInduction(inductionSource, ev.inductionHubId, lonLat[0], lonLat[1]);
+            }
+          }
+        }
+        // VIZ-14: flash a transient marker at each DESTINATION hub for ~2s
+        // (freight delivered / exiting the network). Hub lon/lat looked up from
+        // the static hub cache; an unknown hub is skipped (no marker rather than a
+        // crash). `deliveryEvents` exists ONLY on a TickPayload (Pitfall-7), so a
+        // reconnect snapshot never re-flashes historical deliveries.
+        if (deliverySource !== null && payload.deliveryEvents !== undefined) {
+          for (const ev of payload.deliveryEvents) {
+            const lonLat = hubLonLatRef.current.get(ev.hubId);
+            if (lonLat !== undefined) {
+              flashDelivery(deliverySource, ev.hubId, lonLat[0], lonLat[1]);
+            }
+          }
         }
       }
 

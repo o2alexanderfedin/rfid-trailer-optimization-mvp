@@ -6,6 +6,7 @@ import {
   lonLatSchema,
   sizeClassSchema,
 } from "../entities/index.js";
+import { slaClassSchema } from "../planning/index.js";
 
 /**
  * One zod schema per Phase-1 event type, composed into a single closed
@@ -237,6 +238,32 @@ export const planAcceptedSchema = eventSchema(
   }),
 );
 
+/**
+ * `PlanSuperseded` — the SOLE stage-mutating plan event (FLOW-04 / D-21-1). The
+ * optimizer emits it in the SAME atomic append as the new `PlanAccepted` that
+ * replaces the prior plan; the hub-inventory reducer stays a dumb pure
+ * delete-then-apply over `supersededPackageIds`.
+ *
+ * D-21-1 (RESOLVED): the explicit event gives absolute determinism (state
+ * depends only on stream facts), a clean audit trail (`priorPlanId` + `reason`),
+ * and trivial replay-from-zero. The payload carries HOLISTIC scope state —
+ * `supersededPackageIds` is every packageId the prior plan staged for this
+ * scope — so items present in the OLD plan but absent in the NEW are wiped, not
+ * stranded. Carries identifiers + clock only (no RNG; determinism keystone).
+ */
+export const planSupersededSchema = eventSchema(
+  "PlanSuperseded",
+  z.object({
+    epochId: id,
+    scopeHash: id,
+    priorPlanId: id,
+    trailerId: id,
+    supersededPackageIds: z.array(id),
+    reason: z.string().min(1),
+    occurredAt,
+  }),
+);
+
 // --- Phase-9 (v1.2) driver-lifecycle events (EVT-01) ------------------------
 
 /**
@@ -335,6 +362,110 @@ export const unloadCompletedSchema = eventSchema(
   phaseEventPayload,
 );
 
+// --- SP2 visible rest/fuel stop events (spec §4) ----------------------------
+
+/**
+ * `TruckRested` — emitted ALONGSIDE the existing `DriverDutyStateChanged`
+ * (`resting` 10-h | `on_break` 30-min) so the rest gains a MAP presence (the
+ * trailer parks at a rest area). `reason` is a CLOSED two-value enum mapping the
+ * HOS segment that triggered it; `durationMin` is that segment's whole minutes.
+ *
+ * DETERMINISM (spec §4): the payload carries NO lon/lat and NO RNG value — only
+ * ids + the clock + the duration derived from the HOS segment. The stop's map
+ * position is computed by the geo-track projection from the logged leg geometry,
+ * never carried here. `durationMin` is a non-negative integer (a 0-minute or
+ * negative rest is rejected at this boundary).
+ */
+export const truckRestedSchema = eventSchema(
+  "TruckRested",
+  z.object({
+    trailerId: id,
+    tripId: id,
+    reason: z.enum(["rest-10h", "break-30min"]),
+    durationMin: z.number().int().nonnegative(),
+    occurredAt,
+  }),
+);
+
+/**
+ * `TruckRefueled` — emitted when a trailer's per-trailer odometer crosses the
+ * `FuelConfig.refuelThresholdMiles` (the trailer visibly refuels mid-route).
+ * `gallons` is the deterministic refilled amount from the tank model
+ * (`min(odometerMiles / mpg, tankCapacityGallons)`, rounded); `odometerMiles` is
+ * the cumulative miles AT the refuel (pre-reset); `durationMin` is the refuel
+ * service time.
+ *
+ * DETERMINISM (spec §4): NO lon/lat and NO RNG in the payload — the geo-track
+ * projection interpolates the refuel position from the logged leg geometry. All
+ * numeric fields are non-negative (a NaN/Infinity or negative value is rejected
+ * structurally at this boundary).
+ */
+export const truckRefueledSchema = eventSchema(
+  "TruckRefueled",
+  z.object({
+    trailerId: id,
+    tripId: id,
+    gallons: z.number().nonnegative().finite(),
+    odometerMiles: z.number().nonnegative().finite(),
+    durationMin: z.number().int().nonnegative(),
+    occurredAt,
+  }),
+);
+
+// --- v2.0 external induction (IND-01) ---------------------------------------
+
+/**
+ * `PackageInducted` — freight enters the network FROM OUTSIDE at a spoke hub
+ * (IND-01 / v2.0). This is the first network-visible entry of externally
+ * originated freight; it COEXISTS with `PackageCreated` (internal center-origin
+ * spawn), which is unchanged.
+ *
+ * DETERMINISM: `occurredAt` is the VIRTUAL clock ISO string (never `Date.now()`).
+ * `slaDeadlineIso` is LOCKED at induction time (`occurredAt + expectedTravel
+ * (inductionHub→center→destHub) + SLA-class buffer`) and never regenerated.
+ * `externalOriginRef` is a deterministic counter id (e.g. `EXT-00001`). All
+ * fields are simulation-generated; the optimizer reads inducted freight via the
+ * `hub_inventory` projection's `inbound` bucket (Decision 3).
+ */
+export const packageInductedSchema = eventSchema(
+  "PackageInducted",
+  z.object({
+    packageId: id,
+    inductionHubId: id,
+    destHubId: id,
+    slaClass: slaClassSchema,
+    slaDeadlineIso: z.string().min(1),
+    externalOriginRef: id,
+    occurredAt,
+  }),
+);
+
+// --- Phase-22 outbound delivery (OUT-01) ------------------------------------
+
+/**
+ * `PackageDelivered` — the TERMINAL delivery event (OUT-01 / Phase 22). Freight
+ * reaching its DESTINATION hub exits the network here, after a seeded outbound
+ * dwell (>= 1 tick from arrival, D-22-2). It DELETE-purges the package from the
+ * read-model projections (`packageLocation`, `hubInventory`, `zoneEstimate`),
+ * completing the bounded-memory story (OUT-04).
+ *
+ * DETERMINISM: emitted ONLY when `outboundDeliveryEnabled === true`. `deliveredAt`
+ * is the VIRTUAL clock ISO string canonicalized to whole minutes (never
+ * `Date.now()`). `onTime = deliveredAt <= slaDeadlineIso` is computed at emit
+ * (ISO-8601 lexicographic; D-22-5); center-origin freight without an induction
+ * deadline is `onTime: true` by convention.
+ */
+export const packageDeliveredSchema = eventSchema(
+  "PackageDelivered",
+  z.object({
+    packageId: id,
+    hubId: id,
+    deliveredAt: z.string().min(1),
+    onTime: z.boolean(),
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -363,4 +494,13 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   unloadStartedSchema,
   loadStartedSchema,
   unloadCompletedSchema,
+  // SP2 visible rest/fuel stop events (spec §4).
+  truckRestedSchema,
+  truckRefueledSchema,
+  // v2.0 external induction (IND-01).
+  packageInductedSchema,
+  // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+  planSupersededSchema,
+  // Phase-22 terminal delivery (OUT-01).
+  packageDeliveredSchema,
 ]);

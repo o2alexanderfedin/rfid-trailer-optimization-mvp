@@ -6,9 +6,12 @@ import LineString from "ol/geom/LineString.js";
 import { fromLonLat } from "ol/proj.js";
 import type { HubDto, RouteDto } from "../api/client.js";
 import type { TrailerSnapshot } from "./useTrailerSnapshots.js";
-import type { HubState, RouteState, TrailerKeyframe } from "@mm/api";
+import type { HubState, RouteState, TrailerKeyframe, TrailerStop } from "@mm/api";
 import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
 import { classifyDutyBucket } from "./dutyColoring.js";
+import { stopStyle } from "./stopColoring.js";
+import { inductionStyle } from "./inductionColoring.js";
+import { deliveryStyle } from "./deliveryColoring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -156,6 +159,9 @@ export function upsertTrailerKeyframe(
     existing.set("etaMs", keyframe.etaMs);
     existing.set("state", keyframe.state);
     if (keyframe.util !== undefined) existing.set("util", keyframe.util);
+    // VIZ-12: thread the flow direction so trailerStyle can color consolidation
+    // trailers distinctly. Optional+additive — absent ⇒ the state-keyed style.
+    if (keyframe.direction !== undefined) existing.set("direction", keyframe.direction);
     return;
   }
   // New trailer: create placeholder feature (point at origin until first tween).
@@ -168,6 +174,7 @@ export function upsertTrailerKeyframe(
     state: keyframe.state,
   });
   if (keyframe.util !== undefined) feature.set("util", keyframe.util);
+  if (keyframe.direction !== undefined) feature.set("direction", keyframe.direction);
   feature.setId(id);
   source.addFeature(feature);
 }
@@ -209,6 +216,141 @@ export function applyHubBuckets(
     // falls back to its volume coloring (nothing is fabricated).
     const dutyBucket = classifyDutyBucket(hub);
     feature.set("dutyBucket", dutyBucket ?? undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SP2 — parked/refueling stop layer (spec §8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the (initially empty) trailer-STOP layer + its single reused source. A
+ * `rested`/`refueling` stop renders a STATIONARY marker here (no tween) for the
+ * stop's duration, styled distinctly by `stopStyle` (amber "P" / blue fuel pump).
+ */
+export function createTrailerStopLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  const layer = new VectorLayer({ source, style: stopStyle });
+  return { layer, source };
+}
+
+/** A stop's stable feature id — distinct per (trailer, trip, start), so a trailer
+ * may show successive stops along a trip without collision. */
+function stopFeatureId(s: TrailerStop): string {
+  return `stop:${s.trailerId}:${s.tripId}:${s.startMs}`;
+}
+
+/**
+ * Create the (initially empty) induction-event layer (VIZ-13). A `PackageInducted`
+ * ws message adds a transient pulsing feature here via {@link flashInduction}; a
+ * `setTimeout` removes it after ~2000 ms. The source is never blindly cleared —
+ * features are added + removed individually (same discipline as the stop layer).
+ */
+export function createInductionLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  const layer = new VectorLayer({ source, style: inductionStyle });
+  return { layer, source };
+}
+
+/**
+ * Flash an induction marker at `[lon, lat]` for `durationMs` (default 2000): add a
+ * transient Point feature, then remove it after the timeout. `Date.now()` is used
+ * ONLY for feature-id uniqueness (markers just need to not collide per flash) — it
+ * is NOT a virtual-clock concern, so this is correct here.
+ */
+export function flashInduction(
+  source: VectorSource,
+  inductionHubId: string,
+  lon: number,
+  lat: number,
+  durationMs = 2000,
+): void {
+  const featureId = `induction:${inductionHubId}:${Date.now()}:${Math.random()}`;
+  const feature = new Feature({
+    geometry: new Point(fromLonLat([lon, lat])),
+    inductionHubId,
+  });
+  feature.setId(featureId);
+  source.addFeature(feature);
+  setTimeout(() => {
+    const f = source.getFeatureById(featureId);
+    if (f !== null) source.removeFeature(f);
+  }, durationMs);
+}
+
+/**
+ * Create the (initially empty) outbound-delivery layer (VIZ-14). A
+ * `PackageDelivered` ws message adds a transient feature here via
+ * {@link flashDelivery}; a `setTimeout` removes it after ~2000 ms. The source is
+ * never blindly cleared — features are added + removed individually (same
+ * discipline as the induction + stop layers).
+ */
+export function createDeliveryLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  const layer = new VectorLayer({ source, style: deliveryStyle });
+  return { layer, source };
+}
+
+/**
+ * Flash a delivery marker at `[lon, lat]` for `durationMs` (default 2000): add a
+ * transient Point feature at the destination hub, then remove it after the
+ * timeout. `Date.now()` is used ONLY for feature-id uniqueness (markers just need
+ * to not collide per flash) — it is NOT a virtual-clock concern, so this is
+ * correct here (mirrors {@link flashInduction}).
+ */
+export function flashDelivery(
+  source: VectorSource,
+  deliveryHubId: string,
+  lon: number,
+  lat: number,
+  durationMs = 2000,
+): void {
+  const featureId = `delivery:${deliveryHubId}:${Date.now()}:${Math.random()}`;
+  const feature = new Feature({
+    geometry: new Point(fromLonLat([lon, lat])),
+    deliveryHubId,
+  });
+  feature.setId(featureId);
+  source.addFeature(feature);
+  setTimeout(() => {
+    const f = source.getFeatureById(featureId);
+    if (f !== null) source.removeFeature(f);
+  }, durationMs);
+}
+
+/**
+ * Reconcile the trailer-stop source against the CURRENT set of active stops
+ * (spec §8): upsert a STATIONARY marker per stop at its interpolated `lon`/`lat`
+ * (set ONCE — never tweened while parked), and REMOVE any marker whose stop is no
+ * longer in the set (the stop finished). The source is never blindly cleared, so
+ * a still-active parked marker keeps its exact position across renders.
+ */
+export function applyTrailerStops(
+  source: VectorSource,
+  stops: readonly TrailerStop[],
+): void {
+  const wanted = new Set(stops.map(stopFeatureId));
+  // Remove finished stops (feature exists but no longer in the active set).
+  for (const feature of source.getFeatures()) {
+    const id = feature.getId();
+    if (typeof id === "string" && id.startsWith("stop:") && !wanted.has(id)) {
+      source.removeFeature(feature);
+    }
+  }
+  // Upsert each active stop (create once; never move a still-parked marker).
+  for (const s of stops) {
+    const id = stopFeatureId(s);
+    if (source.getFeatureById(id) !== null) continue; // already parked here
+    const feature = new Feature({
+      geometry: new Point(fromLonLat([s.lon, s.lat])),
+      trailerId: s.trailerId,
+      tripId: s.tripId,
+      kind: s.kind,
+      startMs: s.startMs,
+      durationMinutes: s.durationMinutes,
+    });
+    feature.setId(id);
+    source.addFeature(feature);
   }
 }
 

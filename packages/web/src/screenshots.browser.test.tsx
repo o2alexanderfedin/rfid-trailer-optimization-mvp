@@ -119,6 +119,7 @@ vi.mock("./map/animate.js", async () => {
 const HUB_ID = "MEM";
 const HUB_DETAIL: HubDetailDto = {
   hubId: HUB_ID,
+  inventoryBalance: { inbound: 0, outbound: 0 },
   trailers: [
     {
       trailerId: "T-014",
@@ -171,6 +172,7 @@ const DUTY_SNAPSHOT: WsEnvelope = {
   type: "snapshot",
   seq: 1,
   simMs: 18_000,
+  simDay: 0,
   speed: { multiplier: 0, tickIntervalMs: 500, simSpeed: 0, paused: true },
   payload: {
     trailers: SPOKES.slice(0, 6).map((s, i) => ({

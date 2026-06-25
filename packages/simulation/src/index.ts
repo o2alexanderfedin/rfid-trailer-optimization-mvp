@@ -28,7 +28,9 @@ export type { RoadLeg, RoadGeometryFile } from "./network/routes.js";
 
 // --- SIM-02: deterministic primitives ---------------------------------------
 export type { Rng } from "./rng.js";
-export { makeRng } from "./rng.js";
+export { makeRng, makeRngFromState } from "./rng.js";
+// Plan 19-08 Task D: the SINGLE-SOURCE epoch constants (no duplicated literals).
+export { EPOCH_ISO, EPOCH_MS, MS_PER_TICK } from "./epoch.js";
 export { VirtualClock } from "./clock.js";
 export type { LogNormalParams, TimingConfig } from "./timing.js";
 export { sampleLogNormal, DEFAULT_TIMING_CONFIG } from "./timing.js";
@@ -38,8 +40,22 @@ export type {
   SimulatedEvent,
   SimulateOptions,
   RunSimulationOptions,
+  SortWaveConfig,
+  RunToHorizonResult,
 } from "./engine.js";
-export { simulate, runSimulation } from "./engine.js";
+export { simulate, runSimulation, runToHorizon } from "./engine.js";
+
+// --- Plan 19-08 (CONT-04): the resumable continuation DTO -------------------
+export type {
+  SimContinuation,
+  SimStart,
+  SimTask,
+  SerializedScheduled,
+  SerializedWorldState,
+  SerializedRngStates,
+  SerializedHosClock,
+} from "./continuation.js";
+export { isContinuation } from "./continuation.js";
 
 // --- SIM-03: seeded probabilistic RFID emission -----------------------------
 export type { RfidSimConfig, ReaderType, EmitRfidReadsArgs } from "./rfid.js";

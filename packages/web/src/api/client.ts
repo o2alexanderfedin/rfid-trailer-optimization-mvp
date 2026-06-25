@@ -90,11 +90,23 @@ export interface HubTrailerDto {
   readonly etaIsEstimate: boolean;
 }
 
-/** The `GET /api/hubs/:id/detail` response (HUBQ-01..07 / VIZ-07..09). */
+/**
+ * FLOW-05 (P2): the hub's inbound/outbound inventory balance (cross-dock heat),
+ * counts of the `hub_inventory` inbound/outbound buckets. Mirrors the server
+ * `HubInventoryBalanceDto`.
+ */
+export interface HubInventoryBalanceDto {
+  readonly inbound: number;
+  readonly outbound: number;
+}
+
+/** The `GET /api/hubs/:id/detail` response (HUBQ-01..07 / VIZ-07..09 + FLOW-05 balance). */
 export interface HubDetailDto {
   readonly hubId: string;
   /** Trailers at the hub, sorted by `trailerId` for a stable panel. */
   readonly trailers: readonly HubTrailerDto[];
+  /** FLOW-05 (P2): inbound/outbound inventory balance (cross-dock heat). */
+  readonly inventoryBalance: HubInventoryBalanceDto;
 }
 
 /** One entry from `GET /api/trailers/:id/history` or `GET /api/packages/:id/history` (UI-02). */
@@ -242,6 +254,27 @@ export async function fetchKpis(signal?: AbortSignal): Promise<KpiSnapshot> {
     throw new Error(`GET /api/kpis failed: ${res.status}`);
   }
   return (await res.json()) as KpiSnapshot;
+}
+
+/** `GET /api/delivery-kpi` (OUT-05 / D-22-3) — event-derived delivery counters. */
+export interface DeliveryKpiDto {
+  readonly deliveredCount: number;
+  readonly onTimeCount: number;
+}
+
+/**
+ * `GET /api/delivery-kpi` (OUT-05 P2 / D-22-3) — the delivered-out + on-time
+ * counters for the operator panel `DeliveryKpi` widget. Event-derived (folded over
+ * the immutable event log), NOT a row-count over the DELETE-purged package tables.
+ */
+export async function fetchDeliveryKpi(
+  signal?: AbortSignal,
+): Promise<DeliveryKpiDto> {
+  const res = await fetch("/api/delivery-kpi", signal ? { signal } : {});
+  if (!res.ok) {
+    throw new Error(`GET /api/delivery-kpi failed: ${res.status}`);
+  }
+  return (await res.json()) as DeliveryKpiDto;
 }
 
 /**

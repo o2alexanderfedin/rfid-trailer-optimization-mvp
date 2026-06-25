@@ -102,13 +102,29 @@ describe("POST /sim/speed — validation + apply", () => {
     }
   });
 
-  it("rejects a multiplier above the 8× bound (400)", async () => {
+  it("accepts the 64× max multiplier", async () => {
     const { app } = await buildTestApp();
     try {
       const res = await app.inject({
         method: "POST",
         url: "/sim/speed",
-        payload: { multiplier: 16 },
+        payload: { multiplier: 64 },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.payload) as { multiplier: number };
+      expect(body.multiplier).toBeCloseTo(64);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a multiplier above the 64× bound (400)", async () => {
+    const { app } = await buildTestApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/sim/speed",
+        payload: { multiplier: 128 },
       });
       expect(res.statusCode).toBe(400);
     } finally {

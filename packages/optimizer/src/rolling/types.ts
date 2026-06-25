@@ -1,5 +1,6 @@
 import type {
   DomainEvent,
+  FuelConfig,
   HosClock,
   HosConfig,
   PlanAccepted,
@@ -52,6 +53,13 @@ export interface TwinBlock {
   readonly nextUnloadHubId: string;
   /** Integer freight units (the capacity + utilization driver). */
   readonly volume: number;
+  /**
+   * IND-03 — OPTIONAL SLA deadline in epoch-minutes (from `slaDeadlineIso`,
+   * locked at induction). When present, the optimizer uses it for slack /
+   * critical-ratio prioritization of inducted freight. Absent → pre-Phase-20
+   * `TwinBlock` objects reproduce byte-identically (additive, non-breaking).
+   */
+  readonly deadlineMin?: number;
 }
 
 /**
@@ -113,6 +121,15 @@ export interface TwinTrailer {
    * (back-compat — prior twins reproduce byte-identically with `restCost = 0`).
    */
   readonly driver?: TwinDriver;
+  /**
+   * SP2 (spec §7) — the trailer's miles-since-last-refuel, read DETERMINISTICALLY
+   * off the Task-3 `trailer_fuel` projection by the snapshot builder. The epoch
+   * walks the planned route from this running total, assigning `Stop.refuelMin` at
+   * the stop where it crosses `fuelConfig.refuelThresholdMiles`. OPTIONAL +
+   * additive: absent ⇒ treated as 0, so a pre-SP2 twin reproduces its prior plan
+   * byte-identically (no refuel is assigned with a disabled/absent fuel config).
+   */
+  readonly milesSinceRefuel?: number;
 }
 
 /**
@@ -149,6 +166,14 @@ export interface TwinRoute {
   readonly travelMin: number;
   /** Per-trip integer freight capacity. */
   readonly capacity: number;
+  /**
+   * SP2 (spec §7) — the leg's road DISTANCE in miles (snapshot builder: ORS
+   * `distance_m`→mi, else haversine mi). The fuel-aware epoch accumulates it along
+   * a trailer's planned route to decide WHERE a refuel falls. OPTIONAL + additive:
+   * absent ⇒ the leg contributes 0 miles to the running total, so a pre-SP2 twin
+   * (no distances) never triggers a refuel — byte-identical to the prior plan.
+   */
+  readonly distanceMiles?: number;
 }
 
 /**
@@ -183,6 +208,15 @@ export interface EpochInput {
    * which the twin builder derives from `expectedTransitMinutes` of this config.)
    */
   readonly timing?: TimingConfig;
+  /**
+   * SP2 (spec §7) — OPTIONAL fuel config. When present AND `enabled`, the epoch is
+   * FUEL-AWARE: a trailer whose planned legs cross `refuelThresholdMiles` gets a
+   * `Stop.refuelMin` at the crossing stop, folded into the departure with `max`
+   * (not sum). OPTIONAL + additive: absent OR disabled ⇒ NO refuel is assigned, so
+   * the epoch is byte-identical to the pre-SP2 result (defaults to
+   * `DEFAULT_FUEL_CONFIG`, which is disabled).
+   */
+  readonly fuelConfig?: FuelConfig;
 }
 
 /**

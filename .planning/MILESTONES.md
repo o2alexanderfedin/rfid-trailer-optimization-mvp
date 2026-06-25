@@ -1,5 +1,24 @@
 # Milestones
 
+## v2.0 Complete Simulation Model (Shipped: 2026-06-25)
+
+**Phases completed:** 4 phases (19–22), 29 plans
+
+**Delivered:** The full synthetic freight lifecycle now runs end-to-end — external induction → spoke→center consolidation → center re-sort → distribution → terminal delivery — under continuous, bounded, deterministic operation, demonstrable live on the map.
+
+**Key accomplishments:**
+
+- **Phase 19 — Continuous Operation Foundation:** resumable `SimContinuation` engine (chunked open-ended run, no O(n²) prefix regen), bounded end-to-end retention (event-log pruning + projection aging), sim-day counter, ws backpressure.
+- **Phase 20 — External Induction:** `PackageInducted` domain event (coexists with `PackageCreated`), spoke-origin induction on a dedicated salted RNG substream, destination + SLA deadline → optimizer priority, VIZ-13 induction map flash.
+- **Phase 21 — Bidirectional Freight / Consolidation:** spoke→center consolidation (`pendingAtSpoke` two-queue) + center cross-dock re-sort, `PlanSuperseded` event (sole stage-mutating, dumb delete-then-apply), durable cross-restart optimizer idempotency, VIZ-12 consolidation styling + HubBalance panel.
+- **Phase 22 — Outbound Delivery:** `PackageDelivered` terminal event after a seeded outbound dwell, `onTime` SLA flag, hard-DELETE projection purge (bounded memory), VIZ-14 destination-hub highlight, event-derived delivery KPI.
+- **Determinism keystone held every phase:** every v2.0 feature is opt-in; flags-off ⇒ seed-42 10k-tick golden SHA `3920accc…` byte-identical (built via Google-AI-consulted design + rival-worktree TDD + adversarial judge).
+- **Live demo wired:** the complete lifecycle runs with all flags on (`INDUCTION_ENABLED`/`CONSOLIDATION_ENABLED`/`OUTBOUND_DELIVERY_ENABLED`, default on); continuous open-ended mode available via `RUN_UNTIL_STOPPED=1`.
+
+**Known deferred items at close:** 2 stale v1.x quick-tasks (`sim-speed-gauge`, `lognormal-timing`); milestone tech-debt — materialize the delivery-KPI projection before enabling event-log retention in a long run, and add one all-flags-on lifecycle integration test (see `milestones/v2.0-MILESTONE-AUDIT.md`).
+
+---
+
 ## v1.2 Driver HOS & Hub Detail (Shipped: 2026-06-22)
 
 **Phases completed:** 10 phases (Phases 9–18)

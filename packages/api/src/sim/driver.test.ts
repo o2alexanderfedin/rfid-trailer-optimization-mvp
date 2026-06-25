@@ -8,7 +8,6 @@ import type * as Projections from "@mm/projections";
 import type { Broadcast } from "../ws/snapshots.js";
 import type { ApiDb } from "../routes/queries.js";
 import type { DriveSimulationPacedOptions, LoopLike } from "./driver.js";
-import { resolveTickIntervalMs } from "./driver.js";
 
 // ---------------------------------------------------------------------------
 // HEAVY-MODULE MOCKS (hoisted): neutralize the per-tick Postgres I/O so the
@@ -180,41 +179,6 @@ describe("makeSimRunner — rolling optimizer is triggered per tick", () => {
 });
 
 // ---------------------------------------------------------------------------
-// T3 — live tick-interval resolution (presentation pacing, read per iteration)
-// ---------------------------------------------------------------------------
-
-describe("resolveTickIntervalMs — live interval read with safe fallbacks", () => {
-  it("prefers the LIVE source over the captured fallback", () => {
-    expect(resolveTickIntervalMs(() => 125, 500)).toBe(125);
-  });
-
-  it("re-reads the live source each call (mid-run retune takes effect)", () => {
-    let current = 500;
-    const live = () => current;
-    expect(resolveTickIntervalMs(live, 500)).toBe(500);
-    current = 62; // operator dragged the slider to 8×
-    expect(resolveTickIntervalMs(live, 500)).toBe(62);
-    current = 2000; // and back to 0.25×
-    expect(resolveTickIntervalMs(live, 500)).toBe(2000);
-  });
-
-  it("falls back to the captured value when no live source is given", () => {
-    expect(resolveTickIntervalMs(undefined, 750)).toBe(750);
-  });
-
-  it("falls back to 500 when neither a live source nor a captured value exists", () => {
-    expect(resolveTickIntervalMs(undefined, undefined)).toBe(500);
-  });
-
-  it("coerces a non-positive / non-finite live value to the fallback (never a busy spin)", () => {
-    expect(resolveTickIntervalMs(() => 0, 500)).toBe(500);
-    expect(resolveTickIntervalMs(() => -10, 500)).toBe(500);
-    expect(resolveTickIntervalMs(() => Number.NaN, 333)).toBe(333);
-    expect(resolveTickIntervalMs(() => Number.POSITIVE_INFINITY, 333)).toBe(333);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // T3 — DETERMINISM CONTRACT: pacing/pause are presentation-only. The emitted
 // sim STREAM must be byte-identical regardless of tick interval or pause — the
 // interval/pause flags never reach `simulate`. This guards the regression that
@@ -240,16 +204,20 @@ describe("sim stream determinism is independent of pacing/pause (presentation-on
 });
 
 // ---------------------------------------------------------------------------
-// T3 — driveSimulationPaced LOOP BODY (hermetic, NO Postgres).
+// driveSimulationPaced ACCUMULATOR LOOP BODY (hermetic, NO Postgres).
 //
 // The heavy per-tick Postgres I/O is mocked away (see the hoisted vi.mock above),
-// so the loop's PRESENTATION-PACING branches run against a fake db + injected
-// fakes. We assert the three contract points the prompt calls for:
-//   (a) the LIVE interval source is read FRESH each inter-tick gap,
-//   (b) an external pause HOLDS the loop (no advance) and then RESUMES,
-//   (c) the emitted event STREAM (what reaches the optimizer / append path) is
-//       byte-identical regardless of the interval / pause settings — proving
-//       pacing is presentation-only and never perturbs the deterministic stream.
+// so the fixed-cadence accumulator runs against a fake db + injected fakes. The
+// driver now: advances a simClock by `wallDelta × 120 × multiplier` per FRAME,
+// drains every pre-baked tick with `occurredAt ≤ simClock` (bounded by a per-
+// frame budget), fires the optimizer NON-blocking via the coalescer, and emits
+// ONE ws delta per frame. We assert the accumulator contract (Task 4 policy):
+//   - all events delivered (union into the optimizer == the source stream),
+//   - simClock monotone & complete (result.ticks == source tick count),
+//   - ONE broadcast per frame (not per tick) — batching holds,
+//   - budget carry (maxTicksPerFrame:1 drains across frames; all still deliver),
+//   - pause freezes the clock/drain, then resumes and completes,
+//   - determinism preserved (different frameMs/pause ⇒ SAME event multiset).
 // ---------------------------------------------------------------------------
 
 /**
@@ -286,6 +254,7 @@ function recordingBroadcast(sink: number[]): Broadcast {
       type: "tick",
       seq: sink.length,
       simMs,
+      simDay: 0,
       speed: { multiplier: 1, tickIntervalMs: 0, simSpeed: 1, paused: false },
       payload: {},
     });
@@ -314,14 +283,30 @@ function recordingLoop(): {
   return { loop, calls };
 }
 
-/** Stable signature of the emitted stream — the deterministic delivery contract. */
-function streamSignature(
+/**
+ * An order-insensitive multiset signature of the events delivered to the
+ * optimizer across (coalesced) calls. The accumulator/coalescer may regroup
+ * events across frames, so the DETERMINISM contract is the event MULTISET, not
+ * the per-call boundaries.
+ */
+function eventMultiset(
   calls: ReadonlyArray<{ events: readonly DomainEvent[]; simMs: number }>,
 ): string {
-  return JSON.stringify(calls.map((c) => ({ simMs: c.simMs, events: c.events })));
+  const sigs = calls
+    .flatMap((c) => c.events)
+    .map((e) => JSON.stringify(e))
+    .sort();
+  return JSON.stringify(sigs);
 }
 
-describe("driveSimulationPaced — loop body (interval, pause, determinism)", () => {
+/** All event objects delivered to the optimizer, flattened (delivery union). */
+function allDeliveredEvents(
+  calls: ReadonlyArray<{ events: readonly DomainEvent[]; simMs: number }>,
+): readonly DomainEvent[] {
+  return calls.flatMap((c) => c.events);
+}
+
+describe("driveSimulationPaced — accumulator loop body (fixed cadence + batch)", () => {
   beforeEach(() => {
     appendSpy.mockClear();
     readAllSpy.mockClear();
@@ -330,10 +315,12 @@ describe("driveSimulationPaced — loop body (interval, pause, determinism)", ()
   });
 
   // The smallest seed/duration that still produces a non-trivial multi-tick run:
-  // even durationTicks:1 yields 2 distinct domain timestamps (network setup), so
-  // there is exactly >= 1 inter-tick GAP where the live interval is consulted.
+  // even durationTicks:1 yields >= 2 distinct domain timestamps (network setup).
   const SEED = 4242;
   const DURATION = 1;
+
+  /** A getMultiplier returning 64 — fast enough that tiny frames drain everything. */
+  const fast64 = (): number => 64;
 
   async function driveWith(
     overrides: Partial<DriveSimulationPacedOptions>,
@@ -351,148 +338,196 @@ describe("driveSimulationPaced — loop body (interval, pause, determinism)", ()
       durationTicks: DURATION,
       broadcast: recordingBroadcast(broadcasts),
       loop,
+      // Tiny frame + huge multiplier + large budget ⇒ everything drains promptly
+      // unless a test overrides these. getMultiplier is the live speed source.
+      frameMs: 1,
+      maxTicksPerFrame: 1024,
+      getMultiplier: fast64,
       ...overrides,
     });
     return { result, broadcasts, loopCalls: calls };
   }
 
-  it("(a) reads the LIVE interval source FRESH on each inter-tick gap", async () => {
-    // A live source that records every read AND retunes mid-run (8x → 0.25x). The
-    // loop must consult it once per GAP (= ticks - 1), using the value live each
-    // time — proving the SpeedController retune lands on the very next gap.
-    const reads: number[] = [];
-    let live = 1; // start at 1ms gaps → fast + deterministic
-    const getTickIntervalMs = (): number => {
-      const value = live; // read the CURRENT live value...
-      reads.push(value);
-      live = 2; // ...then retune it, so a later read would observe the change
-      return value;
-    };
+  it("delivers EVERY source event to the optimizer (union == source stream)", async () => {
+    // Drive a tiny frame + large budget so the whole stream drains, then assert
+    // the union of optimizer-delivered events equals the source stream's events.
+    const sourceStream = simulate({ seed: SEED, durationTicks: DURATION });
+    const sourceEvents = sourceStream.map((s) => s.event);
 
-    const { result } = await driveWith({ getTickIntervalMs });
+    const { loopCalls, result } = await driveWith({ optimizerEveryTicks: 1 });
 
-    // One read per inter-tick gap; never after the final tick (no trailing wait).
-    expect(reads.length).toBe(result.ticks - 1);
-    expect(reads.length).toBeGreaterThanOrEqual(1);
-    // It is the LIVE function that was consulted, returning the live value (1ms),
-    // not a value captured once at start.
-    expect(reads[0]).toBe(1);
+    const delivered = allDeliveredEvents(loopCalls);
+    expect(delivered.length).toBe(sourceEvents.length);
+    // Same multiset of events reached the optimizer (no drop / no dup).
+    const srcSig = JSON.stringify(sourceEvents.map((e) => JSON.stringify(e)).sort());
+    const gotSig = JSON.stringify(delivered.map((e) => JSON.stringify(e)).sort());
+    expect(gotSig).toBe(srcSig);
+    // Non-vacuous + the run reported a tick count.
+    expect(sourceEvents.length).toBeGreaterThan(0);
+    expect(result.ticks).toBeGreaterThanOrEqual(2);
   });
 
-  it("(a') the live source takes precedence over the captured tickIntervalMs", async () => {
-    // If both are present, resolveTickIntervalMs prefers the live source — assert
-    // the loop wires the live source (read) and does NOT fall back to the capture.
-    let consulted = false;
-    const getTickIntervalMs = (): number => {
-      consulted = true;
-      return 1;
-    };
-    await driveWith({ getTickIntervalMs, tickIntervalMs: 9_999 });
-    expect(consulted).toBe(true);
+  it("simClock is monotone & complete: result.ticks == source tick count; last broadcast ≥ last tick time", async () => {
+    const sourceStream = simulate({ seed: SEED, durationTicks: DURATION });
+    // distinct timestamps == tick count
+    const distinct = new Set(sourceStream.map((s) => s.occurredAt));
+    const lastTickMs = Math.max(...sourceStream.map((s) => new Date(s.occurredAt).getTime()));
+
+    const { result, broadcasts } = await driveWith({});
+
+    expect(result.ticks).toBe(distinct.size);
+    // The broadcast simMs sequence is non-decreasing (simClock never goes back).
+    for (let i = 1; i < broadcasts.length; i += 1) {
+      expect(broadcasts[i]!).toBeGreaterThanOrEqual(broadcasts[i - 1]!);
+    }
+    // The final broadcast reports a simClock at/after the last tick's time.
+    expect(broadcasts.at(-1)!).toBeGreaterThanOrEqual(lastTickMs);
   });
 
-  it("(b) an external pause HOLDS (no advance) then RESUMES", async () => {
-    // isPaused returns true for the first few polls, THEN false. The loop must
-    // spin on the pause gate (poll > once) BEFORE the first tick advances, and
-    // nothing may be appended / broadcast / optimized while held.
-    let pausePolls = 0;
-    const HOLD_POLLS = 3;
-    const sawAnyTickBeforeRelease = { value: false };
-    const isPaused = (): boolean => {
-      pausePolls += 1;
-      // While still holding, assert NO tick side effects have happened yet.
-      if (pausePolls <= HOLD_POLLS && appendSpy.mock.calls.length > 0) {
-        sawAnyTickBeforeRelease.value = true;
-      }
-      return pausePolls <= HOLD_POLLS;
-    };
+  it("broadcasts ONCE per FRAME, not per tick (batching holds)", async () => {
+    // A multiplier large enough to leap the WHOLE stream in the first frame's
+    // advance ⇒ every tick drains in ONE frame ⇒ the broadcast count (per-frame:
+    // one frame delta + one final) is far fewer than the per-tick count.
+    const { result, broadcasts } = await driveWith({
+      maxTicksPerFrame: 1024,
+      getMultiplier: () => 1e12, // leap the full horizon in one frame
+    });
+    // Everything drained in a single frame ⇒ broadcasts << ticks (1 frame + final).
+    expect(broadcasts.length).toBeLessThanOrEqual(result.ticks);
+    expect(broadcasts.length).toBeGreaterThanOrEqual(1);
+    // BATCHED: the heavy DB folds run ONCE per FRAME, not per tick — leaping the
+    // whole horizon in one frame ⇒ exactly ONE catch-up for all drained ticks.
+    expect(runCatchupSpy.mock.calls.length).toBe(1);
+    expect(runCatchupSpy.mock.calls.length).toBeLessThan(result.ticks);
+  });
+
+  it("budget carry: maxTicksPerFrame:1 drains across multiple frames; all events still delivered", async () => {
+    const sourceStream = simulate({ seed: SEED, durationTicks: DURATION });
+    const sourceEvents = sourceStream.map((s) => s.event);
 
     const { result, broadcasts, loopCalls } = await driveWith({
-      isPaused,
-      tickIntervalMs: 1,
+      maxTicksPerFrame: 1,
+      optimizerEveryTicks: 1,
     });
 
-    // The gate was polled MORE than once (it actually HELD, not a single check).
-    expect(pausePolls).toBeGreaterThan(HOLD_POLLS);
-    // The hold released and the run completed all ticks (resumed cleanly).
+    // With a 1-tick budget and enough sim-advance, ticks drain over many frames —
+    // so the broadcast (per-frame) count is at least the tick count.
     expect(result.ticks).toBeGreaterThanOrEqual(2);
-    expect(broadcasts.length).toBe(result.ticks);
-    expect(loopCalls.length).toBe(result.ticks);
-    // No tick side effects leaked during the hold.
-    expect(sawAnyTickBeforeRelease.value).toBe(false);
+    expect(broadcasts.length).toBeGreaterThanOrEqual(result.ticks);
+    // No event lost despite the carry: union still equals the source.
+    expect(eventMultiset(loopCalls)).toBe(
+      eventMultiset([{ events: sourceEvents, simMs: 0 }]),
+    );
   });
 
-  it("(b') with no isPaused source the loop never holds (back-compat)", async () => {
-    // Absent pause source ⇒ `opts.isPaused?.()` is undefined ⇒ the while-gate is
-    // skipped entirely and every tick advances.
-    const { result, broadcasts } = await driveWith({ tickIntervalMs: 1 });
-    expect(result.ticks).toBeGreaterThanOrEqual(2);
-    expect(broadcasts.length).toBe(result.ticks);
-  });
-
-  it("(c) the emitted event STREAM is IDENTICAL regardless of interval/pause", async () => {
-    // Run 1: fast, never paused.
-    const fast = await driveWith({ tickIntervalMs: 1 });
-
-    // Run 2: a DIFFERENT (live, retuning) interval AND a pause that holds then
-    // releases — i.e. wildly different PRESENTATION pacing, SAME seed.
-    let paused = true;
-    let releaseCountdown = 4;
+  it("pause freezes the clock/drain during the hold, then resumes and completes", async () => {
+    // isPaused holds for several frames; while held, the multiplier is treated as
+    // 0 so simClock does not advance and NO tick drains — nothing appended/
+    // broadcast/optimized. After release the run completes and delivers all events.
+    let polls = 0;
+    const HOLD = 5;
+    let leakedDuringHold = false;
     const isPaused = (): boolean => {
-      if (paused && --releaseCountdown <= 0) paused = false;
+      polls += 1;
+      if (polls <= HOLD && appendSpy.mock.calls.length > 0) leakedDuringHold = true;
+      return polls <= HOLD;
+    };
+
+    const { result, broadcasts, loopCalls } = await driveWith({ isPaused });
+
+    expect(polls).toBeGreaterThan(HOLD); // it actually HELD across frames
+    expect(leakedDuringHold).toBe(false); // no side effects while frozen
+    expect(result.ticks).toBeGreaterThanOrEqual(2); // resumed + completed
+    expect(broadcasts.length).toBeGreaterThanOrEqual(1);
+    expect(allDeliveredEvents(loopCalls).length).toBeGreaterThan(0);
+  });
+
+  it("(back-compat) with no isPaused source the loop never freezes", async () => {
+    const { result } = await driveWith({});
+    expect(result.ticks).toBeGreaterThanOrEqual(2);
+  });
+
+  it("determinism: different frameMs/pause schedules deliver the SAME event multiset", async () => {
+    // Run 1: tiny frames, never paused.
+    const a = await driveWith({ frameMs: 1, maxTicksPerFrame: 1024 });
+
+    // Run 2: a bigger budget-of-1 carry AND a pause that holds then releases —
+    // wildly different presentation pacing, SAME seed.
+    let paused = true;
+    let countdown = 4;
+    const isPaused = (): boolean => {
+      if (paused && --countdown <= 0) paused = false;
       return paused;
     };
-    let liveMs = 3;
-    const getTickIntervalMs = (): number => {
-      const v = liveMs;
-      liveMs = liveMs === 3 ? 1 : 3; // oscillate the interval mid-run
-      return v;
-    };
-    const slow = await driveWith({ getTickIntervalMs, isPaused });
+    const b = await driveWith({ frameMs: 2, maxTicksPerFrame: 1, isPaused });
 
-    // Same number of ticks driven, same broadcast simMs sequence...
-    expect(slow.result.ticks).toBe(fast.result.ticks);
-    expect(slow.broadcasts).toEqual(fast.broadcasts);
-    // ...and BYTE-IDENTICAL event stream into the optimizer (pacing/pause never
-    // reached `simulate` — the determinism contract holds end-to-end).
-    expect(streamSignature(slow.loopCalls)).toBe(streamSignature(fast.loopCalls));
+    // Same number of ticks driven and the SAME multiset of events into the
+    // optimizer (pacing/pause never reached `simulate`). Per-call batching may
+    // differ, so we compare the multiset/union — not call-by-call boundaries.
+    expect(b.result.ticks).toBe(a.result.ticks);
+    expect(eventMultiset(b.loopCalls)).toBe(eventMultiset(a.loopCalls));
     // Non-vacuous: the stream actually carried events.
-    expect(fast.loopCalls.some((c) => c.events.length > 0)).toBe(true);
+    expect(allDeliveredEvents(a.loopCalls).length).toBeGreaterThan(0);
   });
 
-  it("returns { ticks } and broadcasts exactly once per tick", async () => {
-    const { result, broadcasts } = await driveWith({ tickIntervalMs: 1 });
+  it("returns { ticks }; the OCC append path ran per tick; catch-up batched per frame", async () => {
+    const { result, broadcasts } = await driveWith({});
     expect(result.ticks).toBeGreaterThanOrEqual(1);
-    expect(broadcasts.length).toBe(result.ticks);
-    // runCatchup is invoked once per tick (the catch-up projection advance).
-    expect(runCatchupSpy.mock.calls.length).toBe(result.ticks);
-    // The OCC append path was exercised (per-stream appends happened).
+    expect(broadcasts.length).toBeGreaterThanOrEqual(1);
+    // Catch-up is BATCHED per frame: it runs at most once per drained tick
+    // (≤ ticks; fewer when several ticks drain in one frame), and at least once.
+    expect(runCatchupSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(runCatchupSpy.mock.calls.length).toBeLessThanOrEqual(result.ticks);
+    // The OCC append path was exercised per tick (per-stream appends happened).
     expect(appendSpy.mock.calls.length).toBeGreaterThan(0);
   });
 
-  it("with rfid enabled the detection branch runs (departed-hub gate + runDetection)", async () => {
-    // Enabling rfid flips `detectionOn`, so the loop also tracks departed hubs and
-    // invokes the (mocked, no-op) detector each tick. readAll is still mocked to []
-    // so the inline projection fold is skipped — keeping this hermetic. This drives
-    // the otherwise-uncovered `detectionOn` branches of the paced loop body.
-    const { result, broadcasts } = await driveWith({
-      rfid: {},
-      tickIntervalMs: 1,
-    });
+  it("with rfid enabled the detection branch runs (batched per frame)", async () => {
+    const { result, broadcasts } = await driveWith({ rfid: {} });
     expect(result.ticks).toBeGreaterThanOrEqual(1);
-    expect(broadcasts.length).toBe(result.ticks);
-    // Detection runs once per tick (the no-op detector spy).
-    expect(runDetectionSpy.mock.calls.length).toBe(result.ticks);
+    expect(broadcasts.length).toBeGreaterThanOrEqual(1);
+    // Detection is BATCHED per frame (≤ ticks, ≥ 1) — once over each frame's
+    // folded state rather than once per tick.
+    expect(runDetectionSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(runDetectionSpy.mock.calls.length).toBeLessThanOrEqual(result.ticks);
   });
 
-  it("a zero/non-positive live interval is coerced so the loop never busy-spins", async () => {
-    // getTickIntervalMs returning 0 must fall back (resolveTickIntervalMs), so the
-    // gap is the captured tickIntervalMs (1ms) — the run still completes promptly.
+  it("BATCHING: projection fold + detection + catch-up run ONCE per frame; appends stay per tick", async () => {
+    // Leap the WHOLE horizon in a single frame (huge multiplier, large budget) with
+    // rfid on. The heavy DB folds (inline projection / detection / catch-up) must
+    // collapse to exactly ONE run for the whole drained batch, while the OCC append
+    // path still runs per tick (per-tick `occurredAt` is preserved — appends cannot
+    // be coalesced across ticks because each tick is a distinct domain timestamp).
     const { result } = await driveWith({
-      getTickIntervalMs: () => 0,
-      tickIntervalMs: 1,
+      rfid: {},
+      getMultiplier: () => 1e12,
+      maxTicksPerFrame: 4096,
     });
     expect(result.ticks).toBeGreaterThanOrEqual(2);
+    // One frame drained everything ⇒ exactly one catch-up + one detection.
+    expect(runCatchupSpy.mock.calls.length).toBe(1);
+    expect(runDetectionSpy.mock.calls.length).toBe(1);
+    // Appends remain per tick (≥ one per drained tick).
+    expect(appendSpy.mock.calls.length).toBeGreaterThanOrEqual(result.ticks);
+  });
+
+  it("absent getMultiplier defaults to 1× and the run still completes", async () => {
+    // No getMultiplier ⇒ multiplier defaults to 1 (120 sim-ms per wall-ms). A
+    // small frame still advances enough sim-time to drain the short stream.
+    const { driveSimulationPaced } = await import("./driver.js");
+    const broadcasts: number[] = [];
+    const { loop, calls } = recordingLoop();
+    const result = await driveSimulationPaced({
+      db: buildFakeDb(),
+      seed: SEED,
+      durationTicks: DURATION,
+      broadcast: recordingBroadcast(broadcasts),
+      loop,
+      frameMs: 5,
+      maxTicksPerFrame: 1024,
+    });
+    expect(result.ticks).toBeGreaterThanOrEqual(2);
+    expect(allDeliveredEvents(calls).length).toBeGreaterThan(0);
   });
 });
 
@@ -504,7 +539,8 @@ describe("driveSimulationPaced — loop body (interval, pause, determinism)", ()
 // Hermetic: the heavy Postgres I/O is mocked (hoisted vi.mock above); the
 // REAL `@mm/simulation` engine runs, so these assertions are meaningful. A
 // longer horizon is used because driver events fire on dispatch/transit, not at
-// network setup. `tickIntervalMs:0` skips the inter-tick wait (no real pacing).
+// network setup. A tiny frameMs + 64× + huge budget drains promptly (no real
+// wall-clock pacing) so these wiring assertions run fast.
 // ---------------------------------------------------------------------------
 
 describe("driveSimulationPaced — live HOS wiring (hosEnabled flows into simulate)", () => {
@@ -530,7 +566,13 @@ describe("driveSimulationPaced — live HOS wiring (hosEnabled flows into simula
       durationTicks: HOS_DURATION,
       broadcast: recordingBroadcast(broadcasts),
       loop,
-      tickIntervalMs: 0,
+      frameMs: 1,
+      maxTicksPerFrame: 4096,
+      // A huge multiplier drains the whole horizon in a frame or two: this is a
+      // WIRING test (HOS events reach the optimizer), not a pacing test, so we
+      // do not want the wall-clock accumulator to gate it. The driver consumes
+      // the raw multiplier (clamping is the SpeedController's concern).
+      getMultiplier: () => 1e12,
       ...overrides,
     });
     return calls.flatMap((c) => c.events);

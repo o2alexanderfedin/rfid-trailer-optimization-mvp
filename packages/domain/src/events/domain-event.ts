@@ -9,15 +9,20 @@ import type {
   missedUnloadDetectedSchema,
   packageArrivedAtHubSchema,
   packageCreatedSchema,
+  packageDeliveredSchema,
+  packageInductedSchema,
   packageScannedSchema,
   planAcceptedSchema,
   planGeneratedSchema,
+  planSupersededSchema,
   rfidObservedSchema,
   routeRegisteredSchema,
   severitySchema,
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
   trailerDockedSchema,
+  truckRefueledSchema,
+  truckRestedSchema,
   unloadCompletedSchema,
   unloadStartedSchema,
   wrongTrailerDetectedSchema,
@@ -114,6 +119,56 @@ export type LoadStarted = z.infer<typeof loadStartedSchema>;
 /** Unloading finished (after the last unload scan). Identifiers + clock only. */
 export type UnloadCompleted = z.infer<typeof unloadCompletedSchema>;
 
+// --- SP2 visible rest/fuel stop events (spec §4) ----------------------------
+
+/**
+ * A trailer parked for a driver rest/break (alongside `DriverDutyStateChanged`).
+ * Carries `reason` + `durationMin` only — NO lon/lat, NO RNG (the geo-track
+ * projection computes the map position from the logged leg geometry).
+ */
+export type TruckRested = z.infer<typeof truckRestedSchema>;
+/**
+ * A trailer refueled mid-route (odometer crossed `refuelThresholdMiles`). Carries
+ * the deterministic `gallons` + cumulative `odometerMiles` + `durationMin` — NO
+ * lon/lat, NO RNG (geometry-free; the geo-track projection interpolates position).
+ */
+export type TruckRefueled = z.infer<typeof truckRefueledSchema>;
+
+// --- v2.0 external induction (IND-01) ---------------------------------------
+
+/**
+ * Freight entered the network from outside at a spoke hub (IND-01 / v2.0).
+ * COEXISTS with `PackageCreated` (internal center-origin spawn). `slaDeadlineIso`
+ * is locked at induction; `externalOriginRef` is a deterministic counter id. The
+ * optimizer reads inducted packages via the `hub_inventory` projection's
+ * `inbound` bucket (Decision 3).
+ */
+export type PackageInducted = z.infer<typeof packageInductedSchema>;
+
+// --- Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1) -------
+
+/**
+ * The SOLE stage-mutating plan event (FLOW-04 / D-21-1). Emitted by the
+ * optimizer in the SAME atomic append as the new `PlanAccepted` that supersedes
+ * a prior plan. Carries HOLISTIC scope state (`supersededPackageIds`) so the
+ * hub-inventory reducer's dumb pure delete-then-apply wipes the prior plan's
+ * staged freight without stranding old-plan-only items. `priorPlanId` + `reason`
+ * give a replayable audit trail.
+ */
+export type PlanSuperseded = z.infer<typeof planSupersededSchema>;
+
+// --- Phase-22 outbound delivery (OUT-01) ------------------------------------
+
+/**
+ * The TERMINAL delivery event (OUT-01 / Phase 22). Freight reaching its
+ * DESTINATION hub exits the network here after a seeded outbound dwell. It
+ * DELETE-purges the package from the read-model projections (`packageLocation`,
+ * `hubInventory`, `zoneEstimate`), completing the bounded-memory story (OUT-04).
+ * `onTime` carries the SLA flag computed at emit (D-22-5). Emitted ONLY when
+ * `outboundDeliveryEnabled === true` (the determinism keystone).
+ */
+export type PackageDelivered = z.infer<typeof packageDeliveredSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -142,7 +197,16 @@ export type DomainEvent =
   // Phase-9 (v1.2) load/unload phase events (EVT-02).
   | UnloadStarted
   | LoadStarted
-  | UnloadCompleted;
+  | UnloadCompleted
+  // SP2 visible rest/fuel stop events (spec §4).
+  | TruckRested
+  | TruckRefueled
+  // v2.0 external induction (IND-01).
+  | PackageInducted
+  // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+  | PlanSuperseded
+  // Phase-22 terminal delivery event (OUT-01).
+  | PackageDelivered;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

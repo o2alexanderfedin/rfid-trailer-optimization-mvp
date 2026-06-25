@@ -221,6 +221,54 @@ describe("CATCH-UP projections: audit timeline (FND-08) + geo-track", () => {
     expect(await readGeoKeyframes(db)).toEqual(keyframesOnce);
   });
 
+  // Plan 19-08 Task D — WATERMARK REGRESSION (CONT-04a). After a first catch-up
+  // advances the checkpoint, appending a SECOND batch and re-running must process
+  // ONLY the newly-appended events — proving catch-up RESUMES from the watermark
+  // (`projection_checkpoints.last_seq`), NOT from global_seq 0. This is the
+  // bounded-rebuild guarantee: catch-up cost is proportional to NEW events, not to
+  // the whole (potentially pruned) log.
+  it("resumes catch-up from the watermark, processing only newly-appended events", async () => {
+    const { pkg, mem, dfw } = await seedScenario();
+    const db = catchupView(fx.db);
+    const es = eventStoreView(fx.db);
+
+    // First catch-up materializes batch 1 and advances both checkpoints to head.
+    const first = await runCatchup(db, replayReadAll);
+    expect(first.auditTimeline).toBeGreaterThan(0);
+    const head1 = (await readAll(es, 0n)).at(-1)!.globalSeq;
+
+    async function lastSeq(projection: string): Promise<bigint> {
+      const row = await fx.db
+        .selectFrom("projection_checkpoints")
+        .select("last_seq")
+        .where("projection", "=", projection)
+        .executeTakeFirst();
+      return row === undefined ? 0n : BigInt(row.last_seq);
+    }
+    expect(await lastSeq("audit-timeline")).toBe(head1);
+
+    // Append a SECOND batch: two more package-naming events on a NEW package.
+    const pkg2 = `${pkg}-B2`;
+    await appendToStream(
+      es,
+      `package-${pkg2}`,
+      0,
+      [pkgCreated(pkg2, mem, dfw), scanned(pkg2, mem, "inbound")],
+      at(10_000),
+    );
+    const head2 = (await readAll(es, 0n)).at(-1)!.globalSeq;
+    expect(head2 > head1).toBe(true);
+
+    // The SECOND catch-up must process EXACTLY the 2 new audit events (resumed
+    // from head1, not replayed from 0). The batch-1 timeline is untouched.
+    const second = await runCatchup(db, replayReadAll);
+    expect(second.auditTimeline).toBe(2);
+    expect(await lastSeq("audit-timeline")).toBe(head2);
+
+    const timeline2 = await readAuditTimeline(db, pkg2);
+    expect(timeline2.map((e) => e.eventType)).toEqual(["PackageCreated", "PackageScanned"]);
+  });
+
   it("yields deterministic per-trip geo keyframes along route geometry", async () => {
     const { trailer, trip, mem, dfw } = await seedScenario();
     const db = catchupView(fx.db);

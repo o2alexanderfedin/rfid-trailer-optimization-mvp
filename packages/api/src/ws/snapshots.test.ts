@@ -20,7 +20,10 @@ import { WebSocket, type RawData } from "ws";
 import type { SnapshotPayload, WsEnvelope } from "./envelope.js";
 import {
   attachSnapshotSocket,
+  buildTrailerKeyframes,
   driverBucketsPerHub,
+  legRouteId,
+  legTransitMinutes,
   routeSlaRiskBucketFor,
   trailerStateFor,
   type SnapshotPayloadBuilder,
@@ -692,5 +695,124 @@ describe("ws snapshot channel: M-5 rejection on connect", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VIZ-02 live-path fix — trailer keyframe routeId MUST be the /api/routes
+// geometry key (`route-FROM-TO`), NOT the tripId. Regression guard: the prior
+// builder emitted `routeId: tripId`, so the client's `routeDtos.get(routeId)`
+// missed and every trailer stayed frozen at its [0,0] stub (invisible on the map).
+// ---------------------------------------------------------------------------
+
+describe("buildTrailerKeyframes — routeId resolves to the route geometry key (VIZ-02)", () => {
+  it("legRouteId formats a directed leg as the /api/routes id", () => {
+    expect(legRouteId("MEM", "ORD")).toBe("route-MEM-ORD");
+  });
+
+  it("an in-transit trailer's routeId is route-FROM-TO (NOT the tripId)", () => {
+    const keyframes = [
+      { trailerId: "T001", tripId: "TRIP00015", kind: "depart" as const, t: "2026-04-01T10:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP00015", from_hub_id: "MEM", to_hub_id: "ORD" }];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set());
+
+    expect(kf?.id).toBe("T001");
+    // The bug was `routeId === "TRIP00015"`; it must be the client's route key.
+    expect(kf?.routeId).toBe("route-MEM-ORD");
+    expect(kf?.state).toBe("onTime");
+    expect(kf?.departMs).toBe(Date.parse("2026-04-01T10:00:00.000Z"));
+  });
+
+  it("uses the LATEST depart leg when a trailer has re-dispatched", () => {
+    const keyframes = [
+      { trailerId: "T002", tripId: "TRIP1", kind: "depart" as const, t: "2026-04-01T01:00:00.000Z" },
+      { trailerId: "T002", tripId: "TRIP1", kind: "arrive" as const, t: "2026-04-01T05:00:00.000Z" },
+      { trailerId: "T002", tripId: "TRIP9", kind: "depart" as const, t: "2026-04-01T06:00:00.000Z" },
+    ];
+    const inflight = [
+      { trip_id: "TRIP1", from_hub_id: "MEM", to_hub_id: "ORD" },
+      { trip_id: "TRIP9", from_hub_id: "ORD", to_hub_id: "JFK" },
+    ];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set());
+
+    // Latest depart is TRIP9 (ORD→JFK), so the trailer animates along that leg.
+    expect(kf?.routeId).toBe("route-ORD-JFK");
+    expect(kf?.departMs).toBe(Date.parse("2026-04-01T06:00:00.000Z"));
+  });
+
+  it("escalates state to slaRisk when the trailer is implicated in an exception", () => {
+    const keyframes = [
+      { trailerId: "T003", tripId: "TRIP3", kind: "depart" as const, t: "2026-04-01T02:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP3", from_hub_id: "DFW", to_hub_id: "MEM" }];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set(["T003"]));
+
+    expect(kf?.routeId).toBe("route-DFW-MEM");
+    expect(kf?.state).toBe("slaRisk");
+  });
+
+  it("legTransitMinutes scales with route length (≈ km / speed)", () => {
+    // ~111 km north (1° lat) at 80 km/h ≈ 83 min.
+    const mins = legTransitMinutes([[-90, 35], [-90, 36]], 80);
+    expect(mins).toBeGreaterThan(70);
+    expect(mins).toBeLessThan(95);
+    // A zero-length geometry is 0 minutes (no divide surprises).
+    expect(legTransitMinutes([[-90, 35]], 80)).toBe(0);
+  });
+
+  it("in-transit etaMs reflects the real leg duration when route minutes are known", () => {
+    const keyframes = [
+      { trailerId: "T1", tripId: "TRIP1", kind: "depart" as const, t: "2026-04-01T00:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP1", from_hub_id: "MEM", to_hub_id: "ORD" }];
+    const legMinutes = new Map([["route-MEM-ORD", 600]]); // 10h leg
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set(), legMinutes);
+
+    // etaMs glides over the WHOLE 600-min leg (not a flat 1h) so the truck tweens
+    // across the full route rather than snapping to the destination after an hour.
+    expect((kf!.etaMs - kf!.departMs) / 60_000).toBe(600);
+  });
+
+  it("a real arrive keyframe supersedes the route-length estimate", () => {
+    const keyframes = [
+      { trailerId: "T1", tripId: "TRIP1", kind: "depart" as const, t: "2026-04-01T00:00:00.000Z" },
+      { trailerId: "T1", tripId: "TRIP1", kind: "arrive" as const, t: "2026-04-01T07:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP1", from_hub_id: "MEM", to_hub_id: "ORD" }];
+    const legMinutes = new Map([["route-MEM-ORD", 600]]);
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set(), legMinutes);
+
+    // Real arrival (7h) wins over the 10h estimate.
+    expect((kf!.etaMs - kf!.departMs) / 60_000).toBe(420);
+  });
+
+  // VIZ-12: direction is derived from the leg origin — center (MEM) ⇒ outbound
+  // distribution; a spoke origin ⇒ consolidation (spoke→center).
+  it("a leg departing the center (MEM) has direction 'outbound'", () => {
+    const keyframes = [
+      { trailerId: "T1", tripId: "TRIP1", kind: "depart" as const, t: "2026-04-01T00:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP1", from_hub_id: "MEM", to_hub_id: "ORD" }];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set());
+
+    expect(kf?.direction).toBe("outbound");
+  });
+
+  it("a leg departing a spoke (toward the center) has direction 'consolidation'", () => {
+    const keyframes = [
+      { trailerId: "T2", tripId: "TRIP2", kind: "depart" as const, t: "2026-04-01T00:00:00.000Z" },
+    ];
+    const inflight = [{ trip_id: "TRIP2", from_hub_id: "ORD", to_hub_id: "MEM" }];
+
+    const [kf] = buildTrailerKeyframes(keyframes, inflight, new Set());
+
+    expect(kf?.direction).toBe("consolidation");
   });
 });

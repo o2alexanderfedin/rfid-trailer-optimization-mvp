@@ -73,6 +73,27 @@ export function packageLocationReducer(
       });
       return next;
     }
+    case "PackageInducted": {
+      // v2.0 IND-01: external induction places the package at its induction hub —
+      // the first network-visible sighting (mirrors the PackageArrivedAtHub path,
+      // but keyed off `inductionHubId`). A direct intake scan is high-confidence.
+      const next = new Map(state);
+      next.set(event.payload.packageId, {
+        packageId: event.payload.packageId,
+        hubId: event.payload.inductionHubId,
+        confidence: DIRECT_SCAN_CONFIDENCE,
+        lastSeenAt: occurredAt,
+      });
+      return next;
+    }
+    case "PackageDelivered": {
+      // OUT-04 / D-22-1: hard DELETE — remove the row. `Map.delete()` returns
+      // false on a missing key (never throws), so this is naturally idempotent
+      // and crash-safe on re-apply/replay (no read-modify-write assuming the row).
+      const next = new Map(state);
+      next.delete(event.payload.packageId);
+      return next;
+    }
     // Phase-3 RFID/detection events do not change scan-derived package location
     // — the fused zone estimate is a separate read model (later Phase-3 plans).
     // Anti-P6: absence of an RFID read never changes a package's known location.
@@ -98,6 +119,9 @@ export function packageLocationReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
+    case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
       return state;
     default:
       return assertNeverEvent(event);

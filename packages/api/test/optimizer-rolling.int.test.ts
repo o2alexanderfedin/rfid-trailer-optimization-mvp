@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readAll, type Database } from "@mm/event-store";
 import type { Kysely } from "kysely";
 import type { DomainEvent } from "@mm/domain";
@@ -88,6 +88,17 @@ describe("RollingOptimizerService twin sandbox + idempotency (OPT-04 on shared P
 
   afterAll(async () => {
     await fx?.stop();
+  });
+
+  beforeEach(async () => {
+    // The durable `optimizer_idempotency` claim is keyed on the scope HORIZON +
+    // `scope_hash` (NOT `epochId`) — that is the FLOW-04 cross-restart property.
+    // Every case here reuses the same `nowMin`/snapshot, so they share ONE claim
+    // key; without a reset the first case's row would block the next case's
+    // "first run commits" precondition. Clear ONLY the claim table (the event
+    // stream is intentionally left intact — cases (a)/(b)/(c) assert event-count
+    // DELTAS, not absolute counts).
+    await db.deleteFrom("optimizer_idempotency").execute();
   });
 
   it("(a) EVALUATION has zero side effects: pure runEpoch appends NO events", async () => {

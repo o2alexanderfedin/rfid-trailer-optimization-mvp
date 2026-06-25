@@ -3,11 +3,13 @@ import { scorePlan } from "@mm/load-planner";
 import type { LoadBlock, PlannerConfig, RouteStop, TimingConfig, TrailerSlice } from "@mm/domain";
 import {
   applyDrivingLeg,
+  DEFAULT_FUEL_CONFIG,
   DEFAULT_HOS_CONFIG,
   DEFAULT_PLANNER_CONFIG,
   DEFAULT_TIMING_CONFIG,
   epochMinutesToIso,
   expectedDwellMinutes,
+  type FuelConfig,
   type HosClock,
   type HosConfig,
   remainingLegalDriveMinutes,
@@ -87,6 +89,23 @@ function toNonNegIntMinutes(value: number): number {
 }
 
 /**
+ * SP2 (spec §7) — build the per-directed-leg DISTANCE oracle (miles) the fuel-aware
+ * `stopsForTrailer` walk reads, keyed `from->to` (both orientations, like the
+ * travel oracle). A route with no `distanceMiles` contributes nothing (omitted),
+ * so a pre-SP2 twin (no distances) never triggers a refuel — byte-identical.
+ */
+function buildDistanceModel(routes: readonly TwinRoute[]): ReadonlyMap<string, number> {
+  const leg = new Map<string, number>();
+  for (const r of routes) {
+    if (r.distanceMiles === undefined) continue;
+    const miles = r.distanceMiles < 0 ? 0 : r.distanceMiles;
+    leg.set(`${r.fromHubId}->${r.toHubId}`, miles);
+    leg.set(`${r.toHubId}->${r.fromHubId}`, miles);
+  }
+  return leg;
+}
+
+/**
  * The deterministic role-based dwell SERVICE TIME (whole minutes) for a hub
  * (OPT-09 / TIME-02 parity): the log-normal MEAN of the role's dwell
  * distribution via {@link expectedDwellMinutes}, integer-rounded for the
@@ -103,11 +122,48 @@ function dwellServiceMin(
   return toNonNegIntMinutes(expectedDwellMinutes(role, timing));
 }
 
+/**
+ * SP2 (spec §7) — the PURE refuel-threshold helper. Given the miles accrued
+ * BEFORE a leg, the leg's road distance, and the fuel config, decide whether the
+ * trailer refuels at the stop the leg ENDS at: it refuels iff the cumulative
+ * `milesBefore + legDistanceMiles` reaches (≥) `refuelThresholdMiles`. On a refuel
+ * the running total RESETS to 0 (a full tank); otherwise it carries the new
+ * cumulative forward. A disabled (or absent-`enabled`) fuel config NEVER refuels
+ * (refuelMin 0). `refuelMin` is integer-rounded at the boundary (anti-P12).
+ *
+ * Pure + deterministic: a function of its three numeric/config args only.
+ */
+export function refuelMinForStop(args: {
+  milesBefore: number;
+  legDistanceMiles: number;
+  fuel: FuelConfig;
+}): { refuelMin: number; milesAfter: number } {
+  const { milesBefore, legDistanceMiles, fuel } = args;
+  const cumulative = milesBefore + Math.max(0, legDistanceMiles);
+  if (fuel.enabled === true && cumulative >= fuel.refuelThresholdMiles) {
+    return { refuelMin: toNonNegIntMinutes(fuel.refuelTimeMinutes), milesAfter: 0 };
+  }
+  return { refuelMin: 0, milesAfter: cumulative };
+}
+
 /** Map a trailer's blocks to VRPTW stops (one stop per next-unload hub, summed demand). */
 export function stopsForTrailer(
   trailer: TwinTrailer,
   centerHubId: string,
   timing: TimingConfig,
+  /**
+   * SP2 (spec §7) — OPTIONAL fuel config. When present AND `enabled`, the walk
+   * assigns `Stop.refuelMin` at the route stop where the running distance (seeded
+   * from `trailer.milesSinceRefuel`) crosses `refuelThresholdMiles`. Absent OR
+   * disabled ⇒ no `refuelMin` is set (back-compat, byte-identical).
+   */
+  fuel?: FuelConfig,
+  /**
+   * SP2 — per-directed-leg road distance in miles, keyed `from->to`. The walk uses
+   * it to accumulate distance from `currentHubId` through the ordered route. Absent
+   * legs contribute 0, so no refuel triggers without distances.
+   */
+  distanceMiles?: ReadonlyMap<string, number>,
 ): readonly Stop[] {
   // Sum block volume per unload hub; service/window from the trailer's route order.
   const demandByHub = new Map<string, number>();
@@ -118,17 +174,46 @@ export function stopsForTrailer(
   const orderedRoute = [...trailer.route].sort((a, b) => a.stopIndex - b.stopIndex);
   const routeHubs = new Set(orderedRoute.map((s) => s.hubId));
 
-  const stops: Stop[] = orderedRoute.map((stop) => ({
-    hubId: stop.hubId,
-    // OPT-09 / TIME-02 parity: exactly ONE role-based dwell per stop (center
-    // at the network center hub, spoke elsewhere) as the VRPTW service time.
-    serviceMin: dwellServiceMin(stop.hubId, centerHubId, timing),
-    windowStartMin: 0,
-    // A wide window so routing is window-feasible (the freeze window — not the
-    // service window — is what protects near-departure trailers here).
-    windowEndMin: Number.MAX_SAFE_INTEGER,
-    demand: demandByHub.get(stop.hubId) ?? 0,
-  }));
+  // SP2 fuel-aware walk: accumulate the running distance from the trailer's current
+  // miles-since-refuel, leg by leg in route order, assigning `refuelMin` at the
+  // stop where it crosses the threshold (then resetting). Off (no fuel/distance) ⇒
+  // every stop's `refuelMin` is 0 (omitted), byte-identical to the prior plan.
+  const fuelCfg = fuel ?? DEFAULT_FUEL_CONFIG;
+  const fuelOn = fuelCfg.enabled === true && distanceMiles !== undefined;
+  const refuelByHubIndex = new Map<number, number>();
+  if (fuelOn) {
+    let running = Math.max(0, trailer.milesSinceRefuel ?? 0);
+    let prevHubId = trailer.currentHubId;
+    orderedRoute.forEach((stop, idx) => {
+      const legMiles = distanceMiles.get(`${prevHubId}->${stop.hubId}`) ?? 0;
+      const { refuelMin, milesAfter } = refuelMinForStop({
+        milesBefore: running,
+        legDistanceMiles: legMiles,
+        fuel: fuelCfg,
+      });
+      if (refuelMin > 0) refuelByHubIndex.set(idx, refuelMin);
+      running = milesAfter;
+      prevHubId = stop.hubId;
+    });
+  }
+
+  const stops: Stop[] = orderedRoute.map((stop, idx) => {
+    const refuelMin = refuelByHubIndex.get(idx) ?? 0;
+    return {
+      hubId: stop.hubId,
+      // OPT-09 / TIME-02 parity: exactly ONE role-based dwell per stop (center
+      // at the network center hub, spoke elsewhere) as the VRPTW service time.
+      serviceMin: dwellServiceMin(stop.hubId, centerHubId, timing),
+      windowStartMin: 0,
+      // A wide window so routing is window-feasible (the freeze window — not the
+      // service window — is what protects near-departure trailers here).
+      windowEndMin: Number.MAX_SAFE_INTEGER,
+      demand: demandByHub.get(stop.hubId) ?? 0,
+      // SP2: only set `refuelMin` when a refuel falls here (omit 0 so an off run is
+      // byte-identical — an absent field and `0` both fold via `?? 0`).
+      ...(refuelMin > 0 ? { refuelMin } : {}),
+    };
+  });
 
   // FIX 1 — capacity gate bypass: a block whose unload hub is NOT on the trailer's
   // route would otherwise have its volume silently dropped from the demand, so the
@@ -483,6 +568,14 @@ export function runEpoch(
   const centerHubId =
     input.twinSnapshot.centerHubId ?? input.twinSnapshot.hubs[0] ?? "";
 
+  // SP2 (spec §7) — the fuel config + the per-directed-leg DISTANCE oracle the
+  // fuel-aware `stopsForTrailer` walk reads. Default disabled ⇒ no refuel assigned
+  // ⇒ byte-identical to the pre-SP2 plan. The distance map is built ONCE from the
+  // (in-scope) twin routes (both directions, like the travel oracle), keyed
+  // `from->to` to mirror `refuelMinForStop`'s leg-key convention.
+  const fuelConfig = input.fuelConfig ?? DEFAULT_FUEL_CONFIG;
+  const distanceMilesByLeg = buildDistanceModel(twin.routes);
+
   // F-06 / OPT-02 — run the min-cost-flow freight stage over the IN-SCOPE twin
   // (assign-then-sequence): which freight block flows over which route leg at
   // minimum total cost. PURE + fail-soft; observational only — it does NOT feed
@@ -514,7 +607,7 @@ export function runEpoch(
     const route = routeTrailers({
       trailerId: trailer.trailerId,
       capacity: trailer.capacity,
-      stops: stopsForTrailer(trailer, centerHubId, timing),
+      stops: stopsForTrailer(trailer, centerHubId, timing, fuelConfig, distanceMilesByLeg),
       startHubId: trailer.currentHubId,
       travel,
       startMin: trailer.departureMin,

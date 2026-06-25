@@ -165,6 +165,15 @@ export function hubInventoryReducer(
         hubId: event.payload.hubId,
         bucket: "inbound",
       });
+    case "PackageInducted":
+      // v2.0 IND-01/Decision 3: externally-induced freight enters the induction
+      // hub's INBOUND bucket — the SAME demand path as PackageArrivedAtHub. The
+      // optimizer reads inducted freight automatically via this projection (no new
+      // demand-source concept needed).
+      return placePackage(state, event.payload.packageId, {
+        hubId: event.payload.inductionHubId,
+        bucket: "inbound",
+      });
     case "PackageScanned": {
       const bucket = bucketForScan(event.payload.scanType);
       return placePackage(
@@ -185,12 +194,38 @@ export function hubInventoryReducer(
         (acc, packageId) => placePackage(acc, packageId, null),
         state,
       );
+    case "PlanSuperseded":
+      // FLOW-04 / D-21-1 (Open-Q1 RESOLVED): `staged` holds BOTH unload-scan
+      // freight AND an accepted plan's staged scope. `PlanAccepted` STAYS A NO-OP
+      // (below) — its payload carries NO packageIds, so it cannot stage anything.
+      // `PlanSuperseded` is the ONLY stage-mutating plan event: a DUMB PURE
+      // delete-then-apply that removes the prior plan's HOLISTIC scope
+      // (`supersededPackageIds`) from inventory — exactly the `TrailerDeparted`
+      // manifest-decrement pattern above. Because the event carries the holistic
+      // prior scope, items present in the OLD plan but absent in the NEW are wiped
+      // (not stranded), and stale `staged` is never double-counted. The placement
+      // index resolves each package's hub automatically, so the wipe spans every
+      // hub the prior scope touched. NO epoch/scope comparison lives here — state
+      // depends only on the explicit event fact (replay-from-zero clean, D-21-1).
+      return event.payload.supersededPackageIds.reduce(
+        (acc, packageId) => placePackage(acc, packageId, null),
+        state,
+      );
+    case "PackageDelivered":
+      // OUT-04 / D-22-1: hard DELETE via null target. `placePackage(..., null)` is
+      // a guaranteed no-op when the package is absent (the `prior === undefined`
+      // guard inside placePackage), so this is idempotent and crash-safe on
+      // re-apply/replay. Removes the delivered package's inventory contribution.
+      return placePackage(state, event.payload.packageId, null);
     // Phase-3 RFID/detection events are no-ops for hub inventory — observed
     // evidence is projected separately (later Phase-3 plans), never folded into
     // the planned inventory read model (anti-P6). Phase-4 plan-lifecycle events
     // (PlanGenerated/PlanAccepted, OPT-04) don't move packages between hubs, so
-    // they no-op here too. Phase-9 (v1.2) driver-lifecycle + load/unload phase
-    // events likewise move no package between hubs, so they no-op as well.
+    // they no-op here too — and per FLOW-04 / Open-Q1 (RESOLVED), `PlanAccepted`
+    // STAYS a no-op because its payload carries no packageIds; the staged scope is
+    // mutated EXCLUSIVELY by `PlanSuperseded` (the delete-then-apply case above).
+    // Phase-9 (v1.2) driver-lifecycle + load/unload phase events likewise move no
+    // package between hubs, so they no-op as well.
     case "HubRegistered":
     case "RouteRegistered":
     case "PackageCreated":
@@ -208,6 +243,8 @@ export function hubInventoryReducer(
     case "UnloadStarted":
     case "LoadStarted":
     case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
       return state;
     default:
       return assertNeverEvent(event);

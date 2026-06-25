@@ -82,6 +82,7 @@ const COMPARISON: KpiComparison = {
 function makeHubDetail(hubId: string): HubDetailDto {
   return {
     hubId,
+    inventoryBalance: { inbound: 0, outbound: 0 },
     trailers: [
       {
         trailerId: "TRL-014",

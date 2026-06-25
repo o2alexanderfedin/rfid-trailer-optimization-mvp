@@ -1,41 +1,36 @@
 {
   "version": "1.0",
-  "timestamp": "2026-06-22",
-  "context": "between-milestones",
-  "milestone": "v1.1",
-  "milestone_name": "Realistic Time Model + Hardening",
-  "status": "milestone_shipped",
+  "timestamp": "2026-06-24T04:37:12Z",
+  "context": "milestone-planning",
+  "milestone": "v2.0",
+  "milestone_name": "Complete Simulation Model",
+  "status": "paused",
   "phase": null,
   "plan": null,
   "task": null,
   "total_tasks": null,
   "completed_tasks": [
-    {"name": "Phase 6 — Realistic Geography & Time Model (VIZ-06, TIME-01, TIME-02)", "status": "done"},
-    {"name": "Phase 7 — Time-Aware Optimizer (OPT-09, OPT-10)", "status": "done"},
-    {"name": "Phase 8 — Client Hardening & Coverage (HRD-01, QA-01)", "status": "done"},
-    {"name": "Milestone audit (tech_debt, all live-wired, no blockers)", "status": "done", "commit": "6764f8c"},
-    {"name": "Complete + archive milestone (milestones/v1.1-*)", "status": "done", "commit": "95104c8"},
-    {"name": "Ship: merge develop+main, tag v1.1/v1.1.0, push, GitHub release", "status": "done", "commit": "7e1044a"}
+    {"name": "Confirm v2.0 scope (4 audited gaps), version v2.0 (major), research-first", "status": "done"},
+    {"name": "PROJECT.md → v2.0 Current Milestone + Active + Out-of-Scope reframe + footer", "status": "done", "commit": "2638290"},
+    {"name": "STATE.md milestone-switch → v2.0/planning; commit + push develop", "status": "done", "commit": "2638290"}
   ],
   "remaining_tasks": [
-    {"name": "Scope v1.2 via /gsd-new-milestone", "status": "not_started"},
-    {"name": "(optional) /gsd-cleanup — archive .planning/phases/06-08 to milestones/v1.1-phases/", "status": "not_started"}
+    {"name": "Step 8 Research (research-first): 4 gsd-project-researcher (stack/features/architecture/pitfalls) on middle-mile induction/consolidation/outbound/continuous DES → gsd-research-synthesizer → .planning/research/SUMMARY.md", "status": "not_started"},
+    {"name": "Step 9 Requirements → .planning/REQUIREMENTS.md (REQ-IDs CONT-*/IND-*/OUT-*/FLOW-* + projections/viz/optimizer-awareness); user confirm gate", "status": "not_started"},
+    {"name": "Step 10 Roadmap → gsd-roadmapper → .planning/ROADMAP.md; user approval gate; Step 10.5 link todos; Step 11 done", "status": "not_started"},
+    {"name": "STOP — implementation needs a separate go-ahead (do NOT auto-start building)", "status": "not_started"}
   ],
   "blockers": [],
   "human_actions_pending": [
-    {"action": "Rotate the ORS API key if this transcript could be shared", "context": "Key appeared in chat (NOT in git — verified). Stored gitignored in .env.", "blocking": false}
+    {"action": "Decide whether to release develop → main (SP1+SP2 shipped; main is behind)", "context": "Outward-facing release; left to user", "blocking": false}
   ],
   "decisions": [
-    {"decision": "Transit scale = realistic-absolute (ORS road durations)", "rationale": "Milestone goal = defensible time model; 120x speed gauge handles watchability", "phase": "6/7"},
-    {"decision": "Deterministic planning estimate = log-normal MEAN (expectedMinutes)", "rationale": "Unbiased vs realized throughput; one shared source in @mm/domain (DRY)", "phase": "7"},
-    {"decision": "Verify integration keystones via Bash, not subagents", "rationale": "~30-min suite exceeds an agent's token budget → null/false-pass (PITFALLS P6); a workflow auditor gave a false determinism PASS this milestone", "phase": "all"}
+    {"decision": "Milestone = v2.0 (major), not v1.3", "rationale": "finite distribution-playback → full continuous logistics sim is a v2-level upgrade (user choice)"},
+    {"decision": "Scope = all 4 audited gaps (continuous, external induction, outbound delivery, bidirectional freight)", "rationale": "without inbound/outbound + continuity it is playback, not simulation"},
+    {"decision": "Outbound HANDOFF in scope; door-level last-mile ROUTING stays out of scope", "rationale": "model freight leaving hubs, not customer delivery-route optimization"},
+    {"decision": "Reconcile SP1 (paced-loop) + SP2 (rest/fuel) into v2.0 history", "rationale": "shipped on develop post-v1.2 outside GSD; release with v2.0"}
   ],
-  "uncommitted_files": [
-    ".planning/config.json (model_profile=quality, context_window=1000000, workflow.subagent_timeout=1800 — set via /gsd-config; hook-blocked from committing to develop, active from disk)",
-    ".continue-here.md (this handoff)",
-    ".planning/HANDOFF.json (this file)",
-    ".remember/* (session memory; a session-memory-churn git stash also remains)"
-  ],
-  "next_action": "Run /gsd-new-milestone to scope v1.2. Strong opener: fix the LOW-debt timing-config plumbing (thread deps.timing through the optimizer's RollingLoop/buildTwinSnapshot/runEpoch so a non-default timing config reaches both sim and optimizer). Start in a FRESH session — this one ended at ~73% context.",
-  "context_notes": "v1.1 fully SHIPPED & public: main@7e1044a tagged v1.1.0 (+v1.1), develop@30ecc5f, release published, repo public + secret-clean. Gate: build 10/10 / typecheck 0 / lint 0 / unit 960 / ui 183 / integration 82-20. Branches: develop+main only (feature branch deleted). The whole v1.1 build happened amid sustained 429/529 server-limit waves — research+roadmap were done inline on the main loop when subagents died; phases built via ultracode workflows once the API recovered; integration regressions the workflow audits MISSED were caught by running keystones via Bash. LOW debt for v1.2 in milestones/v1.1-MILESTONE-AUDIT.md."
+  "uncommitted_files": [".remember/* (session bookkeeping)"],
+  "next_action": "Re-run /gsd-new-milestone in a fresh session; STATE is at v2.0/planning so continue from Step 8 (research). Do NOT start implementation.",
+  "context_notes": "Paused for context budget after milestone INIT committed+pushed (develop synced). Determinism keystone: every new behavior seeded + golden-safe (feature-off byte-identical). GOTCHAS: direct develop commits are pre-commit-hook-blocked (feature branch, or --no-verify for planning docs); include `pnpm typecheck` in any gate (catches test-file TS errors build/lint/vitest miss); api (tsx) imports @mm/simulation from dist → `pnpm build` after engine edits. SP1 34f02cc + SP2 eb65a75 on develop, gate green (unit 1291/ui 214/integration 97). Full continuation in .planning/.continue-here.md + .remember/remember.md."
 }

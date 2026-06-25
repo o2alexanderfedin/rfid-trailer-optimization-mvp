@@ -235,6 +235,20 @@ function describeEvent(e: DomainEvent): string {
     case "LoadStarted":
     case "UnloadCompleted":
       return e.payload.trailerId;
+    // SP2 (v1.3) rest/fuel stop events.
+    case "TruckRested":
+      return e.payload.trailerId;
+    case "TruckRefueled":
+      return e.payload.trailerId;
+    // v2.0 external induction (IND-01).
+    case "PackageInducted":
+      return e.payload.packageId;
+    // v2.0 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+    case "PlanSuperseded":
+      return e.payload.priorPlanId;
+    // v2.0 outbound delivery (OUT-01) — terminal event.
+    case "PackageDelivered":
+      return e.payload.packageId;
     default:
       return assertNever(e);
   }
@@ -299,7 +313,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 20 literal discriminators", () => {
+  it("DomainEventType is the union of the 25 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -322,6 +336,15 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       | "UnloadStarted"
       | "LoadStarted"
       | "UnloadCompleted"
+      // SP2 (v1.3) rest/fuel stop events.
+      | "TruckRested"
+      | "TruckRefueled"
+      // v2.0 external induction (IND-01).
+      | "PackageInducted"
+      // v2.0 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+      | "PlanSuperseded"
+      // v2.0 outbound delivery (OUT-01) — terminal event.
+      | "PackageDelivered"
     >();
   });
 

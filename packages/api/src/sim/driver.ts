@@ -19,18 +19,26 @@ import {
 import {
   applyScenario,
   type RfidSimConfig,
+  runToHorizon,
   simulate,
   type ScenarioKnobs,
+  type SimContinuation,
+  type SimStart,
   type SimulatedEvent,
   type TimingConfig,
 } from "@mm/simulation";
 import { makeRng } from "@mm/simulation";
-import type { DomainEvent, HosConfig } from "@mm/domain";
+import { pruneEventLog, ageStaleProjections, type RetentionConfig } from "./retention.js";
+import type { DomainEvent, FuelConfig, HosConfig } from "@mm/domain";
 import type { EpochResult } from "@mm/optimizer";
 import type { Kysely } from "kysely";
+import { performance } from "node:perf_hooks";
 import type { ApiDb } from "../routes/queries.js";
 import { PRODUCTION_DETECTION_CONFIG } from "../detection-config.js";
 import type { Broadcast } from "../ws/snapshots.js";
+import type { DeliveryEvent, InductionEvent } from "../ws/envelope.js";
+import { computeSimAdvanceMs, selectDrain } from "./pacing.js";
+import { makeCoalescedRunner } from "./coalesced-runner.js";
 
 /**
  * The demo sim driver: consumes `@mm/simulation` to populate the event store +
@@ -181,66 +189,115 @@ export interface DriveSimulationOptions {
    * across runs for a byte-identical HOS-on stream.
    */
   readonly hosConfig?: HosConfig;
+  /**
+   * Demo richness knob: trailers (and one primary driver each) PER SPOKE.
+   * Default 1 (byte-identical golden stream); the live demo raises it to put more
+   * trucks on the map at once. Threaded straight through to `simulate`.
+   */
+  readonly fleetPerSpoke?: number;
+  /**
+   * SP2 (spec §5): OPT-IN fuel/refuel modeling, threaded straight to `simulate`
+   * only when DEFINED. Absent ⇒ the golden stream is byte-identical (the engine
+   * default is fuel-off). The live demo passes `{ ...DEFAULT_FUEL_CONFIG,
+   * enabled: FUEL_ENABLED }` so trucks visibly rest + refuel mid-route.
+   */
+  readonly fuel?: FuelConfig;
+  /**
+   * Phase 21 (FLOW-01/02): OPT-IN spoke→center consolidation, threaded straight
+   * to `simulate` only when DEFINED. Absent/false ⇒ the golden stream is
+   * byte-identical (the engine default is consolidation-off, the determinism
+   * keystone). The live demo passes `true` so consolidation trailers carry real
+   * freight spoke→center and the center cross-docks it onward.
+   */
+  readonly consolidationEnabled?: boolean;
+  /**
+   * Phase 20 (IND-02): OPT-IN external induction, threaded straight to `simulate`
+   * only when DEFINED. Absent/false ⇒ byte-identical (induction-off default). The
+   * live demo passes `true` so freight enters from outside at the spokes.
+   */
+  readonly inductionEnabled?: boolean;
+  /**
+   * Phase 22 (OUT-01): OPT-IN terminal delivery, threaded straight to `simulate`
+   * only when DEFINED. Absent/false ⇒ the golden stream is byte-identical (the
+   * engine default is outbound-off, the determinism keystone). The live demo
+   * passes `true` so freight reaching its destination hub fires `PackageDelivered`
+   * (and the VIZ-14 destination-hub flash + the OUT-05 KPI counters update).
+   */
+  readonly outboundDeliveryEnabled?: boolean;
 }
 
 /**
- * FIX E: options for the paced live-demo driver.
- * Same as {@link DriveSimulationOptions} but adds `tickIntervalMs` for
- * presentation-layer pacing (how long to wait between sim-tick broadcasts).
+ * Options for the paced live-demo driver — the FIXED-CADENCE ACCUMULATOR
+ * (spec §4). Same as {@link DriveSimulationOptions} but adds the wall-clock
+ * frame cadence, the per-frame drain budget, and a LIVE speed-multiplier source.
  *
- * DETERMINISM GUARANTEE: `tickIntervalMs` is ONLY used by `setTimeout` for
- * pacing the broadcast — it NEVER enters the sim engine, the event store, or
- * the optimizer. The sim stream is still generated deterministically (same
- * seed → same events). Only the *delivery rate* is wall-clock.
+ * DETERMINISM GUARANTEE: `frameMs` / `maxTicksPerFrame` / `getMultiplier` /
+ * `isPaused` are PRESENTATION pacing only. They drive `setTimeout` cadence + how
+ * far the `simClock` advances per frame; they NEVER enter the sim engine, the
+ * event store, or the optimizer epoch clock. The sim stream is still generated
+ * deterministically (same seed → same events) — only the *delivery rate* and
+ * *batching* are wall-clock.
  */
 export interface DriveSimulationPacedOptions extends DriveSimulationOptions {
   /**
-   * Wall-clock milliseconds to wait between consecutive tick broadcasts.
-   * Default: 500ms (2 ticks/sec). Increase for a slower demo, decrease for speed.
-   * Pure presentation pacing — NOT fed into the sim engine.
-   *
-   * Back-compat fallback: used only when {@link getTickIntervalMs} is absent.
+   * Fixed wall-clock frame cadence in ms (chained `setTimeout`, NEVER
+   * `setInterval` — measured delta avoids drift). Default 250. Each frame
+   * advances `simClock` by `measuredWallDelta × 120 × multiplier` and drains all
+   * pre-baked ticks with `occurredAt ≤ simClock` (bounded by the budget).
    */
-  readonly tickIntervalMs?: number;
+  readonly frameMs?: number;
   /**
-   * LIVE tick interval source, read FRESH before each inter-tick pause so the
-   * speed can be retuned mid-run (via the SpeedController). When present it takes
-   * precedence over the once-captured {@link tickIntervalMs}. Returning <= 0 is
-   * coerced to the fallback so the loop never busy-spins. Presentation pacing
-   * only — never fed into the sim engine (DETERMINISM CONTRACT).
+   * Per-frame drain budget (>= 1). Default 32. When a frame would drain more
+   * than this, only the budget drains, `simClock` is clamped to the last drained
+   * tick, and the remainder carries to the next frame — bounding DB work/frame
+   * and yielding to the event loop. The effective max speed self-limits
+   * gracefully at saturation instead of freezing (spec §4 backpressure).
    */
-  readonly getTickIntervalMs?: () => number;
+  readonly maxTicksPerFrame?: number;
   /**
-   * LIVE pause source, polled before each tick. While it returns `true` the
-   * driver HOLDS (does not advance/broadcast the next tick) — freezing the demo
-   * without affecting the deterministic event stream. Presentation only.
+   * LIVE speed-multiplier source, read FRESH each frame so a mid-run retune (via
+   * the SpeedController) takes effect on the very next frame. Preferred pacing
+   * primitive. Absent ⇒ 1× (120 sim-ms per wall-ms). Presentation only — never
+   * fed into the sim engine (DETERMINISM CONTRACT).
+   */
+  readonly getMultiplier?: () => number;
+  /**
+   * LIVE pause source, read FRESH each frame. While it returns `true` the frame
+   * advances `simClock` by 0 (multiplier treated as 0) so NO tick drains — the
+   * demo freezes without affecting the deterministic event stream. Presentation
+   * only.
    */
   readonly isPaused?: () => boolean;
+  /**
+   * Trigger the rolling optimizer every Nth DRAINED tick instead of every tick
+   * (a sim-time landmark cadence). **Default 1**. The optimizer is fired
+   * NON-blocking via the single-flight/dirty coalescer, so a richer/faster demo
+   * is never blocked by per-tick optimization. The intervening ticks' events are
+   * batched and handed to the coalescer at the landmark. Pure presentation/
+   * throughput pacing — the deterministic event STREAM is untouched.
+   */
+  readonly optimizerEveryTicks?: number;
 }
 
-/** Poll interval (ms) used while holding for an external pause flag. */
-const PAUSE_POLL_MS = 100;
+/** Default fixed wall-clock frame cadence (ms). */
+const DEFAULT_FRAME_MS = 250;
+/** Default per-frame drain budget. */
+// Drain budget per frame. Kept LOW (not the 64×-at-250ms throughput max) on
+// purpose: at a large fleet the per-frame fold cost dominates, so the TOTAL work
+// to play the stream is ~framing-independent — a smaller budget just redistributes
+// that work across MORE frames, i.e. more WS deltas (better map responsiveness;
+// the OpenLayers client tweens continuously between keyframes) at ~the same total
+// cost. selectDrain clamps simClock down when capped, so this also self-limits the
+// effective top speed gracefully instead of leaping the whole stream in one frame.
+const DEFAULT_MAX_TICKS_PER_FRAME = 4;
+/** The 1× wall-clock baseline interval — the accumulator advance denominator. */
+const DEFAULT_INTERVAL_MS = 500;
+/** Sim-ms advanced per tick (= the engine's MS_PER_TICK). */
+const MS_PER_TICK = 60_000;
 
-/** Promise-based sleep helper (presentation pacing only). */
+/** Promise-based sleep helper (frame cadence — presentation pacing only). */
 function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Resolve the effective inter-tick interval for the current iteration: prefer
- * the LIVE source, fall back to the captured value, then to 500ms. A non-finite
- * or non-positive live value falls back too (never 0 → never a busy spin).
- *
- * Pure + presentation-only — exported for hermetic unit testing.
- */
-export function resolveTickIntervalMs(
-  live: (() => number) | undefined,
-  fallbackMs: number | undefined,
-): number {
-  const fallback = fallbackMs ?? 500;
-  if (live === undefined) return fallback;
-  const value = live();
-  return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 /**
@@ -263,6 +320,52 @@ export interface DriveSimulationWithScenarioOptions extends DriveSimulationOptio
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * VIZ-13: map the `PackageInducted` events in a drained tick/frame into transient
+ * `InductionEvent` wire items for the tick payload. Empty when the slice has no
+ * inductions (the common case) — the broadcast then omits the field entirely.
+ */
+function collectInductions(
+  items: readonly SimulatedEvent[],
+): InductionEvent[] {
+  const out: InductionEvent[] = [];
+  for (const { event } of items) {
+    if (event.type !== "PackageInducted") continue;
+    out.push({
+      packageId: event.payload.packageId,
+      inductionHubId: event.payload.inductionHubId,
+      destHubId: event.payload.destHubId,
+      slaClass: event.payload.slaClass,
+      slaDeadlineIso: event.payload.slaDeadlineIso,
+      occurredAt: event.payload.occurredAt,
+    });
+  }
+  return out;
+}
+
+/**
+ * VIZ-14: map the `PackageDelivered` events in a drained tick/frame into transient
+ * `DeliveryEvent` wire items for the tick payload. Empty when the slice has no
+ * deliveries (the common case) — the broadcast then omits the field entirely. The
+ * field is TICK-ONLY (never on a snapshot) so a reconnect does not re-flash
+ * historical deliveries (Pitfall 7).
+ */
+function collectDeliveries(
+  items: readonly SimulatedEvent[],
+): DeliveryEvent[] {
+  const out: DeliveryEvent[] = [];
+  for (const { event } of items) {
+    if (event.type !== "PackageDelivered") continue;
+    out.push({
+      packageId: event.payload.packageId,
+      hubId: event.payload.hubId,
+      deliveredAt: event.payload.deliveredAt,
+      onTime: event.payload.onTime,
+    });
+  }
+  return out;
+}
 
 /** Group the deterministic stream into ordered ticks by `occurredAt`. */
 function intoTicks(stream: readonly SimulatedEvent[]): SimulatedEvent[][] {
@@ -293,6 +396,11 @@ function destHubIndex(stream: readonly SimulatedEvent[]): Map<string, string> {
   }
   return dest;
 }
+
+// Plan 19-08: the open-ended driver no longer pre-builds a per-chunk dest-hub
+// index. It maintains `destHub` incrementally — adding on `PackageCreated` and
+// PRUNING on `PackageArrivedAtHub` — so the index stays bounded to in-flight
+// packages, not the run-length total. (See `appendTick` in driveSimulationOpenEnded.)
 
 // ---------------------------------------------------------------------------
 // Core per-tick driver loop (shared by both public functions)
@@ -391,9 +499,10 @@ async function driveTickStream(
     await runner(tickEvents, tickMs);
 
     // 6. Push ONE batched snapshot per tick. Supply the tick's domain timestamp
-    //    as the authoritative sim-clock milliseconds for the ws envelope.
+    //    as the authoritative sim-clock milliseconds for the ws envelope, plus the
+    //    tick's transient induction (VIZ-13) + delivery (VIZ-14) events.
     if (opts.broadcast !== undefined) {
-      await opts.broadcast(tickMs);
+      await opts.broadcast(tickMs, collectInductions(tick), collectDeliveries(tick));
     }
   }
 
@@ -427,27 +536,50 @@ export async function driveSimulation(
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
     ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
+      : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
 }
 
 /**
- * FIX E: Drive the simulation LIVE — one tick per wall-clock interval.
+ * Drive the simulation LIVE via a FIXED-CADENCE ACCUMULATOR (spec §4).
  *
- * This is the ONLY difference from `driveSimulation`: instead of running all
- * ticks synchronously (blocking until complete), each tick is scheduled with
- * `setTimeout(tickIntervalMs)` so:
- *   - The HTTP server is live during the sim (clients can connect, call REST).
- *   - Connected ws clients receive broadcast() per tick and see the map animate.
- *   - The rolling optimizer runs per tick (live re-opt visible on the map).
+ * The previous driver delivered one pre-baked tick per `setTimeout(interval)`
+ * and shrank the interval to speed up — coupling cadence to speed, so per-tick
+ * work (DB append + projection + a periodically BLOCKING optimizer) starved the
+ * loop at high speed/fleet (the freeze). This driver inverts that coupling:
+ *
+ *   - a fixed wall-clock FRAME (`frameMs`, chained `setTimeout` + measured
+ *     `performance.now()` delta — never `setInterval`);
+ *   - each frame advances a `simClock` by `wallDelta × 120 × multiplier`
+ *     (pure `computeSimAdvanceMs`), then DRAINS every pre-baked tick with
+ *     `occurredAt ≤ simClock` as ONE batch, bounded by `maxTicksPerFrame`
+ *     (pure `selectDrain`), carrying any remainder to the next frame;
+ *   - the optimizer is fired NON-blocking through a single-flight/dirty
+ *     coalescer, so its CPU never stalls the playback loop;
+ *   - exactly ONE ws delta is broadcast per frame (so `simMs`/speed envelopes
+ *     keep flowing for the client clock even when no tick drains, e.g. paused).
  *
  * DETERMINISM CONTRACT: the sim stream is generated once, deterministically
- * (same seed → same events in the same order). `tickIntervalMs` only paces
- * the DELIVERY of each tick's events to the DB + ws clients. It never enters
- * the sim engine, the event store OCC path, or the optimizer epoch clock.
+ * (same seed → same events in the same order). `frameMs` / `maxTicksPerFrame` /
+ * the multiplier / pause are PRESENTATION pacing — they shape cadence + batching
+ * only and NEVER enter the sim engine, the event store OCC path, or the
+ * optimizer epoch clock (the per-tick `simMs` handed to the optimizer is the
+ * deterministic `occurredAt`, not the accumulator's `simClock`).
  *
- * Returns a Promise that resolves when all ticks have been driven.
+ * Resolves `{ ticks }` (the count of drained ticks == source tick count) once
+ * the whole stream has drained and the coalescer has gone idle.
  */
 export async function driveSimulationPaced(
   opts: DriveSimulationPacedOptions,
@@ -460,37 +592,42 @@ export async function driveSimulationPaced(
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
     ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
+      : {}),
   });
   const ticks = intoTicks(stream);
+  // Precompute each tick's DETERMINISTIC sim time (the first event's occurredAt).
+  const tickTimesMs = ticks.map((tick) => new Date(tick[0]!.occurredAt).getTime());
 
-  // Drive ticks one at a time with a wall-clock pause between each.
-  // We inline the per-tick logic from `driveTickStream` here to preserve
-  // cross-tick mutable state (cursor, departedHubs) that must accumulate
-  // across ticks for correctness (detection SNS-05 gate, event-log cursor).
+  // Per-tick I/O state — accumulates across ALL ticks (never reset per tick):
+  //   cursor (event-log position) + departedHubs (SNS-05 gate). The optimizer is
+  //   fired non-blocking via the coalescer over the per-tick runner.
   const es = eventStoreView(opts.db);
-  const runner = makeSimRunner({ loop: opts.loop });
+  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
   const destHub = detectionOn ? destHubIndex(stream) : new Map<string, string>();
-  // departedHubs accumulates across ALL ticks — never reset between ticks.
   const departedHubs = new Set<string>();
-
-  // cursor tracks the event-log position across ALL ticks — never reset.
   let cursor = 0n;
 
-  let driven = 0;
-  for (const tick of ticks) {
-    // (0) Honor an external pause BEFORE advancing this tick. While paused the
-    //     driver holds — it does NOT append/project/broadcast — so both the
-    //     backend tick advance and (via simSpeed:0 on the envelope) the frontend
-    //     tween freeze. Polling is cheap and presentation-only; the deterministic
-    //     event STREAM is untouched (pausing only delays delivery).
-    while (opts.isPaused?.() === true) {
-      await sleep(PAUSE_POLL_MS);
-    }
-
-    // (a) Append this tick's events (OCC-safe per stream).
+  /**
+   * (a)+(b): append ONE tick's events (OCC-safe per stream, with the tick's own
+   * domain `occurredAt`) and track departed hubs for the SNS-05 gate (accumulates
+   * across ticks). Appends MUST stay per-tick: `appendToStream` stamps a single
+   * `occurred_at` on the whole call, and each tick is a distinct domain timestamp,
+   * so coalescing appends across ticks would corrupt domain time (geo-track/audit).
+   */
+  async function appendTick(tick: SimulatedEvent[]): Promise<void> {
     const perStream = new Map<string, SimulatedEvent[]>();
     for (const item of tick) {
       const buf = perStream.get(item.streamId) ?? [];
@@ -512,7 +649,6 @@ export async function driveSimulationPaced(
       );
     }
 
-    // (b) Track departed hubs for SNS-05 gate (accumulates across ticks).
     if (detectionOn) {
       for (const item of tick) {
         if (item.event.type === "TrailerDeparted") {
@@ -520,8 +656,19 @@ export async function driveSimulationPaced(
         }
       }
     }
+  }
 
-    // (c) Inline projection (read-your-writes).
+  /**
+   * (c)+(d)+(e): the heavy DB folds, run ONCE per FRAME over every event appended
+   * since `cursor` (spec §4 — "project once"). Folding `readAll(cursor)` in one
+   * pass is identical in effect to folding each tick separately (applyInline is a
+   * per-event, order-preserving reducer), but collapses the per-tick projection
+   * transaction + detection + catch-up — the dominant per-tick cost — to once per
+   * frame, which is what unsticks broadcast density at high speed / large fleets.
+   * `driveTickStream` (the synchronous, non-paced path) is unchanged.
+   */
+  async function foldFrame(): Promise<void> {
+    // (c) Inline projection (read-your-writes) over the whole frame's events.
     const fresh = await readAll(es, cursor);
     if (fresh.length > 0) {
       await opts.db.transaction().execute(async (trx) => {
@@ -531,7 +678,7 @@ export async function driveSimulationPaced(
       cursor = fresh[fresh.length - 1]!.globalSeq;
     }
 
-    // (d) Detection (PLANNED vs OBSERVED → exceptions).
+    // (d) Detection once over the frame's folded state (PLANNED vs OBSERVED).
     if (detectionOn) {
       await runDetection(
         detectorReads(opts.db, es, destHub, departedHubs),
@@ -547,30 +694,482 @@ export async function driveSimulationPaced(
       }
     }
 
-    // (e) Catch-up projections (audit timeline + geo-track).
+    // (e) Catch-up projections (audit timeline + geo-track) once per frame.
     await runCatchup(catchupView(opts.db), replayReadAll);
+  }
 
-    // (f) Rolling optimizer per tick (live re-opt).
-    const tickMs = new Date(tick[0]!.occurredAt).getTime();
-    const tickEvents = tick.map((i) => i.event);
-    await runner(tickEvents, tickMs);
+  // ---- Accumulator frame loop -----------------------------------------------
+  const frameMs = opts.frameMs ?? DEFAULT_FRAME_MS;
+  const maxTicksPerFrame = Math.max(1, Math.floor(opts.maxTicksPerFrame ?? DEFAULT_MAX_TICKS_PER_FRAME));
+  const optEvery = Math.max(1, Math.floor(opts.optimizerEveryTicks ?? 1));
 
-    // (g) Broadcast ONE snapshot per tick (presentation layer).
-    if (opts.broadcast !== undefined) {
-      await opts.broadcast(tickMs);
+  // simClock lives in the ticks' ABSOLUTE timeline (Unix-epoch ms): seed it 1ms
+  // BEFORE the first tick so NO tick is due until the first frame's advance moves
+  // it forward (so a paused/zero-advance first frame drains nothing). The advance
+  // amount is purely a function of wall-delta × speed; the ORIGIN is the stream's
+  // start so `occurredAt ≤ simClock` is meaningful in the same timeline.
+  let simClock = tickTimesMs.length > 0 ? tickTimesMs[0]! - 1 : 0;
+  let nextIndex = 0; // first undrained tick
+  let lastWall = performance.now();
+  // Optimizer landmark batching: collect drained ticks' events, fire every
+  // `optEvery` drained ticks (and once more after the last tick drains).
+  let ticksSinceOpt = 0;
+  let pendingOptEvents: SimulatedEvent["event"][] = [];
+  let lastOptTickMs = 0;
+  // VIZ-13 / VIZ-14: induction + delivery events drained this frame, surfaced to
+  // the per-frame broadcast (read + cleared at the broadcast site).
+  let pendingInductions: InductionEvent[] = [];
+  let pendingDeliveries: DeliveryEvent[] = [];
+
+  // Process exactly the ticks selected for THIS frame (in order): append each
+  // tick (per-tick `occurredAt`), then fold the whole batch ONCE, then fire the
+  // coalesced optimizer landmark. Returns the simMs to broadcast for the frame.
+  async function drainFrame(count: number, clampSimClock: number): Promise<number> {
+    if (count === 0) return clampSimClock;
+    let broadcastSimMs = clampSimClock;
+    // (a)+(b) append every drained tick (per-tick); collect the optimizer batch.
+    for (let k = 0; k < count; k += 1) {
+      const idx = nextIndex;
+      const tick = ticks[idx]!;
+      const tickMs = tickTimesMs[idx]!;
+      await appendTick(tick);
+      for (const item of tick) pendingOptEvents.push(item.event);
+      pendingInductions.push(...collectInductions(tick));
+      pendingDeliveries.push(...collectDeliveries(tick));
+      lastOptTickMs = tickMs;
+      broadcastSimMs = tickMs;
+      nextIndex += 1;
     }
 
-    driven += 1;
+    // (c)+(d)+(e) ONE batched fold/detection/catch-up over the whole frame.
+    await foldFrame();
 
-    // Wall-clock pause between ticks (presentation-layer only). The interval is
-    // read FRESH each iteration so a live speed change (SpeedController) takes
-    // effect on the very next gap — not captured once at start.
-    if (driven < ticks.length) {
-      const intervalMs = resolveTickIntervalMs(opts.getTickIntervalMs, opts.tickIntervalMs);
-      if (intervalMs > 0) await sleep(intervalMs);
+    // Optimizer landmark (sim-time cadence): fire NON-blocking AFTER the fold (so
+    // the snapshot reflects the frame) every `optEvery` drained ticks, and once
+    // more after the final tick of the stream drains.
+    ticksSinceOpt += count;
+    const lastDrained = nextIndex >= ticks.length;
+    if (ticksSinceOpt >= optEvery || lastDrained) {
+      coalescer.trigger(pendingOptEvents, lastOptTickMs);
+      pendingOptEvents = [];
+      ticksSinceOpt = 0;
+    }
+
+    return broadcastSimMs;
+  }
+
+  // Drain the whole stream, one fixed wall-clock frame at a time.
+  while (nextIndex < ticks.length) {
+    await sleep(frameMs);
+
+    const now = performance.now();
+    const wallDeltaMs = now - lastWall;
+    lastWall = now;
+
+    // Read the live speed FRESH each frame; pause ⇒ treat multiplier as 0 so the
+    // simClock freezes (no drain). Presentation only — never reaches `simulate`.
+    const paused = opts.isPaused?.() === true;
+    const multiplier = paused ? 0 : (opts.getMultiplier?.() ?? 1);
+
+    simClock += computeSimAdvanceMs({
+      wallDeltaMs,
+      multiplier,
+      msPerTick: MS_PER_TICK,
+      defaultIntervalMs: DEFAULT_INTERVAL_MS,
+    });
+
+    const { count, clampSimClock } = selectDrain({
+      tickTimesMs,
+      nextIndex,
+      simClock,
+      maxTicks: maxTicksPerFrame,
+    });
+    simClock = clampSimClock;
+
+    const broadcastSimMs = await drainFrame(count, simClock);
+
+    // ONE delta per FRAME — even when nothing drained — so the client clock /
+    // speed envelope keeps flowing (e.g. pause reflects via simSpeed:0). Attach +
+    // clear this frame's induction (VIZ-13) + delivery (VIZ-14) events.
+    if (opts.broadcast !== undefined) {
+      const frameInductions = pendingInductions;
+      const frameDeliveries = pendingDeliveries;
+      pendingInductions = [];
+      pendingDeliveries = [];
+      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries);
     }
   }
-  return { ticks: driven };
+
+  // Drain the coalesced optimizer to idle, then a final broadcast at the clock.
+  await coalescer.whenIdle();
+  if (opts.broadcast !== undefined) {
+    await opts.broadcast(simClock, pendingInductions, pendingDeliveries);
+    pendingInductions = [];
+    pendingDeliveries = [];
+  }
+
+  return { ticks: nextIndex };
+}
+
+// ---------------------------------------------------------------------------
+// CONT-01/02: open-ended (continuous) live driver
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for the OPEN-ENDED live driver (CONT-01/02) — the continuous-operation
+ * variant of {@link driveSimulationPaced}. Reuses every pacing field; adds a
+ * cooperative {@link DriveSimulationOpenEndedOptions.stopped} predicate read each
+ * frame.
+ *
+ * DETERMINISM CONTRACT (inherited): pacing (`frameMs` / multiplier / pause /
+ * `stopped`) is PRESENTATION only — it shapes cadence + batching and NEVER enters
+ * the sim engine. The deterministic event STREAM is generated in finite chunks
+ * (same seed → same events in the same order); only the *delivery rate* is
+ * wall-clock. `durationTicks` here is the INITIAL chunk horizon, not a ceiling.
+ */
+export interface DriveSimulationOpenEndedOptions extends DriveSimulationPacedOptions {
+  /**
+   * Cooperative stop predicate, read FRESH each frame. While it returns `false`
+   * the loop runs forever (continuous operation). Return `true` to terminate the
+   * loop cleanly at the next frame boundary. ABSENT ⇒ runs until the process
+   * exits. The composition root (`main.ts`) injects it so the demo can be stopped.
+   */
+  readonly stopped?: () => boolean;
+  /**
+   * Sim-tick horizon generated per chunk. **Default 500** (≈8.3 sim-hours). The
+   * driver advances ONE {@link SimContinuation} by this many ticks on demand
+   * (never pre-baking an infinite stream — Pitfall 1; never REgenerating the
+   * prefix — Plan 19-08), extending the window only as the paced `simClock`
+   * approaches the end of the current chunk. Larger ⇒ fewer (but bigger)
+   * continuation steps; smaller ⇒ tighter memory bound.
+   */
+  readonly chunkTicks?: number;
+  /**
+   * Plan 19-08 Task C — OPT-IN bounded persisted retention for the continuous
+   * path. When provided, the driver periodically prunes the Postgres `events` log
+   * (rows safely below the projection watermark) and ages out stale projection
+   * rows, so a genuinely indefinite run stays bounded END-TO-END (not just RAM).
+   * ABSENT ⇒ retention OFF — the full log is retained (the finite/test path stays
+   * replay-from-0 byte-identical, never reading a pruned log).
+   */
+  readonly retention?: RetentionConfig;
+  /**
+   * Testability hook (Plan 19-08 Task B): invoked once per frame with the current
+   * BOUNDED working-set sizes — the retained (undrained) tick-window length and
+   * the `destHub` index size. Lets a test assert the driver's RAM stays bounded by
+   * ~the window, NOT by run length. Pure observation; no functional impact.
+   */
+  readonly onWindowState?: (state: {
+    readonly retainedTicks: number;
+    readonly destHubSize: number;
+  }) => void;
+}
+
+/** Default per-chunk sim-tick horizon for the open-ended driver. */
+const DEFAULT_CHUNK_TICKS = 500;
+
+/**
+ * Drive the simulation LIVE and OPEN-ENDED (CONT-01/02) — runs indefinitely until
+ * the injected `stopped()` predicate fires (or the process exits).
+ *
+ * Contrast with {@link driveSimulationPaced}, which calls `simulate()` ONCE to
+ * pre-bake the ENTIRE finite stream into `ticks[]` and drains it. That is
+ * incompatible with an indefinite run (you cannot pre-bake an infinite stream —
+ * it would OOM). Instead this driver generates the deterministic stream in finite
+ * CHUNKS of `chunkTicks` (default 500) on demand: it extends a `horizonTick`
+ * ceiling whenever the paced `simClock` nears the end of the already-generated
+ * ticks, regenerating the deterministic stream up to the new horizon and driving
+ * ONLY the newly-revealed ticks (the prefix is byte-identical by determinism, so
+ * re-driving it is neither needed nor done).
+ *
+ * It reuses the EXACT pacing math (`computeSimAdvanceMs` + `selectDrain`), the
+ * per-tick `appendTick`, the once-per-frame `foldFrame`, the non-blocking
+ * coalesced optimizer, and the one-delta-per-frame broadcast from
+ * `driveSimulationPaced` — so behaviour per drained tick is identical; only the
+ * stream SOURCE (chunked + unbounded) and the loop TERMINATION (a `stopped()`
+ * predicate instead of `nextIndex < ticks.length`) differ.
+ *
+ * Resolves `{ ticks }` (the count of drained ticks) once `stopped()` returns true
+ * and the coalescer has gone idle.
+ */
+export async function driveSimulationOpenEnded(
+  opts: DriveSimulationOpenEndedOptions,
+): Promise<{ ticks: number }> {
+  // The deterministic sim options threaded into the continuation core. The SAME
+  // options + seed ⇒ a byte-identical stream, advanced one chunk at a time.
+  const simFeatureOpts = {
+    ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
+    ...(opts.overCarry !== undefined ? { overCarry: opts.overCarry } : {}),
+    ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.hosEnabled !== undefined ? { hosEnabled: opts.hosEnabled } : {}),
+    ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
+      : {}),
+  };
+  const chunkTicks = Math.max(1, Math.floor(opts.chunkTicks ?? DEFAULT_CHUNK_TICKS));
+
+  // Plan 19-08 Task B: ONE SimContinuation drives the run. We advance it by
+  // `chunkTicks` per step and append ONLY the freshly-revealed ticks to a BOUNDED
+  // sliding window — the prefix is NEVER regenerated (the O(n²) regen is gone) and
+  // the window holds at most ~chunkTicks + a frame of undrained ticks.
+  let continuation: SimContinuation | undefined;
+  let horizonTick = 0;
+  /** Advance the continuation by one chunk; return the newly-revealed per-tick groups. */
+  function advanceOneChunk(): SimulatedEvent[][] {
+    horizonTick += chunkTicks;
+    const start: SimStart = continuation ?? { seed: opts.seed };
+    const { events, continuation: next } = runToHorizon(start, horizonTick, simFeatureOpts);
+    continuation = next;
+    // `events` are ONLY this chunk's events (the prefix is held in the
+    // continuation, not re-emitted), so grouping yields just the new ticks.
+    return intoTicks(events);
+  }
+
+  // The BOUNDED sliding window of undrained ticks (index 0 = next to drain). When
+  // ticks drain we splice them off the FRONT so this never grows with run length.
+  const window: SimulatedEvent[][] = [];
+  const windowTimesMs: number[] = [];
+  function appendChunkToWindow(chunk: SimulatedEvent[][]): void {
+    for (const tick of chunk) {
+      window.push(tick);
+      windowTimesMs.push(new Date(tick[0]!.occurredAt).getTime());
+    }
+  }
+
+  const es = eventStoreView(opts.db);
+  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+
+  const detectionOn = opts.rfid !== undefined;
+  const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
+  // destHub maps the PLANNED destination hub per package. It is populated as
+  // packages are revealed (PackageCreated) and PRUNED as they reach their
+  // destination (PackageArrivedAtHub) — so it stays bounded to in-flight packages,
+  // NOT the run-length total. (Only used when detection is on.)
+  const destHub = new Map<string, string>();
+  const departedHubs = new Set<string>();
+  let cursor = 0n;
+
+  /** Append ONE tick's events (OCC-safe per stream) + maintain bounded indices. */
+  async function appendTick(tick: SimulatedEvent[]): Promise<void> {
+    const perStream = new Map<string, SimulatedEvent[]>();
+    for (const item of tick) {
+      const buf = perStream.get(item.streamId) ?? [];
+      buf.push(item);
+      perStream.set(item.streamId, buf);
+    }
+    for (const [streamId, items] of perStream) {
+      const current = await es
+        .selectFrom("streams")
+        .select("version")
+        .where("stream_id", "=", streamId)
+        .executeTakeFirst();
+      await appendToStream(
+        es,
+        streamId,
+        current?.version ?? 0,
+        items.map((i) => i.event),
+        new Date(items[0]!.occurredAt),
+      );
+    }
+
+    if (detectionOn) {
+      for (const item of tick) {
+        if (item.event.type === "PackageCreated") {
+          // Reveal the package's planned destination hub.
+          destHub.set(item.event.payload.packageId, item.event.payload.destHubId);
+        } else if (item.event.type === "PackageArrivedAtHub") {
+          // The package reached a hub — drop it from the in-flight index (prune).
+          destHub.delete(item.event.payload.packageId);
+        } else if (item.event.type === "TrailerDeparted") {
+          departedHubs.add(item.event.payload.fromHubId);
+        }
+      }
+    }
+  }
+
+  /** Once-per-frame heavy folds (inline projection + detection + catch-up). */
+  async function foldFrame(): Promise<void> {
+    const fresh = await readAll(es, cursor);
+    if (fresh.length > 0) {
+      await opts.db.transaction().execute(async (trx) => {
+        const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
+        for (const ev of fresh) await applyInline(proj, ev);
+      });
+      cursor = fresh[fresh.length - 1]!.globalSeq;
+    }
+
+    if (detectionOn) {
+      await runDetection(
+        detectorReads(opts.db, es, destHub, departedHubs),
+        { config: detectionConfig },
+      );
+      const detected = await readAll(es, cursor);
+      if (detected.length > 0) {
+        await opts.db.transaction().execute(async (trx) => {
+          const proj = projectionView(trx as unknown as Kysely<ProjectionDb>);
+          for (const ev of detected) await applyInline(proj, ev);
+        });
+        cursor = detected[detected.length - 1]!.globalSeq;
+      }
+    }
+
+    await runCatchup(catchupView(opts.db), replayReadAll);
+  }
+
+  // ---- Accumulator frame loop (open-ended) ----------------------------------
+  const frameMs = opts.frameMs ?? DEFAULT_FRAME_MS;
+  const maxTicksPerFrame = Math.max(
+    1,
+    Math.floor(opts.maxTicksPerFrame ?? DEFAULT_MAX_TICKS_PER_FRAME),
+  );
+  const optEvery = Math.max(1, Math.floor(opts.optimizerEveryTicks ?? 1));
+
+  // Prime the window with the FIRST chunk (so the clock can seed off the first
+  // tick). The continuation now holds the rest of the world — no prefix regen.
+  appendChunkToWindow(advanceOneChunk());
+
+  let simClock = windowTimesMs.length > 0 ? windowTimesMs[0]! - 1 : 0;
+  let lastWall = performance.now();
+  let ticksSinceOpt = 0;
+  let pendingOptEvents: SimulatedEvent["event"][] = [];
+  let lastOptTickMs = 0;
+  let drainedTotal = 0;
+  let lastRetentionAtCount = 0;
+  // VIZ-13 / VIZ-14: induction + delivery events drained this frame, surfaced to
+  // the per-frame broadcast.
+  let pendingInductions: InductionEvent[] = [];
+  let pendingDeliveries: DeliveryEvent[] = [];
+
+  /**
+   * Keep the undrained window long enough to feed a frame by advancing the
+   * continuation (NOT regenerating the prefix). Each step reveals only the next
+   * chunk's events. Memory stays bounded by ~chunk size, not by run duration.
+   */
+  function ensureWindow(): void {
+    let guard = 0;
+    while (window.length <= maxTicksPerFrame) {
+      const before = window.length;
+      appendChunkToWindow(advanceOneChunk());
+      // Bail if the engine is genuinely exhausted (no new ticks for a long span).
+      if (window.length === before) {
+        guard += 1;
+        if (guard > 1000) break;
+      } else {
+        guard = 0;
+      }
+    }
+  }
+
+  async function drainFrame(count: number, clampSimClock: number): Promise<number> {
+    if (count === 0) return clampSimClock;
+    let broadcastSimMs = clampSimClock;
+    for (let k = 0; k < count; k += 1) {
+      // Always drain the HEAD of the bounded window (index 0).
+      const tick = window[0]!;
+      const tickMs = windowTimesMs[0]!;
+      await appendTick(tick);
+      for (const item of tick) pendingOptEvents.push(item.event);
+      pendingInductions.push(...collectInductions(tick));
+      pendingDeliveries.push(...collectDeliveries(tick));
+      lastOptTickMs = tickMs;
+      broadcastSimMs = tickMs;
+      // Discard the drained tick from the front so RAM stays bounded.
+      window.shift();
+      windowTimesMs.shift();
+      drainedTotal += 1;
+    }
+
+    await foldFrame();
+
+    ticksSinceOpt += count;
+    if (ticksSinceOpt >= optEvery) {
+      coalescer.trigger(pendingOptEvents, lastOptTickMs);
+      pendingOptEvents = [];
+      ticksSinceOpt = 0;
+    }
+
+    return broadcastSimMs;
+  }
+
+  // Run forever until `stopped()` asks to halt (CONT-01).
+  while (opts.stopped?.() !== true) {
+    await sleep(frameMs);
+
+    const now = performance.now();
+    const wallDeltaMs = now - lastWall;
+    lastWall = now;
+
+    const paused = opts.isPaused?.() === true;
+    const multiplier = paused ? 0 : (opts.getMultiplier?.() ?? 1);
+
+    simClock += computeSimAdvanceMs({
+      wallDeltaMs,
+      multiplier,
+      msPerTick: MS_PER_TICK,
+      defaultIntervalMs: DEFAULT_INTERVAL_MS,
+    });
+
+    // Keep the bounded window ahead of the clock (continuation-advanced).
+    ensureWindow();
+
+    // selectDrain over the window's RELATIVE timeline (index 0 = next to drain).
+    const { count, clampSimClock } = selectDrain({
+      tickTimesMs: windowTimesMs,
+      nextIndex: 0,
+      simClock,
+      maxTicks: maxTicksPerFrame,
+    });
+    simClock = clampSimClock;
+
+    const broadcastSimMs = await drainFrame(count, simClock);
+
+    // Plan 19-08 Task C: bounded persisted retention (CONTINUOUS path ONLY). Prune
+    // the event log below the projection watermark + age out stale projections on
+    // the configured cadence. ABSENT ⇒ retention OFF (the full log is retained).
+    if (opts.retention !== undefined) {
+      const everyTicks = Math.max(1, opts.retention.everyTicks);
+      if (drainedTotal - lastRetentionAtCount >= everyTicks) {
+        lastRetentionAtCount = drainedTotal;
+        await pruneEventLog(opts.db, opts.retention);
+        await ageStaleProjections(opts.db, opts.retention, broadcastSimMs);
+      }
+    }
+
+    // Testability: report the bounded working-set sizes once per frame.
+    opts.onWindowState?.({ retainedTicks: window.length, destHubSize: destHub.size });
+
+    if (opts.broadcast !== undefined) {
+      const frameInductions = pendingInductions;
+      const frameDeliveries = pendingDeliveries;
+      pendingInductions = [];
+      pendingDeliveries = [];
+      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries);
+    }
+  }
+
+  // Flush a final optimizer landmark for any undelivered batch, drain to idle,
+  // then a final broadcast at the clock.
+  if (pendingOptEvents.length > 0) {
+    coalescer.trigger(pendingOptEvents, lastOptTickMs);
+    pendingOptEvents = [];
+  }
+  await coalescer.whenIdle();
+  if (opts.broadcast !== undefined) {
+    await opts.broadcast(simClock, pendingInductions, pendingDeliveries);
+    pendingInductions = [];
+    pendingDeliveries = [];
+  }
+
+  return { ticks: drainedTotal };
 }
 
 /**
@@ -608,6 +1207,17 @@ export async function driveSimulationWithScenario(
     durationTicks: opts.durationTicks,
     ...(opts.rfid !== undefined ? { rfid: opts.rfid } : {}),
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
+    ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
+    ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
+    ...(opts.inductionEnabled !== undefined
+      ? { inductionEnabled: opts.inductionEnabled }
+      : {}),
+    ...(opts.outboundDeliveryEnabled !== undefined
+      ? { outboundDeliveryEnabled: opts.outboundDeliveryEnabled }
+      : {}),
   });
 
   // 2. Apply the scenario knobs (seeded, deterministic).

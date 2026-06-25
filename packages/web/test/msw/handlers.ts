@@ -124,6 +124,7 @@ export const WS_SNAPSHOT: WsEnvelope = {
   type: "snapshot",
   seq: 1,
   simMs: 10_000,
+  simDay: 0,
   speed: SPEED_DEFAULT,
   payload: {
     trailers: [
@@ -155,6 +156,7 @@ export const WS_TICK: WsEnvelope = {
   type: "tick",
   seq: 2,
   simMs: 10_500,
+  simDay: 0,
   speed: SPEED_DEFAULT,
   payload: {
     trailers: [

@@ -50,7 +50,11 @@ export { RollingOptimizerService } from "./optimizer/rolling-service.js";
 export type {
   RollingEpochOutcome,
   RollingOptimizerDeps,
+  RunEpochFn,
 } from "./optimizer/rolling-service.js";
+// Worker-thread optimizer (spec §5): pure `runEpoch` offload + long-lived client.
+export { makeWorkerOptimizer } from "./optimizer/worker-client.js";
+export type { WorkerOptimizer } from "./optimizer/worker-client.js";
 export { attachSnapshotSocket } from "./ws/snapshots.js";
 export type {
   Broadcast,
@@ -68,6 +72,7 @@ export type {
   SnapshotPayload,
   TickPayload,
   TrailerKeyframe,
+  TrailerStop,
   HubState,
   RouteState,
   ExceptionItem,
@@ -76,11 +81,22 @@ export type {
   SimSpeedState,
 } from "./ws/envelope.js";
 export { diffTick } from "./ws/envelope.js";
-export { driveSimulation, driveSimulationPaced } from "./sim/driver.js";
+export {
+  driveSimulation,
+  driveSimulationPaced,
+  driveSimulationOpenEnded,
+} from "./sim/driver.js";
 export type {
   DriveSimulationOptions,
   DriveSimulationPacedOptions,
+  DriveSimulationOpenEndedOptions,
 } from "./sim/driver.js";
+export {
+  pruneEventLog,
+  ageStaleProjections,
+  projectionWatermark,
+} from "./sim/retention.js";
+export type { RetentionConfig } from "./sim/retention.js";
 export { makeSpeedController } from "./sim/speed-controller.js";
 export type {
   SpeedController,

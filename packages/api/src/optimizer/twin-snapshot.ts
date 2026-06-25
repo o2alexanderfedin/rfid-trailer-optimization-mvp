@@ -1,8 +1,15 @@
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
-import type { ProjectionDb } from "@mm/projections";
+import { readAll } from "@mm/event-store";
+import type { OccurredEvent, ProjectionDb } from "@mm/projections";
+import { emptyTrailerFuelState, getTrailerMiles, trailerFuelReducer } from "@mm/projections";
 import type { Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
-import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes } from "@mm/domain";
+import {
+  DEFAULT_TIMING_CONFIG,
+  expectedTransitMinutes,
+  haversineKm,
+  isoToEpochMinutes,
+} from "@mm/domain";
 import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import type {
@@ -54,6 +61,9 @@ export const DEFAULT_TRAILER_CAPACITY = 50;
  */
 const DEFAULT_ROUTE_CAPACITY = 200;
 
+/** Kilometres → statute miles (matches the sim + projections derivation). */
+const KM_TO_MILES = 0.621_371;
+
 /**
  * Default departure offset in minutes from epoch 0. When a trailer has no live
  * departure event in the event store (not yet dispatched), we assign a departure
@@ -78,6 +88,52 @@ function sortedUnique(ids: Iterable<string>): string[] {
  */
 function coordHub(point: LonLat): Hub {
   return { hubId: "x", name: "x", lon: point[0], lat: point[1] };
+}
+
+/**
+ * SP2 (spec §6/§7): fold the trailer-fuel reducer over the WHOLE event log to
+ * derive each trailer's `milesSinceRefuel`. Reuses the same PURE reducer the
+ * catch-up runner uses (DRY) so the optimizer's odometer matches the projection.
+ * Deterministic: the log is read in `global_seq` order and the reducer reads only
+ * logged geometry + event payloads (no clock, no RNG). Returns trailerId → miles.
+ */
+async function computeMilesSinceRefuel(db: SnapshotDb): Promise<Map<string, number>> {
+  const es = db as unknown as Kysely<Database>;
+  const stored = await readAll(es, 0n);
+  let state = emptyTrailerFuelState;
+  for (const s of stored) {
+    const occurred: OccurredEvent = { event: s.event, occurredAt: s.occurredAt };
+    state = trailerFuelReducer(state, occurred);
+  }
+  const out = new Map<string, number>();
+  for (const trailerId of state.fuel.keys()) {
+    out.set(trailerId, getTrailerMiles(state, trailerId));
+  }
+  return out;
+}
+
+/**
+ * IND-03: scan the event log for `PackageInducted` events and build a
+ * `packageId → deadlineMin` map (epoch-minutes) from each event's `slaDeadlineIso`
+ * (locked at induction). The optimizer reads this to set `TwinBlock.deadlineMin`
+ * for inducted freight, enabling slack / critical-ratio prioritization (IND-03
+ * success criterion 2).
+ *
+ * Deterministic + PURE READ: the log is read in `global_seq` order, so a packageId
+ * appearing more than once resolves last-write-wins. No clock, no RNG, no writes.
+ */
+async function buildInductionDeadlines(db: SnapshotDb): Promise<Map<string, number>> {
+  const es = db as unknown as Kysely<Database>;
+  const stored = await readAll(es, 0n);
+  const out = new Map<string, number>();
+  for (const s of stored) {
+    if (s.event.type !== "PackageInducted") continue;
+    out.set(
+      s.event.payload.packageId,
+      isoToEpochMinutes(s.event.payload.slaDeadlineIso),
+    );
+  }
+  return out;
 }
 
 /**
@@ -113,7 +169,8 @@ function parseRouteRow(
     geometry?: readonly LonLat[];
   };
   const geometry = p.geometry ?? [];
-  const orsDurationS = road?.legs[routeId(p.fromHubId, p.toHubId)]?.duration_s;
+  const roadLeg = road?.legs[routeId(p.fromHubId, p.toHubId)];
+  const orsDurationS = roadLeg?.duration_s;
   const travelMin =
     orsDurationS !== undefined
       ? Math.round(orsDurationS / 60) // ORS road drive time (matches the polyline)
@@ -126,12 +183,28 @@ function parseRouteRow(
             ),
           )
         : TRANSIT_MIN;
+  // SP2 (spec §7): the leg DISTANCE in miles — PREFER the committed ORS road
+  // `distance_m` (the same road the polyline shows), else the great-circle
+  // (haversine) miles between the geometry endpoints (the from/to hub coords).
+  // Integer-rounded at the boundary (anti-P12). Fail-soft to 0 for a <2-point
+  // geometry (no leg distance derivable) so the optimizer simply never refuels it.
+  const orsDistanceM = roadLeg?.distance_m;
+  const distanceMiles =
+    orsDistanceM !== undefined
+      ? Math.round((orsDistanceM / 1000) * KM_TO_MILES)
+      : geometry.length >= 2
+        ? Math.round(
+            haversineKm(coordHub(geometry[0]!), coordHub(geometry[geometry.length - 1]!)) *
+              KM_TO_MILES,
+          )
+        : 0;
   return {
     routeId: p.routeId,
     fromHubId: p.fromHubId,
     toHubId: p.toHubId,
     travelMin,
     capacity: DEFAULT_ROUTE_CAPACITY,
+    distanceMiles,
   };
 }
 
@@ -195,6 +268,9 @@ function buildTrailerBlocks(
   hubOutboundIndex: ReadonlyMap<string, readonly string[]>,
   routes: readonly TwinRoute[],
   currentHubId: string | null,
+  // IND-03 — packageId → SLA deadline (epoch-minutes). Default empty so existing
+  // callers compile unchanged and non-inducted packages stay byte-identical.
+  inductionDeadlines: ReadonlyMap<string, number> = new Map(),
 ): readonly TwinBlock[] {
   if (assignedPackageIds.length === 0) return [];
 
@@ -229,10 +305,14 @@ function buildTrailerBlocks(
       pkgToHub.get(pkgId) ??
       [...routeDestHubs][0] ??
       "unknown";
+    // IND-03: carry the SLA deadline only for inducted packages — additive +
+    // optional, so non-inducted blocks reproduce byte-identically (no field).
+    const deadlineMin = inductionDeadlines.get(pkgId);
     return {
       blockId: pkgId,
       nextUnloadHubId,
       volume: 1, // unit-volume per package (integer, P12)
+      ...(deadlineMin !== undefined ? { deadlineMin } : {}),
     };
   });
 }
@@ -313,18 +393,40 @@ export async function buildTwinSnapshot(
     }
   }
 
+  // SP2 (spec §6/§7): fold the trailer-fuel reducer over the log to derive each
+  // trailer's `milesSinceRefuel` (the optimizer's fuel-aware odometer). The reducer
+  // is the SAME pure projection logic the catch-up runner uses (DRY) — it accrues
+  // each completed leg's geometry miles on `TrailerArrivedAtHub` and resets on
+  // `TruckRefueled`. Reading the events ordered by `global_seq` keeps the fold
+  // deterministic (no clock/RNG). Only the four leg/refuel-relevant event types
+  // affect the result; reading just those keeps the scan small.
+  // IND-03: also scan the log for PackageInducted deadlines (packageId →
+  // epoch-minutes). Runs alongside the fuel fold — both are pure read scans of the
+  // same log. Used to set TwinBlock.deadlineMin for inducted freight.
+  const [milesSinceRefuelByTrailer, inductionDeadlines] = await Promise.all([
+    computeMilesSinceRefuel(db),
+    buildInductionDeadlines(db),
+  ]);
+
   // 3. Read operational projections. OPT-HOS-01: also read the Phase-13
   //    `driver_status` projection (driver → remaining legal drive minutes, already
   //    computed by the Phase-10 HOS engine at projection time) so the optimizer can
   //    SOFT-prefer more-rested drivers. OPT-HOS-02 (GAP-1 fix): ALSO read the full
   //    `hos_clock` JSONB so the optimizer's HARD HOS gate can re-walk every driving
   //    leg. Read deterministically — no recompute, no clock, no RNG.
+  // FLOW-04 / Phase 21 (scopeHash determinism): explicit ORDER BY over a stable
+  // key. `canonicalize` (freeze-idempotency.ts) sorts object KEYS but PRESERVES
+  // array order, so the SQL read order is load-bearing for `scopeHash`. With BOTH
+  // flow directions (distribution + consolidation) populating `hub_inventory`, an
+  // unordered read returns rows in arbitrary physical order across restarts ⇒
+  // `scopeHash` shifts ⇒ a frozen epoch re-fires. Order by the PRIMARY KEY of each.
   const [trailerRows, hubInventoryRows, driverStatusRows] = await Promise.all([
-    db.selectFrom("trailer_state").selectAll().execute(),
-    db.selectFrom("hub_inventory").selectAll().execute(),
+    db.selectFrom("trailer_state").selectAll().orderBy("trailer_id").execute(),
+    db.selectFrom("hub_inventory").selectAll().orderBy("hub_id").execute(),
     db
       .selectFrom("driver_status")
       .select(["driver_id", "remaining_drive_minutes", "hos_clock"])
+      .orderBy("driver_id")
       .execute(),
   ]);
 
@@ -373,6 +475,7 @@ export async function buildTwinSnapshot(
         hubOutboundIndex,
         routes,
         currentHubId,
+        inductionDeadlines,
       );
 
       const departureMin =
@@ -400,6 +503,10 @@ export async function buildTwinSnapshot(
             : { driverId, remainingDriveMinutes }
           : undefined;
 
+      // SP2 (spec §7): attach the trailer's miles-since-refuel so the fuel-aware
+      // epoch can decide WHERE a refuel falls. Absent (no fuel events yet) ⇒ 0,
+      // which adds no refuel — byte-identical to the pre-SP2 snapshot.
+      const milesSinceRefuel = milesSinceRefuelByTrailer.get(r.trailer_id) ?? 0;
       const trailer: TwinTrailer = {
         trailerId: r.trailer_id,
         currentHubId,
@@ -407,6 +514,7 @@ export async function buildTwinSnapshot(
         capacity: DEFAULT_TRAILER_CAPACITY,
         route: stops,
         blocks,
+        milesSinceRefuel,
         ...(driver !== undefined ? { driver } : {}),
       };
       return trailer;

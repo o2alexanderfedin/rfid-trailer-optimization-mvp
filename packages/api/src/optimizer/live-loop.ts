@@ -1,4 +1,4 @@
-import type { DomainEvent } from "@mm/domain";
+import type { DomainEvent, FuelConfig } from "@mm/domain";
 import type { EpochResult, TwinSnapshot } from "@mm/optimizer";
 import type { RollingOptimizerService } from "./rolling-service.js";
 
@@ -57,6 +57,13 @@ export interface RollingLoopConfig {
    * `[now, now+freeze]` is skipped this epoch — its plan is left untouched.
    */
   readonly freezeWindowMin: number;
+  /**
+   * SP2 (spec §7) — OPTIONAL fuel config forwarded into every epoch's `EpochInput`
+   * so the optimizer is FUEL-AWARE on the live path. Absent OR disabled ⇒ no
+   * refuel time is folded (byte-identical to the pre-SP2 plan). The composition
+   * root passes `{ ...DEFAULT_FUEL_CONFIG, enabled: FUEL_ENABLED }` to match the sim.
+   */
+  readonly fuelConfig?: FuelConfig;
 }
 
 /** What the caller passes per tick (the sim/event time + triggering events). */
@@ -93,11 +100,13 @@ export class RollingLoop {
   private readonly service: RollingOptimizerService;
   private readonly buildSnapshot: () => Promise<TwinSnapshot>;
   private readonly freezeWindowMin: number;
+  private readonly fuelConfig: FuelConfig | undefined;
 
   constructor(config: RollingLoopConfig) {
     this.service = config.service;
     this.buildSnapshot = config.buildSnapshot;
     this.freezeWindowMin = config.freezeWindowMin;
+    this.fuelConfig = config.fuelConfig;
   }
 
   /**
@@ -115,7 +124,13 @@ export class RollingLoop {
       nowMin,
       freezeWindowMin: this.freezeWindowMin,
     };
-    const epochInput = { events: input.events, twinSnapshot };
+    // SP2: forward the fuel config so the epoch is fuel-aware on the live path.
+    // Omitted when undefined so a non-fuel deployment is byte-identical (the epoch
+    // defaults to DEFAULT_FUEL_CONFIG, which is disabled).
+    const epochInput =
+      this.fuelConfig === undefined
+        ? { events: input.events, twinSnapshot }
+        : { events: input.events, twinSnapshot, fuelConfig: this.fuelConfig };
     const { result } = await this.service.runOnce(epoch, epochInput);
     return result;
   }

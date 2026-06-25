@@ -56,6 +56,32 @@ export interface TrailerKeyframe {
   readonly state: "onTime" | "slaRisk" | "late" | "idle";
   /** 0..1 fill ratio — optional, only when it changes (UI-02 hint). */
   readonly util?: number;
+  /**
+   * VIZ-12 — flow direction of the current leg. `"outbound"` = center→spoke
+   * distribution; `"consolidation"` = spoke→center consolidation. Derived from
+   * the leg origin (center hub ⇒ outbound). OPTIONAL + additive (like `util`):
+   * older clients / snapshot payloads without it are unaffected.
+   */
+  readonly direction?: "outbound" | "consolidation";
+}
+
+/**
+ * SP2 (spec §8) — a MID-LEG truck STOP for the live map: the trailer parks at the
+ * interpolated route position (`lon`/`lat`, computed server-side by the geo-track
+ * projection) for `durationMinutes` starting at `startMs`. `kind` drives the
+ * distinct parked/refueling marker style. ADDITIVE + OPTIONAL on the payload — a
+ * client that predates it ignores it; an older server omits it.
+ */
+export interface TrailerStop {
+  readonly trailerId: string;
+  readonly tripId: string;
+  readonly kind: "rested" | "refueling";
+  readonly lon: number;
+  readonly lat: number;
+  /** Sim-clock ms the stop begins (the geo-track keyframe `t`). */
+  readonly startMs: number;
+  /** Whole minutes the trailer is parked here (the stop's dwell). */
+  readonly durationMinutes: number;
 }
 
 /** VIZ-03 hub metrics (integer buckets for zero-allocation `StyleFunction`). */
@@ -101,6 +127,36 @@ export interface ExceptionItem {
   readonly simMs: number;
 }
 
+/**
+ * VIZ-13 — a package inducted at a spoke hub this tick. TRANSIENT: present only
+ * on a `TickPayload` (never `SnapshotPayload`), so a reconnect/resync does NOT
+ * re-animate all historical inductions (Pitfall 7).
+ */
+export interface InductionEvent {
+  readonly packageId: string;
+  readonly inductionHubId: string;
+  readonly destHubId: string;
+  readonly slaClass: string;
+  readonly slaDeadlineIso: string;
+  readonly occurredAt: string;
+}
+
+/**
+ * VIZ-14 — a package delivered at its DESTINATION hub this tick. TRANSIENT:
+ * present only on a `TickPayload` (never `SnapshotPayload`), so a reconnect/
+ * resync does NOT re-animate all historical deliveries (Pitfall 7 — the same
+ * rule as {@link InductionEvent}).
+ */
+export interface DeliveryEvent {
+  readonly packageId: string;
+  /** The destination hub the package was delivered at. */
+  readonly hubId: string;
+  /** Whole-minute ISO (epochMinutesToIso canonical) of the delivery tick. */
+  readonly deliveredAt: string;
+  /** True iff `deliveredAt <= slaDeadlineIso` (D-22-5). */
+  readonly onTime: boolean;
+}
+
 /** UI-04 — plan re-optimization made visible. */
 export interface PlanDelta {
   readonly trailerId: string;
@@ -140,6 +196,12 @@ export interface KpiSnapshot {
 /** Full baseline — sent on connect / client-requested resync. */
 export interface SnapshotPayload {
   readonly trailers: readonly TrailerKeyframe[];
+  /**
+   * SP2 (spec §8) — the mid-leg parked/refueling stops to render. OPTIONAL +
+   * additive: an older server omits it (the client reads `?? []`), so the payload
+   * stays back-compatible. The production builder always sets it (possibly empty).
+   */
+  readonly trailerStops?: readonly TrailerStop[];
   readonly hubs: readonly HubState[];
   readonly routes: readonly RouteState[];
   /**
@@ -151,6 +213,9 @@ export interface SnapshotPayload {
    */
   readonly kpis?: KpiSnapshot;
   readonly exceptionsOpen: readonly ExceptionItem[];
+  // NOTE: `deliveryEvents` (and `inductionEvents`) MUST NOT be added here —
+  // Pitfall 7: a reconnect/resync sends the snapshot, and any transient flash
+  // field on it would re-animate ALL historical inductions/deliveries.
 }
 
 /** Per-tick delta — only what changed since the prior tick. */
@@ -159,6 +224,12 @@ export interface TickPayload {
   readonly trailers?: readonly TrailerKeyframe[];
   /** Delete: trailerIds that completed or left the network. */
   readonly trailersGone?: readonly string[];
+  /**
+   * SP2 (spec §8) — the FULL current set of mid-leg stops whenever it changed
+   * (sent wholesale, not per-stop diffed: the set is tiny and a wholesale replace
+   * keeps the client's parked-marker layer trivially consistent).
+   */
+  readonly trailerStops?: readonly TrailerStop[];
   /** Hubs whose metric bucket changed. */
   readonly hubs?: readonly HubState[];
   /** Routes whose metric bucket changed. */
@@ -171,6 +242,19 @@ export interface TickPayload {
   readonly exceptionsResolved?: readonly string[];
   /** Plan deltas from a re-optimization event. */
   readonly planChanges?: readonly PlanDelta[];
+  /**
+   * VIZ-13 — packages inducted at spoke hubs this tick (TRANSIENT). Drives the
+   * pulsing induction-marker animation. Present ONLY here, never on
+   * `SnapshotPayload` (a reconnect must not re-flash historical inductions).
+   */
+  readonly inductionEvents?: readonly InductionEvent[];
+  /**
+   * VIZ-14 — packages delivered at destination hubs this tick (TRANSIENT). Drives
+   * the destination-hub flash animation. Present ONLY here, never on
+   * `SnapshotPayload` (a reconnect must NOT re-flash historical deliveries — the
+   * same Pitfall-7 rule as `inductionEvents`).
+   */
+  readonly deliveryEvents?: readonly DeliveryEvent[];
 }
 
 // ---------------------------------------------------------------------------
@@ -183,10 +267,15 @@ export interface TickPayload {
  * `speed` is an envelope-level field (beside `simMs`, NOT inside `payload`), so
  * the client can drive its local tween clock at the server's effective rate and
  * `diffTick` (which only operates on payloads) is untouched.
+ *
+ * CONT-03: `simDay` is likewise an envelope-level field (beside `simMs`) — the
+ * sim-day counter derived from the deterministic virtual clock (`simMs`), NOT the
+ * wall clock — so the operator UI can show continuous multi-period operation. It
+ * bypasses `diffTick` (always sent), the same convention as `speed`.
  */
 export type WsEnvelope =
-  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly speed: SimSpeedState; readonly payload: SnapshotPayload }
-  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly speed: SimSpeedState; readonly payload: TickPayload };
+  | { readonly v: 1; readonly type: "snapshot"; readonly seq: number; readonly simMs: number; readonly simDay: number; readonly speed: SimSpeedState; readonly payload: SnapshotPayload }
+  | { readonly v: 1; readonly type: "tick";     readonly seq: number; readonly simMs: number; readonly simDay: number; readonly speed: SimSpeedState; readonly payload: TickPayload };
 
 // ---------------------------------------------------------------------------
 // diffTick: pure delta builder (data-in / data-out, no I/O, unit-testable)
@@ -221,7 +310,8 @@ function trailerChanged(prev: TrailerKeyframe, next: TrailerKeyframe): boolean {
     prev.departMs !== next.departMs ||
     prev.etaMs !== next.etaMs ||
     prev.state !== next.state ||
-    prev.util !== next.util
+    prev.util !== next.util ||
+    prev.direction !== next.direction
   );
 }
 
@@ -255,6 +345,7 @@ export function diffTick(prev: SnapshotPayload, next: SnapshotPayload): TickPayl
   const result: {
     trailers?: TrailerKeyframe[];
     trailersGone?: string[];
+    trailerStops?: TrailerStop[];
     hubs?: HubState[];
     routes?: RouteState[];
     kpis?: Partial<KpiSnapshot>;
@@ -283,6 +374,15 @@ export function diffTick(prev: SnapshotPayload, next: SnapshotPayload): TickPayl
   }
   gone.sort(byString);
   if (gone.length > 0) result.trailersGone = gone;
+
+  // --- SP2 trailer stops: wholesale replace when the set changed --------------
+  // The set is tiny (only in-flight stops) so a full replace on any change keeps
+  // the client's parked-marker layer trivially consistent (no per-stop diff/key).
+  const prevStops = prev.trailerStops ?? [];
+  const nextStops = next.trailerStops ?? [];
+  if (JSON.stringify(prevStops) !== JSON.stringify(nextStops)) {
+    result.trailerStops = [...nextStops];
+  }
 
   // --- Hubs: upsert (bucket changed or new) --------------------------------
   const prevHubs = new Map<string, HubState>(prev.hubs.map((h) => [h.id, h]));

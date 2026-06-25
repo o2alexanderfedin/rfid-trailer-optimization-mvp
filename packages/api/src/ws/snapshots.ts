@@ -8,17 +8,21 @@ import {
   readOpenExceptions,
 } from "@mm/projections";
 import { assertNever, type Severity } from "@mm/domain";
+import { EPOCH_MS, MEMPHIS } from "@mm/simulation";
 import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
 import {
   diffTick,
+  type DeliveryEvent,
   type ExceptionItem,
   type HubState,
+  type InductionEvent,
   type RouteState,
   type SimSpeedState,
   type SnapshotPayload,
   type TickPayload,
   type TrailerKeyframe,
+  type TrailerStop,
   type WsEnvelope,
 } from "./envelope.js";
 import type { SpeedController } from "../sim/speed-controller.js";
@@ -73,9 +77,15 @@ export type SnapshotPayloadBuilder = (db: ApiDb) => Promise<SnapshotPayload>;
 /**
  * Broadcast one tick delta to all connected clients.
  * `simMs` is the authoritative sim-clock milliseconds for this tick.
- * Returns the `WsEnvelope` sent (type:"tick").
+ * `inductionEvents` (VIZ-13) are the packages inducted during this tick/frame —
+ * TRANSIENT, attached to the tick payload to drive the pulsing-marker animation
+ * (never persisted, never on a snapshot). Returns the `WsEnvelope` sent.
  */
-export type Broadcast = (simMs: number) => Promise<WsEnvelope>;
+export type Broadcast = (
+  simMs: number,
+  inductionEvents?: readonly InductionEvent[],
+  deliveryEvents?: readonly DeliveryEvent[],
+) => Promise<WsEnvelope>;
 
 /** Options for {@link attachSnapshotSocket} (dependency inversion / testing). */
 export interface SnapshotSocketOptions {
@@ -208,6 +218,152 @@ export function trailerStateFor(
   return implicatedTrailerIds.has(trailerId) ? "slaRisk" : baseState;
 }
 
+/**
+ * The `/api/routes` DTO id for a directed leg (`route-FROM-TO`).
+ *
+ * VIZ-02 LIVE-PATH CONTRACT: this MUST equal the routeId the client keys its
+ * route LineString geometry by (`fetchRoutes()` → `routeDtos.get(routeId)` in
+ * `MapView._upsertTrailerAnim`). A trailer keyframe whose `routeId` is anything
+ * else (e.g. the tripId) fails that lookup, so the trailer never gets a route to
+ * tween along and stays frozen at its `[0,0]` stub geometry — invisible on the map.
+ */
+export function legRouteId(fromHubId: string, toHubId: string): string {
+  return `route-${fromHubId}-${toHubId}`;
+}
+
+/** Great-circle km between two `[lon, lat]` points (haversine). */
+function haversineKm(a: readonly [number, number], b: readonly [number, number]): number {
+  const R = 6371;
+  const toRad = (d: number): number => (d * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+/**
+ * Estimated transit minutes for a leg from its route polyline length / an average
+ * HGV speed. Used to set a realistic `etaMs` for an IN-TRANSIT trailer (one with a
+ * depart keyframe but no arrive keyframe yet), so the client tween glides the truck
+ * across the WHOLE route over the real leg duration instead of snapping it to the
+ * destination after a flat 1-hour guess (which left trucks parked on top of the hub
+ * markers for most of each leg). When the arrive keyframe arrives, the real arrival
+ * time supersedes this estimate. Pure + deterministic.
+ */
+export function legTransitMinutes(
+  geometry: readonly (readonly [number, number])[],
+  avgSpeedKmh = 80,
+): number {
+  let km = 0;
+  for (let i = 1; i < geometry.length; i++) {
+    const prev = geometry[i - 1];
+    const cur = geometry[i];
+    if (prev !== undefined && cur !== undefined) km += haversineKm(prev, cur);
+  }
+  return avgSpeedKmh > 0 ? (km / avgSpeedKmh) * 60 : 0;
+}
+
+/** Geo keyframe fields used to bound a tween leg (structural subset of GeoKeyframe). */
+interface LegKeyframe {
+  readonly trailerId: string;
+  readonly tripId: string;
+  readonly kind: "depart" | "arrive";
+  readonly t: string;
+}
+
+/** An in-flight trip's directed leg (structural subset of the geo_inflight_trip row). */
+interface InflightLeg {
+  readonly trip_id: string;
+  readonly from_hub_id: string;
+  readonly to_hub_id: string;
+}
+
+/**
+ * Assemble one `TrailerKeyframe` per trailer from geo-track keyframes, using the
+ * LATEST depart + earliest arrive to bound the tween leg (idle when only an
+ * arrive keyframe exists).
+ *
+ * CRITICAL VIZ-02 live-path fix: `routeId` is resolved to the `/api/routes`
+ * geometry key (`route-FROM-TO`) via the trip's in-flight leg — NOT the tripId.
+ * Emitting the tripId (the prior behaviour) made every client route lookup miss,
+ * so trailers stayed frozen at `[0,0]` and never appeared on the map. The
+ * hermetic e2e fed fixtures where routeId already matched, so it never exercised
+ * this live mismatch.
+ *
+ * Pure + deterministic (no I/O, no Date.now) — unit-tested.
+ */
+export function buildTrailerKeyframes(
+  keyframes: readonly LegKeyframe[],
+  inflightTrips: readonly InflightLeg[],
+  implicatedTrailerIds: ReadonlySet<string>,
+  /** routeId → estimated leg transit MINUTES (from route length), for in-transit etaMs. */
+  legMinutesByRoute: ReadonlyMap<string, number> = new Map(),
+): TrailerKeyframe[] {
+  // tripId → `route-FROM-TO` for every currently in-flight leg.
+  const routeIdByTrip = new Map<string, string>();
+  // VIZ-12: tripId → flow direction. A leg from the center (MEMPHIS) is an
+  // outbound distribution leg; any other origin (a spoke) is a spoke→center
+  // consolidation leg. Derived purely from the leg origin — deterministic.
+  const directionByTrip = new Map<string, "outbound" | "consolidation">();
+  for (const trip of inflightTrips) {
+    routeIdByTrip.set(trip.trip_id, legRouteId(trip.from_hub_id, trip.to_hub_id));
+    directionByTrip.set(
+      trip.trip_id,
+      trip.from_hub_id === MEMPHIS.hubId ? "outbound" : "consolidation",
+    );
+  }
+
+  const departures = new Map<string, { tripId: string; ms: number }>();
+  const arrivals = new Map<string, { tripId: string; ms: number }>();
+  for (const k of keyframes) {
+    const ms = isoToMs(k.t);
+    if (k.kind === "depart") {
+      const prev = departures.get(k.trailerId);
+      if (prev === undefined || ms > prev.ms) departures.set(k.trailerId, { tripId: k.tripId, ms });
+    } else {
+      const prev = arrivals.get(k.trailerId);
+      if (prev === undefined || ms < prev.ms) arrivals.set(k.trailerId, { tripId: k.tripId, ms });
+    }
+  }
+
+  const allIds = new Set<string>(keyframes.map((k) => k.trailerId));
+  return [...allIds]
+    .map((id): TrailerKeyframe => {
+      const dep = departures.get(id);
+      const arr = arrivals.get(id);
+      if (dep !== undefined) {
+        const routeId = routeIdByTrip.get(dep.tripId) ?? "";
+        // In-transit ETA: prefer a real arrive keyframe; else estimate the leg
+        // duration from its route length so the truck glides the WHOLE route
+        // (falls back to 1h only when the leg length is unknown).
+        const estMinutes = legMinutesByRoute.get(routeId);
+        const fallbackEtaMs =
+          dep.ms + (estMinutes !== undefined && estMinutes > 0 ? estMinutes * 60_000 : 3_600_000);
+        const direction = directionByTrip.get(dep.tripId);
+        return {
+          id,
+          routeId,
+          departMs: dep.ms,
+          etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : fallbackEtaMs,
+          state: trailerStateFor(id, "onTime", implicatedTrailerIds),
+          ...(direction !== undefined ? { direction } : {}),
+        };
+      }
+      // Only an arrive keyframe → trailer is idle at a hub (positional, not risk).
+      return {
+        id,
+        routeId: arr !== undefined ? routeIdByTrip.get(arr.tripId) ?? "" : "",
+        departMs: arr?.ms ?? 0,
+        etaMs: arr?.ms ?? 0,
+        state: "idle",
+      };
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /** Per-hub driver-duty tally (HUBQ-08): total + the on_break / resting subsets. */
 export interface DriverDutyBuckets {
   readonly driverCount: number;
@@ -328,30 +484,6 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     proj.selectFrom("driver_status").select(["driver_id", "status"]).execute(),
   ]);
 
-  // Build TrailerKeyframes: one per trailer, from the LATEST depart + earliest
-  // arrive keyframe so we have a departMs/etaMs leg range for tweening.
-  // Trailers with only an "arrive" keyframe (already at a hub) are shown as idle.
-  const departures = new Map<string, { routeId: string; ms: number }>();
-  const arrivals = new Map<string, { routeId: string; ms: number }>();
-
-  for (const k of keyframes) {
-    const ms = isoToMs(k.t);
-    if (k.kind === "depart") {
-      const prev = departures.get(k.trailerId);
-      if (prev === undefined || ms > prev.ms) {
-        departures.set(k.trailerId, { routeId: k.tripId, ms });
-      }
-    } else {
-      const prev = arrivals.get(k.trailerId);
-      if (prev === undefined || ms < prev.ms) {
-        arrivals.set(k.trailerId, { routeId: k.tripId, ms });
-      }
-    }
-  }
-
-  // Collect all trailer ids (from both depart + arrive keyframes)
-  const allIds = new Set<string>(keyframes.map((k) => k.trailerId));
-
   // FIX 9: the set of trailers implicated in any OPEN exception (the detector
   // names the observed trailerId on every wrong-trailer / missed-unload row).
   // This is the REAL signal that drives an in-transit trailer's SLA `state`.
@@ -359,31 +491,66 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
     openExceptions.map((ex) => ex.trailerId),
   );
 
-  const trailers: TrailerKeyframe[] = [...allIds]
-    .map((id): TrailerKeyframe => {
-      const dep = departures.get(id);
-      const arr = arrivals.get(id);
-      if (dep !== undefined) {
-        // FIX 9: base state is "onTime"; escalate to "slaRisk" when the detector
-        // has flagged this trailer (real signal, not a hardcoded constant).
-        return {
-          id,
-          routeId: dep.routeId,
-          departMs: dep.ms,
-          etaMs: arr !== undefined && arr.ms > dep.ms ? arr.ms : dep.ms + 3_600_000, // 1hr fallback
-          state: trailerStateFor(id, "onTime", implicatedTrailerIds),
-        };
-      }
-      // Only arrive keyframe → trailer is idle at a hub (positional, not risk).
-      return {
-        id,
-        routeId: arr?.routeId ?? "",
-        departMs: arr?.ms ?? 0,
-        etaMs: arr?.ms ?? 0,
-        state: "idle",
-      };
-    })
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // Estimated transit minutes per leg (from each route's polyline length) so an
+  // in-transit trailer's etaMs reflects the real leg duration and the client tween
+  // glides it across the WHOLE route rather than snapping to the destination.
+  const legMinutesByRoute = new Map<string, number>();
+  for (const row of geoRouteRows) {
+    legMinutesByRoute.set(
+      legRouteId(row.from_hub_id, row.to_hub_id),
+      legTransitMinutes(row.geometry),
+    );
+  }
+
+  // Build TrailerKeyframes (one per trailer). routeId is resolved to the
+  // `/api/routes` geometry key (`route-FROM-TO`) from the in-flight leg so the
+  // client can tween the trailer along its route polyline. See buildTrailerKeyframes.
+  // SP2: the LEG-bounding tween reads only `depart`/`arrive` keyframes; the new
+  // mid-leg `rested`/`refueling` STOP keyframes are surfaced separately (stops[])
+  // so the client can park the marker without disturbing the tween bounds.
+  const legKeyframes: LegKeyframe[] = keyframes.flatMap((k) =>
+    k.kind === "depart" || k.kind === "arrive"
+      ? [{ trailerId: k.trailerId, tripId: k.tripId, kind: k.kind, t: k.t }]
+      : [],
+  );
+  const trailers: TrailerKeyframe[] = buildTrailerKeyframes(
+    legKeyframes,
+    inflightTripRows,
+    implicatedTrailerIds,
+    legMinutesByRoute,
+  );
+
+  // SP2 (spec §8): the mid-leg stop keyframes for the live map — the client renders
+  // a stationary parked/refueling marker at each stop's interpolated position for
+  // `durationMinutes`. Sorted deterministically (trailer, trip, t) for byte-stable
+  // diffs. Carried on the snapshot payload as `trailerStops`.
+  const trailerStops: TrailerStop[] = keyframes
+    .flatMap((k) =>
+      k.kind === "rested" || k.kind === "refueling"
+        ? [
+            {
+              trailerId: k.trailerId,
+              tripId: k.tripId,
+              kind: k.kind,
+              lon: k.lon,
+              lat: k.lat,
+              startMs: isoToMs(k.t),
+              durationMinutes: k.durationMinutes ?? 0,
+            },
+          ]
+        : [],
+    )
+    .sort((a, b) =>
+      a.trailerId !== b.trailerId
+        ? a.trailerId < b.trailerId
+          ? -1
+          : 1
+        : a.tripId !== b.tripId
+          ? a.tripId < b.tripId
+            ? -1
+            : 1
+          : a.startMs - b.startMs,
+    );
 
   // FIX 3 — Hub states: compute real integer buckets from hub_inventory + exceptions.
   // volumeBucket = quantized total package count (inbound+outbound+staged).
@@ -483,6 +650,8 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
 
   return {
     trailers,
+    // SP2 (spec §8): the mid-leg parked/refueling stops the client renders.
+    trailerStops,
     hubs,
     routes, // FIX 3: real route metrics (was [])
     // F-02: live KPIs come from GET /api/kpis — do NOT carry a zeroed placeholder
@@ -498,8 +667,50 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
 const WS_OPEN = 1; // ws.OPEN
 const WS_CONNECTING = 0; // ws.CONNECTING
 
+/**
+ * CONT-04b: WS backpressure threshold. When a client's OS-managed send buffer
+ * (`socket.bufferedAmount`) exceeds this, the broadcast SKIPS that client's tick
+ * delta for the frame — keeping a backgrounded/saturated client's buffer bounded
+ * over an indefinite run (instead of growing without bound). 256 KB.
+ */
+export const BACKPRESSURE_BYTES = 256 * 1024;
+
+// Plan 19-08 Task D: `EPOCH_MS` is imported from `@mm/simulation` (the SINGLE
+// source of truth) — no duplicated `"2026-04-01…"` literal that could drift.
+/** Milliseconds per sim day. */
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * CONT-03: derive the sim-day counter from the deterministic virtual-clock
+ * `simMs` — NEVER `Date.now()` — so it is replay-stable. Clamped to `>= 0` so the
+ * initial-connect snapshot (`simMs = 0`, which predates the epoch) shows "Sim
+ * Day 0" rather than a large negative number. Pure + exported for unit testing.
+ */
+export function deriveSimDay(simMs: number): number {
+  return Math.max(0, Math.floor((simMs - EPOCH_MS) / MS_PER_DAY));
+}
+
+/**
+ * CONT-04b: the pure send-gate predicate. A tick delta is sent to a socket only
+ * when it is OPEN and its buffered amount is at/below the backpressure threshold.
+ * Exported (pure, no I/O) for unit testing; `sendRawIfOpen` applies it.
+ *
+ * NOTE: this guard is intended for TICK deltas only. The initial-connect snapshot
+ * sends at `bufferedAmount === 0` (a fresh socket), so the guard is a harmless
+ * no-op there — but a client MUST receive its first snapshot to initialize, so
+ * that path does not depend on this gate (Pitfall 4).
+ */
+export function shouldSendToSocket(socket: {
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+}): boolean {
+  if (socket.readyState !== WS_OPEN) return false;
+  if (socket.bufferedAmount > BACKPRESSURE_BYTES) return false;
+  return true;
+}
+
 function sendRawIfOpen(socket: WebSocket, payload: string): void {
-  if (socket.readyState === WS_OPEN) socket.send(payload);
+  if (shouldSendToSocket(socket)) socket.send(payload);
 }
 
 function closeIfOpen(socket: WebSocket): void {
@@ -583,6 +794,7 @@ export function attachSnapshotSocket(
               type: "snapshot",
               seq,
               simMs: 0, // resync resets the client's tween clock to the current state
+              simDay: deriveSimDay(0), // 0 — re-anchored at the connect epoch
               speed: currentSpeed(),
               payload,
             };
@@ -605,6 +817,7 @@ export function attachSnapshotSocket(
           type: "snapshot",
           seq,
           simMs: 0, // initial snapshot: sim clock starts at 0
+          simDay: deriveSimDay(0), // 0 — the first day of the sim
           speed: currentSpeed(),
           payload,
         };
@@ -618,7 +831,11 @@ export function attachSnapshotSocket(
   });
 
   /** Broadcast one tick delta to all connected clients. */
-  return async (simMs: number): Promise<WsEnvelope> => {
+  return async (
+    simMs: number,
+    inductionEvents?: readonly InductionEvent[],
+    deliveryEvents?: readonly DeliveryEvent[],
+  ): Promise<WsEnvelope> => {
     const current = await build(db);
     const prev = baseline ?? emptySnapshotPayload();
     baseline = current;
@@ -627,13 +844,26 @@ export function attachSnapshotSocket(
     // immediate envelope at the right clock anchor (controller.getLastSimMs()).
     speedController.noteSimMs(simMs);
 
-    const delta: TickPayload = diffTick(prev, current);
+    const diff: TickPayload = diffTick(prev, current);
+    // VIZ-13 / VIZ-14: attach the tick's transient induction + delivery events
+    // onto the delta when present — never persisted, never on a snapshot (the
+    // Pitfall-7 guard: these fields exist ONLY on a TickPayload).
+    const withInduction: TickPayload =
+      inductionEvents !== undefined && inductionEvents.length > 0
+        ? { ...diff, inductionEvents }
+        : diff;
+    const delta: TickPayload =
+      deliveryEvents !== undefined && deliveryEvents.length > 0
+        ? { ...withInduction, deliveryEvents }
+        : withInduction;
     seq += 1;
     const envelope: WsEnvelope = {
       v: 1,
       type: "tick",
       seq,
       simMs,
+      // CONT-03: derived from the virtual-clock simMs (never Date.now()).
+      simDay: deriveSimDay(simMs),
       speed: currentSpeed(),
       payload: delta,
     };
@@ -652,6 +882,7 @@ function emptySnapshotPayload(): SnapshotPayload {
   // single source of truth). Omitting it keeps `diffTick` from emitting a delta.
   return {
     trailers: [],
+    trailerStops: [],
     hubs: [],
     routes: [],
     exceptionsOpen: [],

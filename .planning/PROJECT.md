@@ -20,22 +20,19 @@ rehandle** and continuously repair them as conditions change — demonstrated li
 over a simulated USA hub network. If everything else fails, the load planner + operational
 twin producing explainable plans must work.
 
-## Current Milestone: v1.2 Driver HOS & Hub Detail
+## Current Milestone: v2.0 Complete Simulation Model
 
-**Goal:** Model driver Hours-of-Service (HOS) duty cycles end-to-end — **fully enforced** in both the deterministic simulation and the rolling-horizon optimizer, using the **full FMCSA** rule set, with **driver relay/swap at hubs** — and surface live hub operations through a **click-to-open Hub Detail panel**.
+**Goal:** Turn the demo from a finite center→spoke *distribution playback* into a genuine, continuously-running **end-to-end logistics simulation** — freight enters from outside, flows **both directions** through the hub network, and is **delivered out** — while preserving determinism and the event-sourced architecture.
 
-**Target features:**
-- Driver entity + full-FMCSA HOS engine (11h drive / 14h window / 30-min break / 10h reset / 70h-8day cap / 34h restart / sleeper-berth 7-3 & 8-2 splits) as a pure, deterministic module **shared** by simulation and optimizer.
-- Driver **relay / swap at hubs** (per-hub driver pools, deterministic handoffs).
-- Simulation **enforces HOS** (drivers accrue duty time, take mandatory rest/breaks) + authoritative load/unload phase events (`UnloadStarted`/`LoadStarted`/`UnloadCompleted`).
-- Optimizer **enforces HOS** (rest-as-`serviceMin` feasibility, hard legal-drive gate reusing the Phase-2 LIFO validation pattern, insert-rest / relay recommendations via local repair).
-- Driver-status read model + `GET /api/hubs/:id/detail` endpoint + ws `HubState` driver buckets.
-- Compact **Hub Detail panel** (trucks at hub: status, dwell, util, next hub, driver duty + remaining legal drive time) with click-through to the existing VIZ-05 trailer plan; hub markers colored by driver duty distribution.
-- README supported-features list + screenshots.
+**Target features (the 4 audited gaps):**
+- **Continuous / open-ended operation** — a sustained run, not a finite ~120-tick stop.
+- **External induction** — freight entering the network from outside (origin/induction events at hubs), beyond today's center-only in-memory spawning.
+- **Outbound / last-mile delivery** — freight **leaving** destination hubs (a real terminal "delivered out" beyond today's terminal `PackageArrivedAtHub`).
+- **Bidirectional freight** — spoke→center **consolidation** *and* center→spoke distribution (today: center→spoke only, empty returns).
 
-**Keystone constraint — determinism:** HOS-*off* must remain byte-identical to the pre-v1.2 golden replay; HOS-*on* adds a new golden. All HOS randomness flows through one new isolated seeded RNG substream. Detailed grounding: `.planning/research/v1.2-DRIVER-HOS-GROUNDING.md`, `.planning/research/v1.2-HUB-DETAIL-GROUNDING.md`.
+**Keystone constraint — determinism:** every new behavior is seeded + golden-safe; feature-off keeps the existing golden byte-identical where applicable; new domain events, projections, map viz, and optimizer-awareness follow the established event-sourced pattern.
 
-**Previously shipped:** v1.0 MVP (2026-06-20) and v1.1 Realistic Time Model + Hardening (2026-06-22) — see `MILESTONES.md`.
+**Previously shipped (releases with v2.0):** v1.0 MVP (2026-06-20), v1.1 Realistic Time Model (2026-06-22), v1.2 Driver HOS & Hub Detail (2026-06-22) — see `MILESTONES.md`; **plus two post-v1.2 `develop` sub-projects already merged** — the **paced-loop redesign** (accumulator pacer + worker-thread optimizer + per-frame fold-batching) and **rest/fuel stops + optimizer fuel-awareness** — to be recorded in v2.0 history.
 
 ## Requirements
 
@@ -128,17 +125,16 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 
 ### Active
 
-<!-- Current scope (v1.2). Detailed REQ-IDs + acceptance live in REQUIREMENTS.md. -->
+<!-- Current scope (v2.0). Detailed REQ-IDs + acceptance defined in REQUIREMENTS.md (pending: requirements + roadmap steps of /gsd-new-milestone). -->
 
-**v1.2 — Driver HOS & Hub Detail** (fully-enforced HOS · full FMCSA · driver relay):
-- [ ] Driver model + duty/phase events (DRV-*, EVT-*)
-- [ ] Full-FMCSA HOS clock engine, pure + shared sim/optimizer (HOS-*)
-- [ ] Simulation HOS enforcement + relay/swap + deterministic golden (SIM-HOS-*)
-- [ ] Driver-status projection + tables (PRJ-*)
-- [ ] Optimizer HOS awareness + hard enforcement (OPT-HOS-*)
-- [ ] Hub-detail read endpoint + ws driver buckets (HUBQ-*)
-- [ ] Hub Detail panel UI + map duty styling (VIZ-07..11)
-- [ ] README features + screenshots (DOC-*)
+**v2.0 — Complete Simulation Model** (continuous · external induction · outbound delivery · bidirectional freight):
+- [ ] Continuous / open-ended simulation operation (CONT-*)
+- [ ] External freight induction events from outside the network (IND-*)
+- [ ] Outbound / last-mile delivery out of destination hubs (OUT-*)
+- [ ] Bidirectional freight: spoke→center consolidation + center→spoke distribution (FLOW-*)
+- [ ] Projections + map viz + optimizer-awareness for the above
+
+**Note:** v1.2 (Driver HOS & Hub Detail) shipped; two post-v1.2 `develop` sub-projects also shipped and release with v2.0 — paced-loop redesign and rest/fuel stops + optimizer fuel-awareness (to be recorded in v2.0 history).
 
 ### Out of Scope
 
@@ -151,7 +147,7 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 - **Full national single-run optimization** — decomposed, rolling-horizon, scoped per affected hubs/trailers.
 - **Simulation/what-if "digital twin" policy testing + forecasting (spec Phase 5)** — deferred; v1 simulation only drives the operational demo.
 - **3D visual twin, robotics/automated loading** — far-future (spec Stage 6).
-- **Last-mile delivery routing** — out of the middle-mile problem domain.
+- **Last-mile delivery *routing* (door-level vehicle routing to end customers)** — still out of scope. **v2.0 update:** v2.0 DOES model freight **leaving** destination hubs (outbound/last-mile *handoff* — a terminal "delivered out" event) and **induction** from outside the network, but NOT the downstream delivery-route optimization to customers.
 - **Fully automated dispatch with no human override** — human override with audit stays in scope, full automation does not.
 
 ## Context
@@ -225,4 +221,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-22 — v1.2 milestone (Driver HOS & Hub Detail) defined*
+*Last updated: 2026-06-25 — v2.0 "Complete Simulation Model" (Phases 19–22) ✅ SHIPPED: continuous operation, external induction, bidirectional consolidation, and outbound delivery — the full freight lifecycle runs end-to-end, deterministically, on the live map. See .planning/MILESTONES.md + milestones/v2.0-ROADMAP.md.*

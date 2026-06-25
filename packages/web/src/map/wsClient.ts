@@ -126,12 +126,19 @@ export function parseEnvelope(raw: unknown): WsEnvelope | null {
 
   const seq = r["seq"];
   const simMs = r["simMs"];
+  // CONT-03: tolerant simDay — accept-with-default (not reject) when only simDay
+  // is missing/invalid, so an older/partial envelope still renders the map.
+  const simDay =
+    typeof r["simDay"] === "number" && Number.isFinite(r["simDay"])
+      ? r["simDay"]
+      : 0;
   if (type === "snapshot") {
     return {
       v: 1,
       type: "snapshot",
       seq,
       simMs,
+      simDay,
       speed,
       payload: payload as SnapshotPayload,
     };
@@ -141,6 +148,7 @@ export function parseEnvelope(raw: unknown): WsEnvelope | null {
     type: "tick",
     seq,
     simMs,
+    simDay,
     speed,
     payload,
   };

@@ -83,6 +83,7 @@ function snapshot(open: readonly ExceptionItem[]): WsEnvelope {
     type: "snapshot",
     seq: 1,
     simMs: 0,
+    simDay: 0,
     speed: SPEED,
     payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: open },
   };
@@ -98,6 +99,7 @@ function tick(
     type: "tick",
     seq,
     simMs: seq * 100,
+    simDay: 0,
     speed: SPEED,
     payload: { exceptionsNew: newOnes, exceptionsResolved: resolved },
   };

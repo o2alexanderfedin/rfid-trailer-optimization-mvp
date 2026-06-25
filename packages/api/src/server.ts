@@ -3,6 +3,7 @@ import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
 import fastifyWebsocket from "@fastify/websocket";
 import type { TimingConfig } from "@mm/simulation";
+import type { FuelConfig } from "@mm/domain";
 import { registerQueryRoutes, type ApiDb } from "./routes/queries.js";
 import { registerExceptionRoutes } from "./routes/exceptions.js";
 import { registerPlanRoutes } from "./routes/plan.js";
@@ -10,9 +11,11 @@ import { registerPlanDetailRoutes } from "./routes/plan-detail.js";
 import { registerHubDetailRoutes } from "./routes/hub-detail.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { registerKpiRoutes } from "./routes/kpis.js";
+import { registerDeliveryKpiRoutes } from "./routes/delivery-kpi.js";
 import { registerScenarioRoutes } from "./routes/scenario.js";
 import { registerSimSpeedRoutes } from "./routes/sim-speed.js";
 import { RollingOptimizerService } from "./optimizer/rolling-service.js";
+import { makeWorkerOptimizer, type WorkerOptimizer } from "./optimizer/worker-client.js";
 import { RollingLoop } from "./optimizer/live-loop.js";
 import { buildTwinSnapshot } from "./optimizer/twin-snapshot.js";
 import { attachSnapshotSocket, type Broadcast } from "./ws/snapshots.js";
@@ -69,6 +72,25 @@ export interface ServerDeps {
    * drive short horizons so the base-stream docking events match the stored state.
    */
   readonly timing?: TimingConfig;
+  /**
+   * The optimizer compute transport (spec §5). `'inline'` (DEFAULT) runs the pure
+   * `runEpoch` synchronously in-process — byte-for-byte the current behavior, so
+   * every existing optimizer/loop/integration test runs unchanged. `'worker'`
+   * spawns ONE long-lived `worker_threads` worker and offloads the CPU compute to
+   * it (the main thread keeps all DB I/O = single writer); the demo (`main.ts`)
+   * uses this. The worker is exposed on {@link BuiltServer.worker} and is also
+   * terminated by `app.close()` via an `onClose` hook.
+   */
+  readonly optimizerExecution?: "inline" | "worker";
+  /**
+   * SP2 (spec §7) — OPTIONAL fuel config forwarded into the live `RollingLoop` so
+   * the optimizer is FUEL-AWARE on the live path (it folds the expected refuel time
+   * into leg timing when a planned route crosses the threshold). Absent OR disabled
+   * ⇒ no refuel time is folded — byte-identical to the pre-SP2 plan. The demo
+   * (`main.ts`) passes `{ ...DEFAULT_FUEL_CONFIG, enabled: FUEL_ENABLED }` so the
+   * optimizer's view matches the fuel the sim emits.
+   */
+  readonly fuelConfig?: FuelConfig;
 }
 
 /** The built server plus the per-tick snapshot `broadcast` (when ws is enabled). */
@@ -91,11 +113,17 @@ export interface BuiltServer {
   readonly simController: SimController;
   /**
    * The "speed of time" controller (GET/POST /sim/speed). `main.ts` passes its
-   * `getTickIntervalMs`/`isPaused` to `driveSimulationPaced` so the live demo's
-   * pacing is tunable mid-run. The snapshot builder stamps its `snapshot()` on
-   * every ws envelope.
+   * `getMultiplier`/`isPaused` to `driveSimulationPaced` so the live demo's
+   * accumulator pacing is tunable mid-run. The snapshot builder stamps its
+   * `snapshot()` on every ws envelope.
    */
   readonly speedController: SpeedController;
+  /**
+   * The long-lived worker-thread optimizer when `optimizerExecution:'worker'`;
+   * `undefined` in the default inline mode. `app.close()` already terminates it
+   * (an `onClose` hook); exposed here so `main.ts` can also close it on shutdown.
+   */
+  readonly worker?: WorkerOptimizer;
 }
 
 /** Build the Fastify server (REST query routes + optional ws snapshots). */
@@ -123,8 +151,22 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // endpoint. The service owns the ONE write path (PlanAccepted); the route reads.
   // The optimizer only appends to the event store, so it views the handle as the
   // event-store schema (the same narrowing the sim driver uses).
+  //
+  // OPTIMIZER EXECUTION (spec §5): inline by default (synchronous, in-process —
+  // unchanged for every test); `worker` spawns ONE long-lived worker_threads
+  // worker and offloads the pure `runEpoch` CPU to it. The main thread keeps ALL
+  // DB I/O (single writer) — the worker is pure compute. `app.close()` terminates
+  // the worker via an onClose hook; it is also exposed on BuiltServer.
+  const worker =
+    deps.optimizerExecution === "worker" ? makeWorkerOptimizer() : undefined;
+  if (worker !== undefined) {
+    app.addHook("onClose", async () => {
+      await worker.close();
+    });
+  }
   const optimizer = new RollingOptimizerService({
     db: deps.db as unknown as Kysely<Database>,
+    ...(worker !== undefined ? { runEpochFn: worker.run } : {}),
   });
   registerOptimizerRoutes(app, optimizer);
 
@@ -132,6 +174,11 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // Pass `optimizer` so the KPI endpoint can read the latest rolling-epoch result
   // for the rehandle score (SIM-04 critical live wiring).
   registerKpiRoutes(app, deps.db, optimizer);
+
+  // Phase 22 (OUT-05 P2 / D-22-3): GET /api/delivery-kpi — the event-derived
+  // delivered-out + on-time counters (folded over the immutable events log, NOT
+  // a row-count over the DELETE-purged package tables).
+  registerDeliveryKpiRoutes(app, deps.db);
 
   // SIM-04 / OPT-02: The live rolling-optimizer loop (Plan 05-02).
   // `buildSnapshot` reads the current live projections to assemble the TwinSnapshot.
@@ -141,6 +188,9 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
     service: optimizer,
     buildSnapshot: () => buildTwinSnapshot(snapshotDb),
     freezeWindowMin: 15,
+    // SP2: forward the fuel config so the live optimizer is fuel-aware (omitted
+    // when absent ⇒ byte-identical to the pre-SP2 plan).
+    ...(deps.fuelConfig !== undefined ? { fuelConfig: deps.fuelConfig } : {}),
   });
 
   // ONE SpeedController seeded from the env default tick interval (1× by
@@ -184,5 +234,13 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   registerSimSpeedRoutes(app, speedController);
 
   await app.ready();
-  return { app, broadcast, optimizer, loop, simController, speedController };
+  return {
+    app,
+    broadcast,
+    optimizer,
+    loop,
+    simController,
+    speedController,
+    ...(worker !== undefined ? { worker } : {}),
+  };
 }

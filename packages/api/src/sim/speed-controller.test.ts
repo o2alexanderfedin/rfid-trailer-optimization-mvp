@@ -66,12 +66,20 @@ describe("makeSpeedController — multiplier ⇆ tickInterval mapping", () => {
 });
 
 describe("makeSpeedController — multiplier clamping (out of range)", () => {
-  it("clamps a multiplier above 8 to the 8× interval", () => {
+  it("clamps a multiplier above 64 to the 64× interval", () => {
     const c = makeSpeedController();
     c.setMultiplier(100);
     const atMax = makeSpeedController();
-    atMax.setMultiplier(8);
+    atMax.setMultiplier(64);
     expect(c.getTickIntervalMs()).toBe(atMax.getTickIntervalMs());
+  });
+
+  it("m=64 (max) ⇒ exact 64× (tickIntervalMs=7.8125, simSpeed=7680)", () => {
+    const c = makeSpeedController();
+    c.setMultiplier(64);
+    expect(c.getTickIntervalMs()).toBeCloseTo(500 / 64); // 7.8125 — not floored
+    expect(c.snapshot().multiplier).toBeCloseTo(64); // exact, not 62.5
+    expect(c.getSimSpeed()).toBeCloseTo(60_000 / (500 / 64)); // 7680
   });
 
   it("clamps a multiplier below 0.25 to the 0.25× interval", () => {
@@ -84,6 +92,45 @@ describe("makeSpeedController — multiplier clamping (out of range)", () => {
     const c = makeSpeedController();
     c.setMultiplier(1_000_000);
     expect(c.getTickIntervalMs()).toBeGreaterThan(0);
+  });
+});
+
+describe("makeSpeedController — getMultiplier (the pacing primitive)", () => {
+  it("returns 1 at the default interval (1×)", () => {
+    const c = makeSpeedController();
+    expect(c.getMultiplier()).toBe(1);
+  });
+
+  it("returns 64 after apply({multiplier:64})", () => {
+    const c = makeSpeedController();
+    c.apply({ multiplier: 64 });
+    expect(c.getMultiplier()).toBeCloseTo(64);
+  });
+
+  it("returns 0.25 after apply({multiplier:0.25})", () => {
+    const c = makeSpeedController();
+    c.apply({ multiplier: 0.25 });
+    expect(c.getMultiplier()).toBe(0.25);
+  });
+
+  it("always equals snapshot().multiplier", () => {
+    const c = makeSpeedController();
+    for (const m of [1, 2, 0.5, 8, 0.25, 64]) {
+      c.setMultiplier(m);
+      expect(c.getMultiplier()).toBe(c.snapshot().multiplier);
+    }
+  });
+
+  it("pause does NOT change getMultiplier (multiplier is the rate; freeze lives on simSpeed)", () => {
+    const c = makeSpeedController();
+    c.setMultiplier(8);
+    const before = c.getMultiplier();
+    c.setPaused(true);
+    // Pause flips simSpeed to 0 but leaves the multiplier (rate) untouched.
+    expect(c.getMultiplier()).toBe(before);
+    expect(c.getSimSpeed()).toBe(0);
+    c.setPaused(false);
+    expect(c.getMultiplier()).toBe(before);
   });
 });
 

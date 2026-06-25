@@ -124,6 +124,20 @@ describe("diffTick: trailer changes", () => {
     expect(tick.trailers?.[0]?.util).toBe(0.8);
   });
 
+  it("detects direction change as an upsert (VIZ-12)", () => {
+    // A trailer that flips outbound→consolidation must re-emit so the client
+    // re-styles it — `direction` is an optional+additive keyframe field.
+    const prev = makeSnapshot({
+      trailers: [{ id: "T1", routeId: "R1", departMs: 1000, etaMs: 2000, state: "onTime", direction: "outbound" }],
+    });
+    const next = makeSnapshot({
+      trailers: [{ id: "T1", routeId: "R1", departMs: 1000, etaMs: 2000, state: "onTime", direction: "consolidation" }],
+    });
+    const tick = diffTick(prev, next);
+    expect(tick.trailers).toHaveLength(1);
+    expect(tick.trailers?.[0]?.direction).toBe("consolidation");
+  });
+
   it("includes trailers present in next but absent in prev (new arrivals)", () => {
     const prev = makeSnapshot({ trailers: [] });
     const next = makeSnapshot({ trailers: [trailer("T1")] });

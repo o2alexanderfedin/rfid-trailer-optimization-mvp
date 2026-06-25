@@ -5,31 +5,56 @@ import type {
   DriverRegistered,
   DriverSwappedAtHub,
   DutyStatus,
+  FuelConfig,
   HosClock,
   HosConfig,
   Hub,
   LoadStarted,
   PackageArrivedAtHub,
   PackageCreated,
+  PackageDelivered,
+  PackageInducted,
   PackageScanned,
   SizeClass,
+  SlaClass,
   TrailerArrivedAtHub,
   TrailerDeparted,
   TrailerDocked,
+  TruckRefueled,
+  TruckRested,
   UnloadCompleted,
   UnloadStarted,
 } from "@mm/domain";
 import {
+  DEFAULT_FUEL_CONFIG,
   DEFAULT_HOS_CONFIG,
   applyDrivingLeg,
   epochMinutesToIso,
+  expectedDwellMinutes,
+  expectedTransitMinutes,
+  haversineKm,
   isoToEpochMinutes,
   mayDriveNow,
   remainingLegalDriveMinutes,
 } from "@mm/domain";
 import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
-import { buildRoutes, buildTransitParamsByLeg, routeId } from "./network/routes.js";
-import { makeRng } from "./rng.js";
+import {
+  buildRoutes,
+  buildTransitParamsByLeg,
+  loadStaticRoadGeometry,
+  routeId,
+} from "./network/routes.js";
+import { makeRng, makeRngFromState, type Rng } from "./rng.js";
+import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
+import {
+  isContinuation,
+  type SerializedHosClock,
+  type SerializedScheduled,
+  type SerializedWorldState,
+  type SimContinuation,
+  type SimStart,
+  type SimTask,
+} from "./continuation.js";
 import { VirtualClock } from "./clock.js";
 import { emitRfidReads, resolveRfidConfig, type RfidSimConfig } from "./rfid.js";
 import { DEFAULT_TIMING_CONFIG, sampleLogNormal, type TimingConfig } from "./timing.js";
@@ -70,6 +95,36 @@ export const TIMING_RNG_SALT = 0x00_00_77_17;
  * same `HosConfig` ⇒ byte-identical HOS stream.
  */
 export const HOS_RNG_SALT = 0x10_51_09_01;
+/**
+ * SP2 (spec §5): the SIXTH substream salt for fuel/refuel draws. A NEW, DISTINCT
+ * constant (the salt-collision test asserts it differs from the five above) so
+ * enabling fuel never perturbs `rng`/`rfidRng`/`overCarryRng`/`timingRng`/`hosRng`.
+ * The `fuelRng` it seeds is constructed ONLY when `fuel.enabled` — so a fuel-off
+ * run draws ZERO fuel values and stays byte-identical to the golden. The current
+ * tank model is fully deterministic (no jitter), so `fuelRng` is reserved for any
+ * future refuel-time jitter; it is wired through the same seed-XOR discipline now
+ * so adding a draw later cannot perturb the other five streams.
+ */
+export const FUEL_RNG_SALT = 0x2b_3d_91_e7;
+/**
+ * v2.0 IND-02: the SEVENTH substream salt, for external-induction draws. A NEW,
+ * DISTINCT, well-separated constant (the salt-collision test asserts it differs
+ * from all six above — hash-split, NOT `seed+1`) so inducted packages never
+ * perturb any prior stream. The `inductionRng` it seeds is constructed ONLY when
+ * `inductionEnabled` — so an induction-off run draws ZERO induction values and
+ * stays byte-identical to the golden (the determinism keystone).
+ */
+export const INDUCTION_RNG_SALT = 0x8f_2c_4a_e1;
+
+/**
+ * Phase-22 OUT-01: the EIGHTH substream salt, for outbound-delivery dwell draws.
+ * A NEW, DISTINCT, well-separated constant (the salt-collision test asserts it
+ * differs from all seven above — hash-split, NOT `seed+1`) so delivered packages
+ * never perturb any prior stream. The `outboundRng` it seeds is constructed ONLY
+ * when `outboundDeliveryEnabled === true` — so an outbound-off run draws ZERO
+ * outbound values and stays byte-identical to the golden (the determinism keystone).
+ */
+export const OUTBOUND_RNG_SALT = 0xc4_f8_32_b6;
 
 // --- Public types -----------------------------------------------------------
 
@@ -81,6 +136,22 @@ export interface SimulatedEvent {
   readonly event: DomainEvent;
   /** Domain time from the virtual clock (ISO-8601) — never the wall clock. */
   readonly occurredAt: string;
+}
+
+/**
+ * CONT-05 (P2): sort-wave / cut-off cadence config. When supplied on
+ * {@link SimulateOptions.sortWave}, freight is created in burst-quiet-burst
+ * windows (a "sort wave") rather than a steady trickle — observable on the live
+ * map as departure surges. The window is PURE modular arithmetic on the
+ * deterministic tick clock (no RNG salt), so it is fully reproducible.
+ */
+export interface SortWaveConfig {
+  /** Ticks at the START of each cycle during which packages ARE created (burst). */
+  readonly burstWindowTicks: number;
+  /** Ticks after the burst during which NO packages are created (quiet). */
+  readonly quietWindowTicks: number;
+  /** Packages created per batch tick while inside the burst window. */
+  readonly burstPackagesPerBatch: number;
 }
 
 /** Options for the pure generator. */
@@ -140,6 +211,120 @@ export interface SimulateOptions {
    * same config ⇒ byte-identical HOS-on stream.
    */
   readonly hosConfig?: HosConfig;
+  /**
+   * Demo richness knob: how many trailers (and one primary driver each) to run
+   * PER SPOKE. **DEFAULT 1** — the determinism keystone: at 1 the roster, driver
+   * pool, package volume, and schedule are byte-identical to the pre-fleet golden
+   * stream. At N>1 the engine seeds `spokes.length × N` trailers (extra fleet
+   * slots' first departures are staggered so they spread along the routes),
+   * scales the relay spare pool and the per-batch package volume by N, and is
+   * still fully deterministic (same seed + N ⇒ byte-identical). Used by the live
+   * demo to put more trucks on the map at once; the goldens never set it.
+   */
+  readonly fleetPerSpoke?: number;
+  /**
+   * SP2 (spec §5): OPT-IN fuel/refuel modeling. **DEFAULT OFF** ({@link
+   * FuelConfig.enabled} defaults false) — the determinism keystone. When absent OR
+   * `enabled:false`, the engine tracks NO odometer, creates NO `fuelRng`, emits NO
+   * `TruckRested`/`TruckRefueled`, and adds NO arrival delay ⇒ the stream is
+   * BYTE-IDENTICAL to the pre-SP2 golden. When `enabled`, each trailer accrues a
+   * per-leg haversine-mile odometer; once it crosses `refuelThresholdMiles` the
+   * trailer refuels on that leg (emit `TruckRefueled`, reset the odometer); each
+   * HOS rest/break also emits a co-located `TruckRested`. A refuel co-located with
+   * a rest adds NO extra delay (effective added time = `max(restMin, refuelMin)`,
+   * spec §5 no-double-count). All deterministic: same seed + same config ⇒
+   * byte-identical fuel-on stream.
+   */
+  readonly fuel?: FuelConfig;
+  /**
+   * CONT-01: when `true`, the engine runs INDEFINITELY past `durationTicks` — the
+   * `durationTicks` ceiling is ignored and the package-batch / trailer-departure
+   * self-rescheduling loops keep firing forever. The loop terminates only when
+   * the queue drains AND/OR the injected {@link SimulateOptions.stop} predicate
+   * returns `true`. **DEFAULT FALSE / ABSENT — the determinism keystone:** when
+   * absent or `false`, every guard evaluates EXACTLY as the pre-v2.0 finite path,
+   * so the stream is BYTE-IDENTICAL to the existing goldens (DET-01).
+   *
+   * Pair this with {@link SimulateOptions.onEvent} for streaming delivery — an
+   * open-ended run accumulating into `out[]` would grow without bound (use the
+   * `simulate()` array surface only for the finite path).
+   */
+  readonly runUntilStopped?: boolean;
+  /**
+   * CONT-01: streaming emit callback for the open-ended driver path. When
+   * provided, each event is delivered ONE BY ONE to the callback instead of being
+   * accumulated in the internal `out[]` array — so an indefinite run stays
+   * memory-bounded. When ABSENT, `out[]` accumulation is used (the `simulate()`
+   * golden-test surface is unchanged). The events delivered are byte-identical in
+   * order/content to what `simulate()` would have collected.
+   */
+  readonly onEvent?: (event: SimulatedEvent) => void;
+  /**
+   * CONT-01: cooperative stop predicate, polled before each queue pop ONLY when
+   * {@link SimulateOptions.runUntilStopped} is `true`. Return `true` to terminate
+   * the loop cleanly at the next iteration. The injected driver (plan-04) flips
+   * its source so the open-ended run can be stopped on demand. Ignored entirely on
+   * the finite path (absent/false `runUntilStopped`), so it never affects goldens.
+   */
+  readonly stop?: () => boolean;
+  /**
+   * CONT-05 (P2): when present, freight departs in burst-quiet-burst windows
+   * rather than a steady trickle — observable on the live map as departure
+   * surges. **OFF BY DEFAULT (absent)** — the determinism keystone: when absent,
+   * the burst-gate is never entered and the package-batch schedule + RNG draws are
+   * EXACTLY the pre-CONT-05 behaviour, so every golden stays byte-identical
+   * (DET-01/DET-02). The cadence is pure modular arithmetic on the deterministic
+   * tick clock (no RNG salt) — fully reproducible per seed when enabled.
+   */
+  readonly sortWave?: SortWaveConfig;
+  /**
+   * IND-02: OPT-IN external package induction at spoke hubs. **DEFAULT FALSE —
+   * the determinism keystone.** When absent or `false`, the engine emits NO
+   * `PackageInducted` events and makes ZERO `inductionRng` draws (the substream is
+   * never even constructed), so the existing seed-1234 + seed-42 goldens are
+   * BYTE-IDENTICAL (DET-01). When `true`, a seeded substream (`INDUCTION_RNG_SALT`)
+   * drives a self-rescheduling `inductPackage` EventQueue task: freight enters the
+   * network from OUTSIDE at spoke hubs, shapes optimizer priority via a deadline
+   * locked at induction, and animates on the live map (VIZ-13). Fully resumable —
+   * the induction RNG state AND the pending self-rescheduling task are captured in
+   * the `SimContinuation`, so a chunked run is byte-identical to all-at-once.
+   */
+  readonly inductionEnabled?: boolean;
+  /**
+   * FLOW-01/02/03: OPT-IN spoke→center consolidation (bidirectional freight).
+   * **DEFAULT FALSE — the determinism keystone.** When absent or `false`, the
+   * engine populates NO `pendingAtSpoke` manifest, emits NO consolidation
+   * `TrailerDeparted`/`arriveConsolidationAtCenter` events, and makes ZERO new
+   * RNG draws ⇒ the existing seed-1234 + seed-42 goldens are BYTE-IDENTICAL
+   * (DET-01). When `true`, spoke-origin freight staged in `pendingAtSpoke` (from
+   * Phase-20 induction or center distribution — freight already drawn, so NO new
+   * randomness) is drained onto spoke→center consolidation trailers via an atomic
+   * splice (the double-drain guard), carried to the center, unloaded, and
+   * re-staged into `pendingBySpoke[destSpoke]` so the existing center→spoke
+   * distribution cross-docks it onward (Decision 2: spoke→spoke via the center).
+   * Cadence/selection are DETERMINISTIC (modular tick arithmetic + a stable
+   * priority+tick+freightId sort; idle trailers in `trailerId` order). Fully
+   * resumable — `pendingAtSpoke` is captured in the `SimContinuation.world` and
+   * the center-arrival is a DATA `SimTask` variant, so a chunked run is
+   * byte-identical to all-at-once.
+   */
+  readonly consolidationEnabled?: boolean;
+
+  /**
+   * OUT-01: OPT-IN terminal delivery at destination hubs. **DEFAULT FALSE —
+   * the determinism keystone.** When absent or `false`, the engine emits NO
+   * `PackageDelivered` events and makes ZERO `outboundRng` draws (the substream
+   * is never even constructed), so the existing seed-1234 + seed-42 goldens are
+   * BYTE-IDENTICAL (DET-01). When `true`, a seeded one-shot `deliverPackage`
+   * EventQueue task fires after a seeded dwell (>= 1 tick, D-22-2) from a
+   * DESTINATION-hub arrival; an `onTime` SLA flag is computed at emit (D-22-5).
+   * Fully resumable — the outbound RNG state, pending-delivery task(s),
+   * `deliveredCounter`, and `slaDeadlineByPackage` map are captured in
+   * `SimContinuation`. The flag gates ALL outbound behavior; it is checked with
+   * a STRICT `=== true` comparison (never `??` or `||`, which would make an
+   * absent flag accidentally truthy and perturb the golden).
+   */
+  readonly outboundDeliveryEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -150,10 +335,9 @@ export interface RunSimulationOptions extends SimulateOptions {
 
 // --- Simulation constants (declarative; the network is fixed for Phase 1) ----
 
-/** Domain ms per tick. 1 tick = 1 minute of simulated time. */
-const MS_PER_TICK = 60_000;
-/** The seeded domain epoch — the clock starts here; no wall-clock read. */
-const EPOCH_ISO = "2026-04-01T00:00:00.000Z";
+// Plan 19-08 Task D: `MS_PER_TICK` + `EPOCH_ISO` are the SINGLE source of truth
+// in `./epoch.js`; every consumer (engine clock, ws simDay/simMs, tests) imports
+// them so the literal can never drift across packages.
 
 /** Ticks between successive package-creation batches at the center hub. */
 const PACKAGE_INTERVAL_TICKS = 15;
@@ -161,6 +345,44 @@ const PACKAGE_INTERVAL_TICKS = 15;
 const MAX_PACKAGES_PER_BATCH = 3;
 /** Package size classes, in a fixed order (RNG picks an index). */
 const SIZE_CLASSES: readonly SizeClass[] = ["small", "medium", "large"];
+
+// --- v2.0 external induction (IND-02/IND-03) --------------------------------
+
+/** Ticks between successive external inductions at spoke hubs (one every 30 min). */
+const INDUCTION_INTERVAL_TICKS = 30;
+/** First induction fires at tick 1 (deterministic, fixed offset; off by default). */
+const INDUCTION_START_TICK = 1;
+/** SLA classes in a fixed order (the induction RNG picks an index). */
+const SLA_CLASSES: readonly SlaClass[] = [
+  "express",
+  "priority",
+  "standard",
+  "economy",
+];
+/**
+ * IND-03: whole-minute SLA buffer added on top of the travel estimate when
+ * deriving `slaDeadlineIso`. Tighter classes get less slack — so the optimizer's
+ * slack/critical-ratio prioritization is meaningful. Deterministic per class.
+ */
+const SLA_BUFFER_MIN: Record<SlaClass, number> = {
+  express: 60,
+  priority: 120,
+  standard: 240,
+  economy: 480,
+};
+
+// --- Phase-22 outbound delivery (OUT-01/OUT-02) -----------------------------
+
+/**
+ * OUT-01: the EXCLUSIVE upper bound for the seeded outbound dwell. The dwell is
+ * `1 + outboundRng.int(OUTBOUND_DWELL_TICKS_MAX)` ⇒ a STRICTLY-POSITIVE 1..20
+ * tick window (D-22-2): delivery always fires at a strictly-later tick than the
+ * destination `PackageArrivedAtHub` that scheduled it, so the existing
+ * `(fireTick, seq)` comparator orders arrival-before-delete with NO change.
+ * Tuned (Claude's discretion) so deliveries are watchable in the demo without
+ * instantly draining hubs.
+ */
+const OUTBOUND_DWELL_TICKS_MAX = 20;
 
 /**
  * SIM-HOS-03: max extra whole-minute jitter added to EACH mandatory break/rest,
@@ -186,22 +408,39 @@ const RELAY_SPARE_DRIVERS = 6;
 
 // --- Internal event-queue --------------------------------------------------
 
-/** A scheduled action: run at `fireTick`; `seq` is the deterministic tie-break. */
+/**
+ * A scheduled action: run at `fireTick`; `seq` is the deterministic tie-break.
+ *
+ * Plan 19-08: the action is now a `SimTask` DATA descriptor (not a closure), so
+ * the queue is fully serializable into a {@link SimContinuation}. A single
+ * `dispatch(task)` switch reconstructs the behaviour — same code, same order.
+ */
 interface Scheduled {
   readonly fireTick: number;
   readonly seq: number;
-  readonly run: () => void;
+  readonly task: SimTask;
 }
 
 /**
  * A deterministic priority queue. Actions are dequeued in `(fireTick, seq)`
  * order — `seq` (insertion order) guarantees a total, stable ordering so the
  * stream never depends on array/heap implementation details.
+ *
+ * Plan 19-08: it holds DATA tasks and can be (de)serialized for a resumable
+ * continuation. The sort comparator is unchanged, so the dispatch order — and
+ * thus the byte-identical stream — is preserved exactly.
  */
 class EventQueue {
-  private items: Scheduled[] = [];
-  private nextSeq = 0;
+  private items: Scheduled[];
+  private nextSeq: number;
   private dirty = false;
+
+  constructor(items: Scheduled[] = [], nextSeq = 0) {
+    this.items = items;
+    this.nextSeq = nextSeq;
+    // A restored queue may be out of order if it was captured mid-run; sort lazily.
+    this.dirty = items.length > 0;
+  }
 
   /** Allocate the next monotonic insertion sequence (the stable tie-break). */
   claimSeq(): number {
@@ -210,8 +449,8 @@ class EventQueue {
     return seq;
   }
 
-  push(fireTick: number, seq: number, run: () => void): void {
-    this.items.push({ fireTick, seq, run });
+  push(fireTick: number, seq: number, task: SimTask): void {
+    this.items.push({ fireTick, seq, task });
     this.dirty = true;
   }
 
@@ -226,25 +465,105 @@ class EventQueue {
     }
     return this.items.shift();
   }
+
+  /** The next insertion seq — captured into the continuation. */
+  peekNextSeq(): number {
+    return this.nextSeq;
+  }
+
+  /**
+   * Snapshot the pending items in deterministic `(fireTick, seq)` order — the
+   * serializable form carried in a {@link SimContinuation}. Sorting here makes the
+   * captured order stable regardless of the internal `dirty`/shift bookkeeping.
+   */
+  snapshot(): SerializedScheduled[] {
+    const sorted = [...this.items].sort((a, b) =>
+      a.fireTick !== b.fireTick ? a.fireTick - b.fireTick : a.seq - b.seq,
+    );
+    return sorted.map((s) => ({ fireTick: s.fireTick, seq: s.seq, task: s.task }));
+  }
 }
 
 // --- The generation core ----------------------------------------------------
 
+/** What {@link runToHorizon} returns: the chunk's events + the resume point. */
+export interface RunToHorizonResult {
+  /** The events emitted in this chunk, in deterministic order. */
+  readonly events: SimulatedEvent[];
+  /** The serializable continuation to resume from (state AFTER this chunk). */
+  readonly continuation: SimContinuation;
+}
+
 /**
- * Run the deterministic simulation and return the ordered event stream. This is
- * the SINGLE source of truth shared by `simulate` and `runSimulation`.
+ * THE continuation-driven generation core (Plan 19-08 Task A).
+ *
+ * Runs the deterministic event queue from `start` (a fresh `{ seed }` OR a
+ * previously-returned {@link SimContinuation}) up to and INCLUDING `horizonTick`,
+ * returning the chunk's `events` plus the {@link SimContinuation} to resume from.
+ * Driving a finite run all-at-once and driving it in chunks via the continuation
+ * produce a BYTE-IDENTICAL ordered stream (the continuation-equivalence keystone).
+ *
+ * Determinism contract (threat T-01-15 + the consult): ALL randomness comes from
+ * the seeded sub-streams (captured raw in the continuation), ALL time from the
+ * `VirtualClock` re-anchored at `continuation.nextTick` — NO `Date.now()`, NO
+ * unseeded `Math.random()`. The queue holds DATA tasks (never closures), so the
+ * continuation is plain serializable data.
  */
-function generate(opts: SimulateOptions): SimulatedEvent[] {
-  const { seed, durationTicks, rfid, overCarry, timing, hosEnabled, hosConfig } = opts;
-  if (!Number.isInteger(durationTicks) || durationTicks < 0) {
-    throw new RangeError(`durationTicks must be a non-negative integer, got ${durationTicks}`);
+export function runToHorizon(
+  start: SimStart,
+  horizonTick: number,
+  opts: Omit<SimulateOptions, "seed" | "durationTicks">,
+): RunToHorizonResult {
+  if (!Number.isInteger(horizonTick) || horizonTick < 0) {
+    throw new RangeError(`horizonTick must be a non-negative integer, got ${horizonTick}`);
   }
+  const resuming = isContinuation(start);
+  // The seed comes from the start point itself — a fresh `{ seed }` OR the
+  // SELF-CONTAINED continuation (which carries `seed`). On resume every sub-stream
+  // is restored from raw state, so the seed is only metadata; on a fresh run it
+  // seeds the sub-streams via `seed ^ salt`.
+  const seed = start.seed;
+  const { rfid, overCarry, timing, hosEnabled, hosConfig, fuel } = opts;
+  // The finite ceiling for the queue loop. On a fresh run this IS `horizonTick`;
+  // on resume the loop simply continues from `nextTick` up to the new horizon.
+  const durationTicks = horizonTick;
+  // CONT-01 streaming surface is handled by the public wrappers; the core always
+  // collects into `out` and the caller decides whether to stream.
+  const onEventSink = opts.onEvent;
 
   // SIM-HOS-01: driver HOS is OPT-IN and DEFAULT FALSE. Absent/false ⇒ the
   // engine emits NO driver/HOS/load-unload events and NEVER draws `hosRng`, so
   // the stream is byte-identical to the pre-v1.2 golden (the keystone).
   const hosOn = hosEnabled === true;
   const hosLimits: HosConfig = hosConfig ?? DEFAULT_HOS_CONFIG;
+
+  // SP2 (spec §5): fuel is OPT-IN and DEFAULT OFF. Enabled ONLY when a config is
+  // supplied with `enabled:true` — absent OR `enabled:false` ⇒ NO odometer, NO
+  // `fuelRng`, NO `TruckRested`/`TruckRefueled`, NO arrival delay, so the stream
+  // stays byte-identical to the golden (the determinism keystone). The fuel
+  // config falls back to DEFAULT_FUEL_CONFIG only for the (unused-when-off) knobs.
+  const fuelConfig: FuelConfig = fuel ?? DEFAULT_FUEL_CONFIG;
+  const fuelOn = fuelConfig.enabled === true;
+
+  // v2.0 IND-02: external induction is OPT-IN and DEFAULT OFF. Absent/false ⇒ the
+  // engine emits NO `PackageInducted` and NEVER constructs/draws `inductionRng`,
+  // so all existing goldens are byte-identical (the determinism keystone).
+  const inductionOn = opts.inductionEnabled === true;
+
+  // FLOW-01/02/03: spoke→center consolidation is OPT-IN and DEFAULT OFF.
+  // Absent/false ⇒ the engine NEVER populates `pendingAtSpoke`, emits NO
+  // consolidation departure/center-arrival events, and draws NO new RNG, so the
+  // existing goldens are byte-identical (the determinism keystone). When on,
+  // consolidation reuses freight already drawn (induction/center-distribution),
+  // so NO new substream/salt is introduced — selection/cadence are deterministic.
+  const consolidationOn = opts.consolidationEnabled === true;
+
+  // Phase-22 OUT-01: outbound delivery is OPT-IN and DEFAULT OFF. Absent/false ⇒
+  // the engine emits NO `PackageDelivered`, NEVER constructs/draws `outboundRng`,
+  // populates NO `slaDeadlineByPackage`, and schedules NO `deliverPackage` task,
+  // so all existing goldens are byte-identical (the determinism keystone). STRICT
+  // `=== true` — never `??`/`||` (an absent flag must stay falsy).
+  const outboundOn = opts.outboundDeliveryEnabled === true;
 
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
@@ -258,30 +577,86 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     typeof overCarry === "number" && Number.isFinite(overCarry) ? overCarry : 0;
   const overCarryEnabled = overCarryRate > 0;
 
-  const rng = makeRng(seed);
+  // Plan 19-08: each seeded sub-stream is either constructed fresh from
+  // `seed ^ salt` (a fresh run) or RESTORED from the continuation's raw state (a
+  // resumed chunk). `makeRng(seed)` == `makeRngFromState(mixSeed(seed))`, so a
+  // fresh run is byte-identical to the pre-19-08 behaviour; a restored run draws
+  // the EXACT remaining sequence (the continuation-equivalence keystone).
+  const restoredRng = resuming ? start.rng : undefined;
+  const rng = restoredRng
+    ? makeRngFromState(restoredRng.base)
+    : makeRng(seed);
   // SIM-03: RFID draws from a SEPARATE seeded substream (seed ^ a fixed salt) so
   // enabling RFID never perturbs the operational rng — the non-RFID event order
   // is byte-identical with or without the rfid option, while the RFID stream is
   // still fully reproducible per seed.
-  const rfidRng = makeRng((seed ^ RFID_RNG_SALT) >>> 0);
+  const rfidRng = restoredRng
+    ? makeRngFromState(restoredRng.rfid)
+    : makeRng((seed ^ RFID_RNG_SALT) >>> 0);
   // F-07: over-carry draws from its OWN seeded substream — a salt DISTINCT from
   // the RFID salt (0x5f1da7c3) so it never collides with / perturbs `rfidRng` or
   // `rng`. Same seed + same rate ⇒ byte-identical over-carry decisions.
-  const overCarryRng = makeRng((seed ^ OVER_CARRY_RNG_SALT) >>> 0);
+  const overCarryRng = restoredRng
+    ? makeRngFromState(restoredRng.overCarry)
+    : makeRng((seed ^ OVER_CARRY_RNG_SALT) >>> 0);
   // Timing (dwell/transit) draws from its OWN seeded substream — a salt DISTINCT
   // from the RFID (0x5f1da7c3) and over-carry (0x3ca71d5f) salts — so the
   // log-normal timing variance is fully reproducible per seed yet NEVER perturbs
   // the operational `rng`, `rfidRng`, or `overCarryRng` draws. The draws happen
   // in deterministic event-queue order, so the timestamps are byte-identical for
   // a fixed seed + timing config.
-  const timingRng = makeRng((seed ^ TIMING_RNG_SALT) >>> 0);
+  const timingRng = restoredRng
+    ? makeRngFromState(restoredRng.timing)
+    : makeRng((seed ^ TIMING_RNG_SALT) >>> 0);
   // SIM-HOS-01: the FIFTH substream. HOS draws use a salt DISTINCT from the RFID
   // (0x5f1da7c3), over-carry (0x3ca71d5f), and timing (0x00007717) salts (the
   // salt-collision test asserts this), so HOS variance is fully reproducible per
   // seed yet NEVER perturbs the other four streams. Constructing the generator is
   // side-effect-free (independent state); it is only DRAWN when `hosOn`, so the
   // HOS-off stream consumes ZERO `hosRng` values and stays byte-identical.
-  const hosRng = makeRng((seed ^ HOS_RNG_SALT) >>> 0);
+  const hosRng = restoredRng
+    ? makeRngFromState(restoredRng.hos)
+    : makeRng((seed ^ HOS_RNG_SALT) >>> 0);
+  // SP2: the SIXTH substream. Created ONLY when fuel is on (the determinism
+  // keystone — a fuel-off run never even constructs it). The salt is DISTINCT from
+  // the five above (asserted by the salt-collision test) so any future refuel
+  // jitter draw would be fully reproducible per seed yet never perturb the other
+  // streams. The current tank model is deterministic (no draw), so `fuelRng` is
+  // reserved; it is `undefined` when off so the off path is provably draw-free.
+  const fuelRng: Rng | undefined = fuelOn
+    ? restoredRng && restoredRng.fuel !== undefined
+      ? makeRngFromState(restoredRng.fuel)
+      : makeRng((seed ^ FUEL_RNG_SALT) >>> 0)
+    : undefined;
+  void fuelRng;
+  // v2.0 IND-02: the SEVENTH substream. Created ONLY when induction is on (the
+  // determinism keystone — an induction-off run never even constructs it). The
+  // salt is DISTINCT from the six above (asserted by the salt-collision test) so
+  // induction draws are fully reproducible per seed yet never perturb the other
+  // streams. On resume it is restored from the captured raw state so a chunked
+  // run draws the EXACT remaining sequence (continuation-equivalence keystone).
+  const inductionRng: Rng | undefined = inductionOn
+    ? restoredRng && restoredRng.induction !== undefined
+      ? makeRngFromState(restoredRng.induction)
+      : makeRng((seed ^ INDUCTION_RNG_SALT) >>> 0)
+    : undefined;
+  // Phase-22 OUT-01: the EIGHTH substream. Created ONLY when outbound delivery is
+  // on (the determinism keystone — an outbound-off run never even constructs it).
+  // The salt is DISTINCT from the seven above (asserted by the salt-collision
+  // test) so dwell draws are reproducible per seed yet never perturb the other
+  // streams. On resume it is restored from the captured raw state so a chunked run
+  // draws the EXACT remaining sequence (continuation-equivalence keystone).
+  const outboundRng: Rng | undefined = outboundOn
+    ? restoredRng && restoredRng.outbound !== undefined
+      ? makeRngFromState(restoredRng.outbound)
+      : makeRng((seed ^ OUTBOUND_RNG_SALT) >>> 0)
+    : undefined;
+  // SP2: per-trailer odometer (miles since last refuel), init 0 at roster
+  // seeding. Only mutated when `fuelOn`; an off run leaves it empty (no state).
+  // On resume it is restored from the continuation's world state.
+  const odometerByTrailer = new Map<string, number>(
+    resuming ? start.world.odometerByTrailer.map(([k, v]) => [k, v]) : [],
+  );
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
   // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
   // the real great-circle (haversine) distance between its two hubs at an 80 km/h
@@ -312,22 +687,133 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     const params = role === "center" ? timingConfig.dwellCenter : timingConfig.dwellSpoke;
     return Math.max(1, Math.round(sampleLogNormal(timingRng, params)));
   };
+  // Plan 19-08: the queue is restored from the captured DATA tasks on resume; a
+  // fresh run starts with an empty queue (byte-identical to the pre-19-08 path).
+  // The clock starts at the epoch in BOTH cases — it is NOT re-anchored, because
+  // each fired task does `clock.advance(fireTick - currentTick(clock))`, which
+  // sets the absolute virtual time to EXACTLY `fireTick` (a pure function of the
+  // task's `fireTick`, never wall-clock). Every captured task has
+  // `fireTick > prevHorizon`, so the advance is always non-negative on resume.
   const clock = new VirtualClock(EPOCH_ISO, MS_PER_TICK);
-  const queue = new EventQueue();
+  const queue = resuming
+    ? new EventQueue(
+        start.queue.map((s) => ({ fireTick: s.fireTick, seq: s.seq, task: s.task })),
+        start.nextSeq,
+      )
+    : new EventQueue();
   const out: SimulatedEvent[] = [];
+  // Monotonic GLOBAL emit sequence id — continues across chunks so the total
+  // order `(virtualTime, sequenceId)` is uninterrupted on resume.
+  let nextSequenceId = resuming ? start.nextSequenceId : 0;
 
   const hubs = USA_HUBS;
   const center = hubs[0]!;
   const spokes = hubs.slice(1);
   const routes = buildRoutes(hubs);
 
-  // Monotonic id counters — stable ids make the stream reproducible.
-  let packageCounter = 0;
-  let tripCounter = 0;
+  // SP2 (spec §5) + FIX 5 — per-DIRECTED-leg miles on the SAME distance basis as
+  // the trailer-fuel projection + twin-snapshot, so the sim odometer, the twin's
+  // `milesSinceRefuel`, and the optimizer's `distanceMiles` never diverge (an
+  // endpoint-haversine odometer under-counts a road-following leg by ~10–15%, which
+  // makes the optimizer over-predict refuels). PREFER the committed ORS road
+  // `distance_m` (mirroring `buildTransitParamsByLeg` + twin-snapshot's
+  // `distanceMiles`: `distance_m / 1000 km × 0.621371`), else the great-circle
+  // (haversine) miles between the two hub coords. The road file is loaded ONLY on
+  // the fuel-on path (no I/O when fuel is off ⇒ the off-mode stream stays
+  // byte-identical), and `legMilesFor` is only READ when `fuelOn`. Pure +
+  // deterministic: the static file is committed (no clock, no RNG, no network).
+  const KM_TO_MILES = 0.621_371;
+  const hubById = new Map<string, Hub>(hubs.map((h) => [h.hubId, h]));
+  const roadGeometry = fuelOn ? loadStaticRoadGeometry() : undefined;
+  const legMilesFor = (fromHubId: string, toHubId: string): number => {
+    const from = hubById.get(fromHubId);
+    const to = hubById.get(toHubId);
+    if (from === undefined || to === undefined) return 0;
+    // PREFER the ORS road distance (the SAME basis as the twin + projection).
+    const orsDistanceM = roadGeometry?.legs[routeId(fromHubId, toHubId)]?.distance_m;
+    if (orsDistanceM !== undefined) return (orsDistanceM / 1000) * KM_TO_MILES;
+    return haversineKm(from, to) * KM_TO_MILES;
+  };
 
-  /** Emit one event onto its stream at the current domain time. */
+  // Demo richness knob (DEFAULT 1 ⇒ byte-identical golden stream).
+  const fleetPerSpoke = Math.max(1, Math.floor(opts.fleetPerSpoke ?? 1));
+  // Initial-departure stagger (ticks) for extra fleet slots so they spread along
+  // a route instead of bunching at the center. Slot 0 keeps the tick-1 departure
+  // (so fleetPerSpoke=1 is unchanged); slot s departs at 1 + s·STAGGER.
+  const TRAILER_STAGGER_TICKS = 7;
+  // Per-batch package volume scales with the fleet so the extra trailers have
+  // freight to carry (×1 ⇒ the unchanged golden draw `rng.int(3)`).
+  const maxPackagesPerBatch = MAX_PACKAGES_PER_BATCH * fleetPerSpoke;
+
+  /**
+   * Trailer roster: trailerId ⇆ primary driverId ⇆ spoke ⇆ initial-departure
+   * tick. Slot 0 reproduces the legacy one-per-spoke roster EXACTLY (T001…T00N,
+   * D001…D00N, depart tick 1), so fleetPerSpoke=1 is byte-identical; slots ≥1
+   * append further trailers (continuing the id sequence) with staggered starts.
+   */
+  interface TrailerRosterEntry {
+    readonly trailerId: string;
+    readonly driverId: string;
+    readonly spoke: Hub;
+    readonly departTick: number;
+  }
+  const trailerRoster: TrailerRosterEntry[] = [];
+  {
+    let n = 0;
+    for (let slot = 0; slot < fleetPerSpoke; slot += 1) {
+      for (const spoke of spokes) {
+        n += 1;
+        const id = String(n).padStart(3, "0");
+        trailerRoster.push({
+          trailerId: `T${id}`,
+          driverId: `D${id}`,
+          spoke,
+          departTick: slot === 0 ? 1 : 1 + slot * TRAILER_STAGGER_TICKS,
+        });
+        // SP2: seed the per-trailer odometer at 0 (only when fuel is on, so an
+        // off run leaves `odometerByTrailer` empty — no state, no deltas).
+        if (fuelOn) odometerByTrailer.set(`T${id}`, 0);
+      }
+    }
+  }
+
+  // Monotonic id counters — stable ids make the stream reproducible.
+  // Monotonic id counters — restored from the continuation on resume so package /
+  // trip ids continue the same sequence (stable ids keep the stream reproducible).
+  let packageCounter = resuming ? start.world.packageCounter : 0;
+  let tripCounter = resuming ? start.world.tripCounter : 0;
+  // v2.0 IND-02: monotonic external-induction id counter; restored on resume so
+  // EXT ids continue the same sequence (stable ids keep the stream reproducible).
+  let inductionCounter = resuming ? start.world.inductionCounter : 0;
+  // Phase-22 OUT-01: monotonic delivered-package counter; restored on resume.
+  let deliveredCounter = resuming ? start.world.deliveredCounter : 0;
+  // Phase-22 OUT-01: packageId → locked slaDeadlineIso (whole-minute ISO) for
+  // inducted packages awaiting delivery. Only populated when `outboundOn`; empty
+  // on the off path (byte-identical to pre-Phase-22). Restored on resume so a
+  // mid-dwell continuation can still compute `onTime` deterministically.
+  const slaDeadlineByPackage = new Map<string, string>(
+    resuming ? start.world.slaDeadlineByPackage.map(([k, v]) => [k, v]) : [],
+  );
+
+  /**
+   * Emit one event onto its stream at the current domain time. CONT-01: when an
+   * `onEvent` callback is provided (the open-ended streaming path), the event is
+   * delivered one-by-one to the callback instead of being accumulated in `out[]`,
+   * so an indefinite run stays memory-bounded. Absent ⇒ `out[]` accumulation (the
+   * `simulate()` golden-test surface, byte-identical).
+   *
+   * Plan 19-08: every emit increments the global `nextSequenceId` (carried in the
+   * continuation) so the total order `(virtualTime, sequenceId)` is uninterrupted
+   * across chunk boundaries.
+   */
   const emit = (streamId: string, event: DomainEvent): void => {
-    out.push({ streamId, event, occurredAt: clock.nowIso() });
+    const item: SimulatedEvent = { streamId, event, occurredAt: clock.nowIso() };
+    nextSequenceId += 1;
+    if (onEventSink !== undefined) {
+      onEventSink(item);
+    } else {
+      out.push(item);
+    }
   };
 
   /**
@@ -370,23 +856,32 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // When the pool is momentarily exhausted the engine falls back to the Phase-11
   // park-while-resting behaviour (mid-leg break/rest via `applyDrivingLeg`).
 
+  // Plan 19-08: the HOS driver state is restored from the continuation on resume
+  // (a fresh run starts empty and seeds the pool at bootstrap below). Only ever
+  // populated when `hosOn`, so an HOS-off run carries empty maps.
   /** trailerId → the driver currently bound to it (mutated on a relay). */
-  const driverByTrailer = new Map<string, string>();
+  const driverByTrailer = new Map<string, string>(
+    resuming ? start.world.driverByTrailer.map(([k, v]) => [k, v]) : [],
+  );
   /** driverId → its live HOS clock (advanced by `applyDrivingLeg` / a reset). */
-  const clockByDriver = new Map<string, HosClock>();
+  const clockByDriver = new Map<string, HosClock>(
+    resuming ? start.world.clockByDriver.map(([k, v]) => [k, { ...v }]) : [],
+  );
   /**
    * driverId → the epoch-MINUTE the driver becomes available again. A driver that
    * is in-flight or resting is `> now`; a free driver is `<= now`. The relay pool
    * scan reads this (never wall-clock) so re-entry after a 10h reset is purely a
    * function of the deterministic virtual clock + the driver's accrued state.
    */
-  const availableAtMinByDriver = new Map<string, number>();
+  const availableAtMinByDriver = new Map<string, number>(
+    resuming ? start.world.availableAtMinByDriver.map(([k, v]) => [k, v]) : [],
+  );
   /**
    * driverIds that are NOT bound to a trailer's primary slot — the SPARE pool the
    * relay scan draws fresh drivers from. In a stable, seed-independent order
    * (registration order) so the relay selection is byte-deterministic.
    */
-  const sparePool: string[] = [];
+  const sparePool: string[] = resuming ? [...start.world.sparePool] : [];
 
   /** A fresh, post-10h-reset HOS clock anchored at the current virtual instant. */
   const freshHosClock = (nowIso: string): HosClock => ({
@@ -413,7 +908,11 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
         driverId,
         dutyStatus,
         reason,
-        clock: snapshot,
+        // Plan 19-08 (determinism fix): emit the clock in the SINGLE canonical key
+        // order so the bytes are independent of which HOS builder produced the
+        // source clock — making all-at-once and chunked-via-continuation runs
+        // byte-identical even when a clock survives a continuation boundary.
+        clock: canonicalHosClock(snapshot),
         occurredAt: clock.nowIso(),
       },
     };
@@ -436,22 +935,82 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     emit(`trailer-${trailerId}`, event);
   };
 
-  // --- Bootstrap: register every hub then every route, all at tick 0. -------
-  for (const hub of hubs) {
-    emit(`hub-${hub.hubId}`, hubRegisteredEvent(hub));
-  }
-  for (const route of routes) {
-    const event: DomainEvent = {
-      type: "RouteRegistered",
+  /**
+   * SP2 (spec §5): emit a located `TruckRested` ALONGSIDE the HOS rest/break that
+   * triggered it (same trailer, same `occurredAt`, the segment's whole `minutes`),
+   * mapping the HOS segment kind to the closed reason enum. NO lon/lat, NO RNG in
+   * the payload — the geo-track projection computes the map position from the
+   * logged leg geometry. No-op (zero events) unless `fuelOn`.
+   */
+  const emitTruckRested = (
+    trailerId: string,
+    tripId: string,
+    reason: "rest-10h" | "break-30min",
+    durationMin: number,
+  ): void => {
+    const event: TruckRested = {
+      type: "TruckRested",
+      schemaVersion: 1,
+      payload: { trailerId, tripId, reason, durationMin, occurredAt: clock.nowIso() },
+    };
+    emit(`trailer-${trailerId}`, event);
+  };
+
+  /**
+   * SP2 (spec §5): emit a located `TruckRefueled` when the per-trailer odometer
+   * crosses `refuelThresholdMiles` on a departing leg. `gallons` is the
+   * deterministic refilled amount from the tank model
+   * (`round(min(odometerMiles / mpg, tankCapacityGallons))`); `odometerMiles` is
+   * the cumulative miles at the refuel (PRE-reset, integer-rounded for a byte-stable
+   * payload). NO lon/lat, NO RNG in the payload (geometry-free). The caller resets
+   * the odometer to 0 after this.
+   */
+  const emitTruckRefueled = (
+    trailerId: string,
+    tripId: string,
+    odometerMiles: number,
+  ): void => {
+    const odo = Math.round(odometerMiles);
+    const gallons = Math.round(
+      Math.min(odo / fuelConfig.milesPerGallon, fuelConfig.tankCapacityGallons),
+    );
+    const event: TruckRefueled = {
+      type: "TruckRefueled",
       schemaVersion: 1,
       payload: {
-        routeId: route.routeId,
-        fromHubId: route.fromHubId,
-        toHubId: route.toHubId,
-        geometry: route.geometry,
+        trailerId,
+        tripId,
+        gallons,
+        odometerMiles: odo,
+        durationMin: Math.round(fuelConfig.refuelTimeMinutes),
+        occurredAt: clock.nowIso(),
       },
     };
-    emit(`route-${route.routeId}`, event);
+    emit(`trailer-${trailerId}`, event);
+  };
+
+  // Plan 19-08: the bootstrap (hub/route registration + driver-pool seeding +
+  // initial schedule) runs ONLY on a FRESH run. A resumed chunk restores all of
+  // that state from the continuation, so re-running the bootstrap would
+  // double-emit and corrupt the stream — it is gated on `!resuming` throughout.
+  // --- Bootstrap: register every hub then every route, all at tick 0. -------
+  if (!resuming) {
+    for (const hub of hubs) {
+      emit(`hub-${hub.hubId}`, hubRegisteredEvent(hub));
+    }
+    for (const route of routes) {
+      const event: DomainEvent = {
+        type: "RouteRegistered",
+        schemaVersion: 1,
+        payload: {
+          routeId: route.routeId,
+          fromHubId: route.fromHubId,
+          toHubId: route.toHubId,
+          geometry: route.geometry,
+        },
+      };
+      emit(`route-${route.routeId}`, event);
+    }
   }
 
   // --- SIM-HOS-02 + DRV-04: seed the center driver POOL at bootstrap (tick 0).
@@ -463,7 +1022,7 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // on, so the off-mode stream is byte-unchanged. Every registration precedes the
   // first `DriverAssignedToTrip` (first dispatch is at tick 1). The pool size is a
   // pure function of the network (no RNG) ⇒ the roster is byte-deterministic.
-  if (hosOn) {
+  if (hosOn && !resuming) {
     const nowIso = clock.nowIso();
     const nowMin = isoToEpochMinutes(nowIso);
     const registerDriver = (driverId: string): void => {
@@ -476,17 +1035,18 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       };
       emit(`driver-${driverId}`, registered);
     };
-    // Primary roster: one driver bound to each trailer (D001…D00N).
-    spokes.forEach((_spoke, i) => {
-      const trailerId = `T${String(i + 1).padStart(3, "0")}`;
-      const driverId = `D${String(i + 1).padStart(3, "0")}`;
-      driverByTrailer.set(trailerId, driverId);
-      registerDriver(driverId);
-    });
-    // Spare pool: extra fresh drivers a relay hands a trailer to. Ids continue
-    // the sequence after the primary roster so they sort stably AFTER it.
-    for (let k = 0; k < RELAY_SPARE_DRIVERS; k += 1) {
-      const driverId = `D${String(spokes.length + k + 1).padStart(3, "0")}`;
+    // Primary roster: one driver bound to each trailer (from `trailerRoster`;
+    // D001…D00N at fleetPerSpoke=1, continuing the sequence for extra slots).
+    for (const entry of trailerRoster) {
+      driverByTrailer.set(entry.trailerId, entry.driverId);
+      registerDriver(entry.driverId);
+    }
+    // Spare pool: extra fresh drivers a relay hands a trailer to, scaled by the
+    // fleet so more concurrent trailers still usually find a fresh legal driver.
+    // Ids continue the sequence after the primary roster so they sort stably AFTER it.
+    const spareCount = RELAY_SPARE_DRIVERS * fleetPerSpoke;
+    for (let k = 0; k < spareCount; k += 1) {
+      const driverId = `D${String(trailerRoster.length + k + 1).padStart(3, "0")}`;
       registerDriver(driverId);
       sparePool.push(driverId);
     }
@@ -495,12 +1055,65 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
   // --- Package generation: batches created at the center over time. ---------
   // Each package is created, scanned inbound at the center, and queued to ride
   // the next trailer toward its destination spoke. The queue per spoke is a
-  // FIFO manifest the spoke's trailer drains on departure.
+  // FIFO manifest the spoke's trailer drains on departure. Plan 19-08: restored
+  // from the continuation on resume (a fresh run starts every spoke empty).
   const pendingBySpoke = new Map<string, string[]>();
-  for (const s of spokes) pendingBySpoke.set(s.hubId, []);
+  if (resuming) {
+    for (const [hubId, ids] of start.world.pendingBySpoke) {
+      pendingBySpoke.set(hubId, [...ids]);
+    }
+  }
+  for (const s of spokes) if (!pendingBySpoke.has(s.hubId)) pendingBySpoke.set(s.hubId, []);
+
+  // FLOW-01: the SECOND queue — spoke-origin freight awaiting a spoke→center
+  // CONSOLIDATION trailer (the mirror of `pendingBySpoke`, which is center→spoke
+  // distribution). Populated ONLY when `consolidationOn`; on the off path it
+  // stays empty and emits zero behaviour, so the goldens are byte-identical.
+  // Restored from the continuation on resume so a chunked run is byte-identical
+  // to all-at-once (the determinism keystone — captured in `captureContinuation`).
+  const pendingAtSpoke = new Map<string, string[]>();
+  if (resuming) {
+    for (const [hubId, ids] of start.world.pendingAtSpoke) {
+      pendingAtSpoke.set(hubId, [...ids]);
+    }
+  }
+  for (const s of spokes) if (!pendingAtSpoke.has(s.hubId)) pendingAtSpoke.set(s.hubId, []);
+
+  // FLOW-02: the onward (post-center) destination spoke of each consolidation
+  // package (packageId → destHubId), so `arriveConsolidationAtCenter` can re-stage
+  // it into `pendingBySpoke[destSpoke]` (the cross-dock). Resolved at induction
+  // from the package's `destHubId` — freight already drawn, NO new RNG. Captured
+  // in the continuation so a chunk boundary between staging and the center re-sort
+  // resolves the dest identically (the determinism keystone). Off path empty.
+  const consolidationDestByPackage = new Map<string, string>();
+  if (resuming) {
+    for (const [packageId, destHubId] of start.world.consolidationDestByPackage) {
+      consolidationDestByPackage.set(packageId, destHubId);
+    }
+  }
 
   const createPackageBatch = (tick: number): void => {
-    const count = 1 + rng.int(MAX_PACKAGES_PER_BATCH); // 1..MAX
+    // CONT-05 (P2): sort-wave burst-quiet gate. ENTERED ONLY when `sortWave` is
+    // present — so an absent config leaves the original code path (and RNG draw)
+    // EXACTLY as before (byte-identical goldens, DET-01/DET-02). When present:
+    // during the QUIET window create nothing (no draw, no events); during the
+    // BURST window create exactly `burstPackagesPerBatch`. The window is pure
+    // modular arithmetic on the deterministic tick (no RNG salt).
+    let count: number;
+    if (opts.sortWave !== undefined) {
+      const period =
+        opts.sortWave.burstWindowTicks + opts.sortWave.quietWindowTicks;
+      const cycle = period > 0 ? tick % period : 0;
+      if (cycle >= opts.sortWave.burstWindowTicks) {
+        // Quiet window — emit nothing, but keep self-rescheduling (below).
+        const nextTick = tick + PACKAGE_INTERVAL_TICKS;
+        scheduleNext(nextTick, { kind: "createPackageBatch", tick: nextTick });
+        return;
+      }
+      count = opts.sortWave.burstPackagesPerBatch;
+    } else {
+      count = 1 + rng.int(maxPackagesPerBatch); // 1..(MAX × fleetPerSpoke)
+    }
     for (let i = 0; i < count; i += 1) {
       packageCounter += 1;
       const packageId = `P${String(packageCounter).padStart(5, "0")}`;
@@ -534,7 +1147,148 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       pendingBySpoke.get(dest.hubId)!.push(packageId);
     }
     const nextTick = tick + PACKAGE_INTERVAL_TICKS;
-    if (nextTick <= durationTicks) schedule(nextTick, () => createPackageBatch(nextTick));
+    // CONT-02 / Plan 19-08: keep self-scheduling so freight generation sustains
+    // indefinitely. `scheduleNext` decides whether the task is RETAINED (resumable
+    // path — captured into the continuation) or DROPPED past `durationTicks` (the
+    // finite all-at-once path — byte-identical goldens, DET-01).
+    scheduleNext(nextTick, { kind: "createPackageBatch", tick: nextTick });
+  };
+
+  /**
+   * v2.0 IND-02/IND-03: external induction — freight enters the network FROM
+   * OUTSIDE at a spoke hub. A self-rescheduling EventQueue task (like
+   * {@link createPackageBatch}) so the order stays single-threaded + deterministic
+   * — never an external append. Draws EXCLUSIVELY from `inductionRng` (byte-
+   * isolated from every other substream). Guards on `inductionOn` so the off path
+   * NEVER runs (the determinism keystone): zero draws, zero events.
+   *
+   * The deadline (`slaDeadlineIso`) is LOCKED at induction from the shared travel
+   * estimator: `occurredAt + expectedTransit(inductionHub→center→destHub) +
+   * center-dwell + SLA-class buffer`. All times use the VIRTUAL clock
+   * (`clock.nowIso()`) — never `Date.now()`.
+   */
+  const inductPackage = (tick: number): void => {
+    if (!inductionOn || inductionRng === undefined) return; // never runs when off
+
+    inductionCounter += 1;
+    const externalOriginRef = `EXT-${String(inductionCounter).padStart(5, "0")}`;
+    const packageId = `EXT-P${String(inductionCounter).padStart(5, "0")}`;
+
+    // Draw from inductionRng ONLY. Spoke→spoke routes via the center (Decision 2):
+    // the induction hub is a spoke; the destination is a DIFFERENT spoke.
+    const inductionHub = inductionRng.pick(spokes);
+    const destCandidates = spokes.filter((s) => s.hubId !== inductionHub.hubId);
+    // Fail-loud invariant: with the fixed 11-spoke topology there is ALWAYS at
+    // least one different spoke, so this NEVER fires for a valid run (goldens
+    // unaffected — zero extra RNG draws). A silent `: inductionHub` fallback
+    // would emit a self-destined induction (destHubId === inductionHubId),
+    // violating the `inductionHubId !== destHubId` invariant the projections and
+    // tests rely on. Throw instead of producing an impossible-but-quiet state.
+    if (destCandidates.length === 0) {
+      throw new Error(
+        `inductPackage: no destination spoke distinct from induction hub ` +
+          `"${inductionHub.hubId}" (${spokes.length} spoke(s) total) — ` +
+          `the fixed topology guarantees candidates, so this is an invalid state`,
+      );
+    }
+    const destHub = inductionRng.pick(destCandidates);
+    const slaClass = SLA_CLASSES[inductionRng.int(SLA_CLASSES.length)]!;
+
+    // Deadline = occurredAt + expectedTravel(inductionHub→center→destHub) + buffer.
+    // The same `expectedMinutes`-backed estimator the optimizer uses (one source
+    // of truth). Locked here; never regenerated.
+    const transitMin =
+      expectedTransitMinutes(inductionHub, center, timingConfig) +
+      expectedDwellMinutes("center", timingConfig) +
+      expectedTransitMinutes(center, destHub, timingConfig);
+    const occurredAtIso = clock.nowIso();
+    const deadlineMin =
+      isoToEpochMinutes(occurredAtIso) +
+      Math.round(transitMin) +
+      SLA_BUFFER_MIN[slaClass];
+    const slaDeadlineIso = epochMinutesToIso(deadlineMin);
+
+    const inducted: PackageInducted = {
+      type: "PackageInducted",
+      schemaVersion: 1,
+      payload: {
+        packageId,
+        inductionHubId: inductionHub.hubId,
+        destHubId: destHub.hubId,
+        slaClass,
+        slaDeadlineIso,
+        externalOriginRef,
+        occurredAt: occurredAtIso,
+      },
+    };
+    emit(`package-${packageId}`, inducted);
+
+    // Phase-22 OUT-01: when outbound delivery is ON, retain this inducted
+    // package's LOCKED slaDeadlineIso so the later one-shot `deliverPackage` task
+    // can compute `onTime` deterministically (even across a continuation boundary).
+    // Gated on `outboundOn` so the off path keeps `slaDeadlineByPackage` empty
+    // (byte-identical to pre-Phase-22). Reuses the already-derived deadline — NO
+    // new RNG draw, NO new event.
+    if (outboundOn) {
+      slaDeadlineByPackage.set(packageId, slaDeadlineIso);
+    }
+
+    // FLOW-01/02: when consolidation is ON, stage this spoke-origin package into
+    // the induction hub's consolidation manifest so a spoke→center consolidation
+    // trailer carries it to the center, where it cross-docks into
+    // `pendingBySpoke[destHub]` toward its onward spoke (Decision 2: spoke→spoke
+    // via the center). Reuses freight ALREADY drawn (the induction RNG above) — NO
+    // new randomness. Gated on `consolidationOn` so the off path is byte-identical
+    // (`pendingAtSpoke`/`consolidationDestByPackage` stay empty, zero events).
+    if (consolidationOn) {
+      pendingAtSpoke.get(inductionHub.hubId)!.push(packageId);
+      consolidationDestByPackage.set(packageId, destHub.hubId);
+    }
+
+    // Self-reschedule the NEXT induction at an ABSOLUTE tick (same discipline as
+    // createPackageBatch). `scheduleNext` RETAINS the task on the resumable path
+    // (captured into the continuation) or DROPS it past the horizon (finite path).
+    const nextTick = tick + INDUCTION_INTERVAL_TICKS;
+    scheduleNext(nextTick, { kind: "inductPackage", tick: nextTick });
+  };
+
+  /**
+   * OUT-01: the ONE-SHOT terminal delivery. Fired by a `deliverPackage` queue
+   * task (scheduled at a DESTINATION-hub arrival after a seeded dwell >= 1 tick).
+   * Emits `PackageDelivered` carrying the whole-minute-canonical `deliveredAt`
+   * and the computed `onTime` SLA flag, then purges the package's deadline from
+   * world state.
+   *
+   * Determinism: guarded by `outboundOn` + a constructed `outboundRng` so the off
+   * path never reaches here (no event, no draw). `deliveredAt` is canonicalized to
+   * whole minutes via `epochMinutesToIso(isoToEpochMinutes(...))` so it matches the
+   * `slaDeadlineIso` format (both `YYYY-MM-DDTHH:MM:00.000Z`) and avoids sub-minute
+   * key-order/formatting drift across a continuation boundary (D-22-5). `onTime`
+   * is the ISO-8601 LEXICOGRAPHIC comparison `deliveredAt <= slaDeadlineIso`;
+   * center-origin freight with no induction deadline is `onTime: true` by
+   * convention. This is ONE-SHOT — NO `scheduleNext` here (the key difference from
+   * `inductPackage`).
+   */
+  const deliverPackage = (
+    packageId: string,
+    hubId: string,
+    slaDeadlineIso: string | undefined,
+  ): void => {
+    if (!outboundOn || outboundRng === undefined) return; // never runs when off
+
+    deliveredCounter += 1;
+    const deliveredAt = epochMinutesToIso(isoToEpochMinutes(clock.nowIso()));
+    const onTime =
+      slaDeadlineIso !== undefined ? deliveredAt <= slaDeadlineIso : true;
+    const delivered: PackageDelivered = {
+      type: "PackageDelivered",
+      schemaVersion: 1,
+      payload: { packageId, hubId, deliveredAt, onTime, occurredAt: deliveredAt },
+    };
+    emit(`package-${packageId}`, delivered);
+    // Clean up the in-flight deadline so `slaDeadlineByPackage` stays bounded
+    // (one entry per in-flight delivery). A missing key is a natural no-op.
+    slaDeadlineByPackage.delete(packageId);
   };
 
   /**
@@ -558,7 +1312,7 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     driverId: string,
     legMinutes: number,
     departIso: string,
-  ): number => {
+  ): { extra: number; rests: readonly { reason: "rest-10h" | "break-30min"; minutes: number }[] } => {
     const before = clockByDriver.get(driverId)!;
     const result = applyDrivingLeg(before, hosLimits, legMinutes, departIso);
     clockByDriver.set(driverId, result.clock);
@@ -568,20 +1322,27 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     // `hosRng` jitter (0..HOS_REST_JITTER_TICKS) is drawn PER inserted pause, in
     // queue order, so two replays draw the same values in the same sequence.
     let extra = 0;
+    const rests: { reason: "rest-10h" | "break-30min"; minutes: number }[] = [];
     for (const seg of result.segments) {
       if (seg.kind === "drive") continue;
       const jitter = hosRng.int(HOS_REST_JITTER_TICKS + 1); // 0..JITTER inclusive
-      extra += seg.minutes + jitter;
-      const status: DutyStatus = seg.kind === "break" ? "on_break" : "resting";
-      const reason =
-        seg.kind === "break" ? "30-min-break-due" : "10h-reset";
+      const pauseMinutes = seg.minutes + jitter;
+      extra += pauseMinutes;
+      const isBreak = seg.kind === "break";
+      const status: DutyStatus = isBreak ? "on_break" : "resting";
+      const reason = isBreak ? "30-min-break-due" : "10h-reset";
       emitDutyState(driverId, status, reason, result.clock);
+      // SP2 (spec §5): record this mid-leg park so `departTrailer` can emit a
+      // co-located `TruckRested` (the new map-visible event). Recorded ALWAYS;
+      // emission is gated on `fuelOn` at the call site so the fuel-off stream is
+      // byte-identical (the `hosRng` jitter draw count/order above is unchanged).
+      rests.push({ reason: isBreak ? "break-30min" : "rest-10h", minutes: pauseMinutes });
     }
     // If the leg required any pause, the driver resumes driving afterward.
     if (extra > 0) {
       emitDutyState(driverId, "driving", "rest-complete", result.clock);
     }
-    return extra;
+    return { extra, rests };
   };
 
   /**
@@ -774,18 +1535,77 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     // relay the dispatched driver is fresh, so the leg fits with no rest and the
     // trailer departs ON TIME; only when the pool was exhausted (no swap) does
     // the tired driver park mid-leg. ZERO `hosRng` draws when HOS is off.
+    let legRests: readonly { reason: "rest-10h" | "break-30min"; minutes: number }[] = [];
     if (hosOn) {
       const driverId = driverByTrailer.get(trailerId)!;
-      restTicks = accrueDrivingLeg(driverId, transitTicks, clock.nowIso());
-      // The driver is in-flight until the leg (plus any park) completes, so it
-      // is unavailable for relay until then — re-entering the pool on arrival.
+      const accrued = accrueDrivingLeg(driverId, transitTicks, clock.nowIso());
+      restTicks = accrued.extra;
+      legRests = accrued.rests;
+    }
+
+    // SP2 (spec §5): accrue this leg's MILES onto the trailer's odometer and decide
+    // whether the trailer refuels on this leg (odometer crosses the threshold).
+    // The leg miles are outbound center→spoke (matching `transitTicks`'s directed
+    // leg). ZERO state when fuel is off (the odometer map is empty) ⇒ byte-identical.
+    let refuelTicks = 0;
+    let refuelOdometer = 0;
+    let didRefuel = false;
+    if (fuelOn) {
+      const accrued = (odometerByTrailer.get(trailerId) ?? 0) + legMilesFor(center.hubId, spoke.hubId);
+      if (accrued >= fuelConfig.refuelThresholdMiles) {
+        didRefuel = true;
+        refuelOdometer = accrued;
+        odometerByTrailer.set(trailerId, 0);
+        refuelTicks = Math.round(fuelConfig.refuelTimeMinutes);
+      } else {
+        odometerByTrailer.set(trailerId, accrued);
+      }
+    }
+
+    // No-double-count (spec §5): the leg's added arrival time is `max(rest,
+    // refuel)` — the refuel OVERLAPS any co-located rest, so a refuel inside a
+    // >= refuelTime rest adds NO extra delay and a lone refuel adds exactly
+    // `refuelTimeMinutes`. With refuel off (`refuelTicks === 0`) this is exactly
+    // `restTicks` — byte-identical to the prior HOS-only arrival.
+    const addedTicks = Math.max(restTicks, refuelTicks);
+    if (hosOn) {
+      const driverId = driverByTrailer.get(trailerId)!;
+      // The driver is in-flight until the leg (plus any park/refuel) completes, so
+      // it is unavailable for relay until then — re-entering the pool on arrival.
       availableAtMinByDriver.set(
         driverId,
-        isoToEpochMinutes(clock.nowIso()) + transitTicks + restTicks,
+        isoToEpochMinutes(clock.nowIso()) + transitTicks + addedTicks,
       );
     }
-    const arriveTick = departTick + transitTicks + restTicks;
-    schedule(arriveTick, () => arriveTrailer(trailerId, spoke, tripId, loaded, arriveTick));
+    const arriveTick = departTick + transitTicks + addedTicks;
+
+    // SP2 (spec §5/§6): schedule the MAP-VISIBLE stop events at a deterministic
+    // MID-LEG tick (halfway through the driving portion) so the geo-track
+    // projection interpolates a genuine MID-ROUTE position (a stop stamped at the
+    // departure tick would render on top of the origin hub). The mid-leg tick is a
+    // pure function of `departTick + transitTicks` (no RNG), so it is fully
+    // reproducible; emitting via the queue keeps `occurredAt` non-decreasing. Gated
+    // on `fuelOn` ⇒ ZERO extra events when fuel is off (byte-identical golden).
+    if (fuelOn && (legRests.length > 0 || didRefuel)) {
+      const midLegTick = departTick + Math.floor(transitTicks / 2);
+      schedule(midLegTick, {
+        kind: "midLegStops",
+        trailerId,
+        tripId,
+        legRests: legRests.map((r) => ({ reason: r.reason, minutes: r.minutes })),
+        didRefuel,
+        refuelOdometer,
+      });
+    }
+
+    schedule(arriveTick, {
+      kind: "arriveTrailer",
+      trailerId,
+      spokeHubId: spoke.hubId,
+      tripId,
+      carried: loaded,
+      arriveTick,
+    });
   };
 
   const arriveTrailer = (
@@ -853,6 +1673,26 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
         payload: { packageId, hubId: spoke.hubId },
       };
       emit(`package-${packageId}`, atHub);
+
+      // Phase-22 OUT-01: a package unloaded at this spoke has reached its
+      // DESTINATION hub (in a hub-and-spoke network a package only lands at a
+      // spoke when that spoke is its destination; center arrivals are
+      // transshipment and never schedule delivery). When outbound delivery is ON,
+      // schedule a ONE-SHOT `deliverPackage` after a seeded dwell >= 1 tick — so
+      // `PackageDelivered` fires at a STRICTLY-LATER tick than this arrival
+      // (D-22-2). The task is DATA (carries the locked slaDeadlineIso, undefined
+      // for center-origin freight) so a chunk boundary mid-dwell is byte-identical.
+      if (outboundOn && outboundRng !== undefined) {
+        const dwell = 1 + outboundRng.int(OUTBOUND_DWELL_TICKS_MAX); // >= 1
+        const fireTick = arriveTick + dwell;
+        scheduleNext(fireTick, {
+          kind: "deliverPackage",
+          packageId,
+          hubId: spoke.hubId,
+          slaDeadlineIso: slaDeadlineByPackage.get(packageId),
+          fireTick,
+        });
+      }
     }
 
     // SIM-HOS-05: UnloadCompleted follows the last unload scan at this spoke
@@ -900,9 +1740,81 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
       // leg's geography-derived params.
       const returnArriveTick = arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
       const overCarriedId = heldBack;
-      schedule(returnArriveTick, () =>
-        arriveOverCarriedAtCenter(trailerId, overCarriedId, returnTripId),
-      );
+      schedule(returnArriveTick, {
+        kind: "arriveOverCarriedAtCenter",
+        trailerId,
+        packageId: overCarriedId,
+        tripId: returnTripId,
+      });
+    }
+
+    // FLOW-01/02/03: spoke→center CONSOLIDATION. When consolidation is ON, this
+    // arriving trailer (now at the spoke, about to turn around for the center)
+    // picks up the spoke's staged consolidation freight for the return leg —
+    // mirroring the over-carry return leg but carrying the WHOLE drained manifest
+    // (real freight, not a single held-back package). `arriveTrailer` fires ONE
+    // trailer at a time in queue order, and the drain is an ATOMIC splice, so two
+    // trailers can NEVER take the same packages (the double-drain guard); a second
+    // trailer at the same spoke sees an empty manifest and departs EMPTY (FLOW-03,
+    // a valid, deterministic empty return — no silent/random empties).
+    if (consolidationOn) {
+      const atSpoke = pendingAtSpoke.get(spoke.hubId)!;
+      // Deterministic sort key (priority + tick + freightId): the manifest is
+      // filled in induction order; sorting by the unique, monotonic freightId
+      // (packageId) before the splice gives a stable, replay-identical order
+      // independent of any incidental insertion timing. NO RNG.
+      atSpoke.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      // ATOMIC peek+pop in one statement — the double-drain guard.
+      const consolidated = atSpoke.splice(0, atSpoke.length);
+
+      tripCounter += 1;
+      const consolidationTripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+
+      // Load scans for the consolidation freight at the spoke (origin of the leg).
+      for (const packageId of consolidated) {
+        const loadScan: PackageScanned = {
+          type: "PackageScanned",
+          schemaVersion: 1,
+          payload: { packageId, hubId: spoke.hubId, scanType: "load" },
+        };
+        emit(`package-${packageId}`, loadScan);
+      }
+
+      // SPOKE-ORIGIN consolidation departure (fromHubId=spoke, toHubId=center).
+      // packageIds may be EMPTY (a valid empty return) — a deterministic
+      // consequence of an empty `pendingAtSpoke` at this scheduled turnaround.
+      const consolidationDeparted: TrailerDeparted = {
+        type: "TrailerDeparted",
+        schemaVersion: 1,
+        payload: {
+          trailerId,
+          fromHubId: spoke.hubId,
+          toHubId: center.hubId,
+          tripId: consolidationTripId,
+          packageIds: consolidated,
+        },
+      };
+      emit(`trailer-${trailerId}`, consolidationDeparted);
+
+      // SIM-03: a DOCK-PORTAL read positively observes the consolidation freight
+      // aboard the trailer as it departs the spoke (parity with the over-carry
+      // return leg's corroborating read). Gated on RFID so the non-RFID stream is
+      // unaffected; skipped for an empty return (no freight to observe).
+      if (rfidEnabled && consolidated.length > 0) {
+        emitRfid("portal", trailerId, spoke.hubId, consolidated);
+      }
+
+      // Schedule the center arrival + re-sort. A fresh per-departure transit draw
+      // for the spoke→center return leg (its own departure). Carries the drained
+      // packageIds ARRAY as DATA so a resume reconstructs the cross-dock exactly.
+      const consolidationArriveTick =
+        arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
+      schedule(consolidationArriveTick, {
+        kind: "arriveConsolidationAtCenter",
+        trailerId,
+        packageIds: consolidated,
+        tripId: consolidationTripId,
+      });
     }
 
     // TIME-02: model the trailer's full turnaround as TWO role-keyed dwells, each
@@ -918,9 +1830,16 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     const spokeDwell = drawDwellTicks("spoke");
     const centerDwell = drawDwellTicks("center");
     const nextDepart = arriveTick + spokeDwell + centerDwell;
-    if (nextDepart <= durationTicks) {
-      schedule(nextDepart, () => departTrailer(trailerId, spoke, nextDepart));
-    }
+    // CONT-02 / Plan 19-08: keep re-dispatching so the fleet cycles indefinitely.
+    // `scheduleNext` RETAINS the task on the resumable path (captured into the
+    // continuation) and DROPS it past `durationTicks` on the finite all-at-once
+    // path (byte-identical goldens, DET-01).
+    scheduleNext(nextDepart, {
+      kind: "departTrailer",
+      trailerId,
+      spokeHubId: spoke.hubId,
+      departTick: nextDepart,
+    });
   };
 
   /**
@@ -964,31 +1883,284 @@ function generate(opts: SimulateOptions): SimulatedEvent[] {
     emit(`package-${packageId}`, atHub);
   };
 
+  /**
+   * FLOW-02: the spoke→center CONSOLIDATION trailer's center arrival + RE-SORT
+   * (the cross-dock). It mirrors {@link arriveOverCarriedAtCenter} (the trailer's
+   * arrival + dock) but, for EACH consolidated package, unloads it at the center
+   * AND re-stages it into `pendingBySpoke[destSpoke]` — so the existing
+   * center→spoke distribution picks it up toward its onward spoke (Decision 2).
+   * An EMPTY manifest (a valid empty return) docks the trailer and re-stages
+   * nothing. All ids/times are deterministic (no draw against any rng here).
+   */
+  const arriveConsolidationAtCenter = (
+    trailerId: string,
+    packageIds: readonly string[],
+    tripId: string,
+  ): void => {
+    const arrived: TrailerArrivedAtHub = {
+      type: "TrailerArrivedAtHub",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, tripId },
+    };
+    emit(`trailer-${trailerId}`, arrived);
+
+    const docked: TrailerDocked = {
+      type: "TrailerDocked",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, dockDoorId: `${center.hubId}-DOCK1` },
+    };
+    emit(`trailer-${trailerId}`, docked);
+
+    for (const packageId of packageIds) {
+      const unload: PackageScanned = {
+        type: "PackageScanned",
+        schemaVersion: 1,
+        payload: { packageId, hubId: center.hubId, scanType: "unload" },
+      };
+      emit(`package-${packageId}`, unload);
+
+      const atHub: PackageArrivedAtHub = {
+        type: "PackageArrivedAtHub",
+        schemaVersion: 1,
+        payload: { packageId, hubId: center.hubId },
+      };
+      emit(`package-${packageId}`, atHub);
+
+      // The cross-dock: re-stage into the onward spoke's distribution manifest so
+      // the existing center→spoke departure carries it the rest of the way. The
+      // dest was locked at induction (`consolidationDestByPackage`); fail loud if
+      // a package arrived without a recorded dest (an impossible-but-quiet state).
+      const destHubId = consolidationDestByPackage.get(packageId);
+      if (destHubId === undefined) {
+        throw new Error(
+          `arriveConsolidationAtCenter: no onward destination recorded for ` +
+            `consolidation package "${packageId}" — invalid state`,
+        );
+      }
+      consolidationDestByPackage.delete(packageId);
+      pendingBySpoke.get(destHubId)!.push(packageId);
+    }
+  };
+
   /** Schedule an action at `fireTick` with a stable insertion-order tie-break. */
-  function schedule(fireTick: number, run: () => void): void {
-    queue.push(fireTick, queue.claimSeq(), run);
+  function schedule(fireTick: number, task: SimTask): void {
+    queue.push(fireTick, queue.claimSeq(), task);
   }
 
-  // --- Seed the initial schedule --------------------------------------------
-  // First package batch at tick 0; one trailer per spoke departs at tick 1 so
-  // the first batch is available to load (deterministic, fixed offsets).
-  schedule(0, () => createPackageBatch(0));
-  spokes.forEach((spoke, i) => {
-    const trailerId = `T${String(i + 1).padStart(3, "0")}`;
-    schedule(1, () => departTrailer(trailerId, spoke, 1));
-  });
+  /**
+   * Self-rescheduling helper for the unbounded generators (package batches +
+   * trailer re-dispatch). Plan 19-08: it ALWAYS schedules the next task so the
+   * work is RETAINED in the queue and captured into the continuation — the
+   * resumable core's drain loop is the SOLE horizon ceiling. This is byte-identical
+   * to the pre-19-08 finite path because a task scheduled BEYOND `durationTicks`
+   * has a strictly-greater `fireTick`, so the drain loop never pops it (it can
+   * never tie with an in-horizon task), and scheduling is pure (no RNG, no emit).
+   * The legacy `runUntilStopped` open-ended streaming path keeps polling `stop`.
+   */
+  function scheduleNext(fireTick: number, task: SimTask): void {
+    schedule(fireTick, task);
+  }
 
-  // --- Drive the queue to completion ----------------------------------------
+  /** Dispatch one DATA task — the single switch that reconstructs every action. */
+  function dispatch(task: SimTask): void {
+    switch (task.kind) {
+      case "createPackageBatch":
+        createPackageBatch(task.tick);
+        return;
+      case "inductPackage":
+        inductPackage(task.tick);
+        return;
+      case "departTrailer":
+        departTrailer(task.trailerId, hubById.get(task.spokeHubId)!, task.departTick);
+        return;
+      case "arriveTrailer":
+        arriveTrailer(
+          task.trailerId,
+          hubById.get(task.spokeHubId)!,
+          task.tripId,
+          task.carried,
+          task.arriveTick,
+        );
+        return;
+      case "midLegStops":
+        for (const rest of task.legRests) {
+          emitTruckRested(task.trailerId, task.tripId, rest.reason, rest.minutes);
+        }
+        if (task.didRefuel) {
+          emitTruckRefueled(task.trailerId, task.tripId, task.refuelOdometer);
+        }
+        return;
+      case "arriveOverCarriedAtCenter":
+        arriveOverCarriedAtCenter(task.trailerId, task.packageId, task.tripId);
+        return;
+      case "arriveConsolidationAtCenter":
+        arriveConsolidationAtCenter(task.trailerId, task.packageIds, task.tripId);
+        return;
+      case "deliverPackage":
+        // Phase-22 OUT-01: one-shot terminal delivery. The locked slaDeadlineIso
+        // travels on the DATA task (undefined for center-origin freight), so a
+        // resume mid-dwell computes `onTime` identically without the world map.
+        deliverPackage(task.packageId, task.hubId, task.slaDeadlineIso);
+        return;
+    }
+  }
+
+  // --- Seed the initial schedule (FRESH run only) ---------------------------
+  // First package batch at tick 0; one trailer per spoke departs at tick 1 so
+  // the first batch is available to load (deterministic, fixed offsets). On a
+  // RESUME the queue is restored from the continuation, so this is skipped.
+  if (!resuming) {
+    schedule(0, { kind: "createPackageBatch", tick: 0 });
+    for (const entry of trailerRoster) {
+      schedule(entry.departTick, {
+        kind: "departTrailer",
+        trailerId: entry.trailerId,
+        spokeHubId: entry.spoke.hubId,
+        departTick: entry.departTick,
+      });
+    }
+    // v2.0 IND-02: seed the first induction (off by default). On a RESUME the
+    // pending induction task is restored from the captured queue, so this is
+    // skipped — the self-rescheduling chain continues uninterrupted.
+    if (inductionOn) {
+      schedule(INDUCTION_START_TICK, {
+        kind: "inductPackage",
+        tick: INDUCTION_START_TICK,
+      });
+    }
+  }
+
+  // --- Drive the queue up to the horizon ------------------------------------
+  // Plan 19-08: the resumable core drains tasks with `fireTick <= horizonTick`
+  // and STOPS at the horizon, leaving later tasks in the queue for the next chunk
+  // (captured into the continuation). The legacy `runUntilStopped` streaming path
+  // (open-ended.unit.test) ignores the horizon and polls the cooperative `stop()`
+  // predicate instead. Either way the emitted stream up to the horizon is
+  // byte-identical to the all-at-once `simulate()` (the keystone).
+  const openEnded = opts.runUntilStopped === true;
+  const shouldStop = opts.stop;
   for (;;) {
+    if (openEnded && shouldStop !== undefined && shouldStop()) break;
     const action = queue.pop();
     if (action === undefined) break;
-    if (action.fireTick > durationTicks) break;
+    if (!openEnded && action.fireTick > durationTicks) {
+      // Past the horizon — put it back so the continuation captures it intact.
+      queue.push(action.fireTick, action.seq, action.task);
+      break;
+    }
     clock.advance(action.fireTick - currentTick(clock));
-    action.run();
+    dispatch(action.task);
   }
 
-  return out;
+  // --- Capture the continuation (the resume point AFTER this chunk) ---------
+  const continuation = captureContinuation();
+
+  return { events: out, continuation };
+
+  /** Build the serializable continuation from the current engine state. */
+  function captureContinuation(): SimContinuation {
+    const world: SerializedWorldState = {
+      pendingBySpoke: [...pendingBySpoke.entries()].map(
+        ([k, v]) => [k, [...v]] as const,
+      ),
+      // FLOW-01: capture the consolidation queue so a chunked run that crosses a
+      // boundary mid-consolidation is byte-identical to all-at-once. On the off
+      // path every spoke maps to [] (zero behaviour), so this does not perturb the
+      // off-path stream — the captured shape matches the empty restore.
+      pendingAtSpoke: [...pendingAtSpoke.entries()].map(
+        ([k, v]) => [k, [...v]] as const,
+      ),
+      // FLOW-02: the consolidation package → onward-destination map, captured so a
+      // resume between staging and the center re-sort cross-docks to the same
+      // spoke. Empty on the off path (byte-identical to pre-Phase-21).
+      consolidationDestByPackage: [...consolidationDestByPackage.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
+      odometerByTrailer: [...odometerByTrailer.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
+      driverByTrailer: [...driverByTrailer.entries()].map(([k, v]) => [k, v] as const),
+      clockByDriver: [...clockByDriver.entries()].map(
+        ([k, v]) => [k, serializeHosClock(v)] as const,
+      ),
+      availableAtMinByDriver: [...availableAtMinByDriver.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
+      sparePool: [...sparePool],
+      packageCounter,
+      tripCounter,
+      inductionCounter,
+      // Phase-22 OUT-01: the delivered counter + the in-flight delivery deadline
+      // map, captured so a chunked run that crosses a boundary mid-dwell is
+      // byte-identical to all-at-once. Empty/0 on the off path (byte-identical to
+      // pre-Phase-22), so this does not perturb the off-path stream.
+      deliveredCounter,
+      slaDeadlineByPackage: [...slaDeadlineByPackage.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
+    };
+    return {
+      version: 1,
+      seed,
+      // The next virtual tick to resume at: one past the horizon we drained to
+      // (the clock is currently at the last-fired tick ≤ horizon; the next chunk
+      // re-anchors at this value). Use the horizon+1 so resume math is uniform.
+      nextTick: durationTicks + 1,
+      rng: {
+        base: rng.getState(),
+        rfid: rfidRng.getState(),
+        overCarry: overCarryRng.getState(),
+        timing: timingRng.getState(),
+        hos: hosRng.getState(),
+        fuel: fuelRng?.getState(),
+        induction: inductionRng?.getState(),
+        outbound: outboundRng?.getState(),
+      },
+      queue: queue.snapshot(),
+      nextSeq: queue.peekNextSeq(),
+      world,
+      nextSequenceId,
+    };
+  }
 }
+
+/**
+ * Plan 19-08 (determinism fix) — the SINGLE canonical HOS-clock key order.
+ *
+ * The domain HOS builders (`freshHosClock`, `applyDrivingLeg`'s mid-leg reset at
+ * `hos.ts:250`, the various `{ ...current, … }` spread-updates) each produce a
+ * `HosClock` with a DIFFERENT object key order — same VALUES, different insertion
+ * order. The all-at-once path emits whichever order the builder produced; a
+ * chunked run that crosses a continuation boundary rehydrates the clock via
+ * {@link serializeHosClock} (this fixed order) and re-emits it — so the SAME clock
+ * serialized to DIFFERENT bytes, breaking byte-identity (the
+ * continuation-equivalence keystone hashes key-order-sensitive `JSON.stringify`).
+ *
+ * The fix: normalize EVERY emitted `DriverDutyStateChanged.payload.clock` (and the
+ * serialized continuation form) through this ONE canonical key order, so both
+ * paths emit byte-identical events. Values are untouched — only key order is
+ * fixed. HOS is OFF by default, so the HOS-off goldens (seed-42 10k, seed-1234)
+ * contain NO HosClock and are unaffected.
+ */
+function canonicalHosClock(c: HosClock): HosClock {
+  return {
+    driveTodayMin: c.driveTodayMin,
+    dutyWindowStartAt: c.dutyWindowStartAt,
+    sinceLastBreakMin: c.sinceLastBreakMin,
+    weeklyOnDutyMin: c.weeklyOnDutyMin,
+    comeOnDutyAt: c.comeOnDutyAt,
+    sleeperBerthLongMin: c.sleeperBerthLongMin,
+    sleeperBerthShortMin: c.sleeperBerthShortMin,
+  };
+}
+
+/** Serialize an HOS clock into the continuation's plain-data form (canonical order). */
+function serializeHosClock(c: HosClock): SerializedHosClock {
+  // Shares the SINGLE canonical key order with the emit site (DRY): the
+  // SerializedHosClock shape is exactly the canonical HosClock field set.
+  return canonicalHosClock(c);
+}
+
 
 /** Current tick of the clock relative to the epoch (integer ticks elapsed). */
 function currentTick(clock: VirtualClock): number {
@@ -1001,9 +2173,23 @@ function currentTick(clock: VirtualClock): number {
 /**
  * Pure generator: the full deterministic event stream for `opts`, with no
  * database and no ambient state. Same seed -> byte-identical array.
+ *
+ * Plan 19-08: REIMPLEMENTED on top of the resumable {@link runToHorizon} core —
+ * a fresh run to the `durationTicks` horizon, returning the collected events. The
+ * result is BYTE-IDENTICAL to the pre-19-08 finite path (the seed-1234 + seed-42
+ * goldens are unchanged; the continuation-equivalence test proves the chunked
+ * path matches this all-at-once stream exactly). When `runUntilStopped` +
+ * `onEvent` are supplied (the legacy streaming surface) events are delivered to
+ * the callback and the returned array is empty — unchanged behaviour.
  */
 export function simulate(opts: SimulateOptions): SimulatedEvent[] {
-  return generate(opts);
+  if (!Number.isInteger(opts.durationTicks) || opts.durationTicks < 0) {
+    throw new RangeError(
+      `durationTicks must be a non-negative integer, got ${opts.durationTicks}`,
+    );
+  }
+  const { events } = runToHorizon({ seed: opts.seed }, opts.durationTicks, opts);
+  return events;
 }
 
 /**
@@ -1013,7 +2199,7 @@ export function simulate(opts: SimulateOptions): SimulatedEvent[] {
  * version ordering is preserved.
  */
 export async function runSimulation(opts: RunSimulationOptions): Promise<void> {
-  const stream = generate(opts);
+  const stream = simulate(opts);
   for (const item of stream) {
     await opts.sink(item);
   }

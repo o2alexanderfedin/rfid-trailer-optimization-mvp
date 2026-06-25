@@ -53,6 +53,7 @@ function trailer(over: Partial<HubTrailerDto> & Pick<HubTrailerDto, "trailerId">
 
 const HUB_DETAIL: HubDetailDto = {
   hubId: "DAL",
+  inventoryBalance: { inbound: 0, outbound: 0 },
   trailers: [
     trailer({
       trailerId: "TRL-014",
@@ -98,6 +99,7 @@ function snapshotEnv(simMs: number, open: readonly ExceptionItem[] = []): WsEnve
     type: "snapshot",
     seq: 1,
     simMs,
+    simDay: 0,
     speed: SPEED_PAUSED,
     payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: open },
   };
@@ -268,7 +270,7 @@ describe("HubDetail render — loaded hub", () => {
   });
 
   it("renders the empty state for a hub with no trailers", async () => {
-    mockHubDetail({ hubId: "EMPTY", trailers: [] });
+    mockHubDetail({ hubId: "EMPTY", trailers: [], inventoryBalance: { inbound: 0, outbound: 0 } });
     renderHub("EMPTY");
     expect(await screen.findByTestId("hub-detail-empty")).toBeInTheDocument();
   });
@@ -333,6 +335,7 @@ describe("HubDetail live dwell ticking", () => {
         type: "snapshot",
         seq: 1,
         simMs: 60_000,
+        simDay: 0,
         speed: { multiplier: 1, tickIntervalMs: 500, simSpeed: 120, paused: false },
         payload: { trailers: [], hubs: [], routes: [], exceptionsOpen: [] },
       }),
