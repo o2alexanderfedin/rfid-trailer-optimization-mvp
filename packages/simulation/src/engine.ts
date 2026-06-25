@@ -115,6 +115,16 @@ export const FUEL_RNG_SALT = 0x2b_3d_91_e7;
  */
 export const INDUCTION_RNG_SALT = 0x8f_2c_4a_e1;
 
+/**
+ * Phase-22 OUT-01: the EIGHTH substream salt, for outbound-delivery dwell draws.
+ * A NEW, DISTINCT, well-separated constant (the salt-collision test asserts it
+ * differs from all seven above — hash-split, NOT `seed+1`) so delivered packages
+ * never perturb any prior stream. The `outboundRng` it seeds is constructed ONLY
+ * when `outboundDeliveryEnabled === true` — so an outbound-off run draws ZERO
+ * outbound values and stays byte-identical to the golden (the determinism keystone).
+ */
+export const OUTBOUND_RNG_SALT = 0xc4_f8_32_b6;
+
 // --- Public types -----------------------------------------------------------
 
 /** One emitted event, ready to persist: which stream, the event, its domain time. */
@@ -298,6 +308,22 @@ export interface SimulateOptions {
    * byte-identical to all-at-once.
    */
   readonly consolidationEnabled?: boolean;
+
+  /**
+   * OUT-01: OPT-IN terminal delivery at destination hubs. **DEFAULT FALSE —
+   * the determinism keystone.** When absent or `false`, the engine emits NO
+   * `PackageDelivered` events and makes ZERO `outboundRng` draws (the substream
+   * is never even constructed), so the existing seed-1234 + seed-42 goldens are
+   * BYTE-IDENTICAL (DET-01). When `true`, a seeded one-shot `deliverPackage`
+   * EventQueue task fires after a seeded dwell (>= 1 tick, D-22-2) from a
+   * DESTINATION-hub arrival; an `onTime` SLA flag is computed at emit (D-22-5).
+   * Fully resumable — the outbound RNG state, pending-delivery task(s),
+   * `deliveredCounter`, and `slaDeadlineByPackage` map are captured in
+   * `SimContinuation`. The flag gates ALL outbound behavior; it is checked with
+   * a STRICT `=== true` comparison (never `??` or `||`, which would make an
+   * absent flag accidentally truthy and perturb the golden).
+   */
+  readonly outboundDeliveryEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -518,6 +544,13 @@ export function runToHorizon(
   // so NO new substream/salt is introduced — selection/cadence are deterministic.
   const consolidationOn = opts.consolidationEnabled === true;
 
+  // Phase-22 OUT-01: outbound delivery is OPT-IN and DEFAULT OFF. Absent/false ⇒
+  // the engine emits NO `PackageDelivered`, NEVER constructs/draws `outboundRng`,
+  // populates NO `slaDeadlineByPackage`, and schedules NO `deliverPackage` task,
+  // so all existing goldens are byte-identical (the determinism keystone). STRICT
+  // `=== true` — never `??`/`||` (an absent flag must stay falsy).
+  const outboundOn = opts.outboundDeliveryEnabled === true;
+
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
   const rfidEnabled = rfid !== undefined;
@@ -592,6 +625,17 @@ export function runToHorizon(
     ? restoredRng && restoredRng.induction !== undefined
       ? makeRngFromState(restoredRng.induction)
       : makeRng((seed ^ INDUCTION_RNG_SALT) >>> 0)
+    : undefined;
+  // Phase-22 OUT-01: the EIGHTH substream. Created ONLY when outbound delivery is
+  // on (the determinism keystone — an outbound-off run never even constructs it).
+  // The salt is DISTINCT from the seven above (asserted by the salt-collision
+  // test) so dwell draws are reproducible per seed yet never perturb the other
+  // streams. On resume it is restored from the captured raw state so a chunked run
+  // draws the EXACT remaining sequence (continuation-equivalence keystone).
+  const outboundRng: Rng | undefined = outboundOn
+    ? restoredRng && restoredRng.outbound !== undefined
+      ? makeRngFromState(restoredRng.outbound)
+      : makeRng((seed ^ OUTBOUND_RNG_SALT) >>> 0)
     : undefined;
   // SP2: per-trailer odometer (miles since last refuel), init 0 at roster
   // seeding. Only mutated when `fuelOn`; an off run leaves it empty (no state).
@@ -727,6 +771,15 @@ export function runToHorizon(
   // v2.0 IND-02: monotonic external-induction id counter; restored on resume so
   // EXT ids continue the same sequence (stable ids keep the stream reproducible).
   let inductionCounter = resuming ? start.world.inductionCounter : 0;
+  // Phase-22 OUT-01: monotonic delivered-package counter; restored on resume.
+  let deliveredCounter = resuming ? start.world.deliveredCounter : 0;
+  // Phase-22 OUT-01: packageId → locked slaDeadlineIso (whole-minute ISO) for
+  // inducted packages awaiting delivery. Only populated when `outboundOn`; empty
+  // on the off path (byte-identical to pre-Phase-22). Restored on resume so a
+  // mid-dwell continuation can still compute `onTime` deterministically.
+  const slaDeadlineByPackage = new Map<string, string>(
+    resuming ? start.world.slaDeadlineByPackage.map(([k, v]) => [k, v]) : [],
+  );
 
   /**
    * Emit one event onto its stream at the current domain time. CONT-01: when an
@@ -1948,6 +2001,14 @@ export function runToHorizon(
       packageCounter,
       tripCounter,
       inductionCounter,
+      // Phase-22 OUT-01: the delivered counter + the in-flight delivery deadline
+      // map, captured so a chunked run that crosses a boundary mid-dwell is
+      // byte-identical to all-at-once. Empty/0 on the off path (byte-identical to
+      // pre-Phase-22), so this does not perturb the off-path stream.
+      deliveredCounter,
+      slaDeadlineByPackage: [...slaDeadlineByPackage.entries()].map(
+        ([k, v]) => [k, v] as const,
+      ),
     };
     return {
       version: 1,
@@ -1964,6 +2025,7 @@ export function runToHorizon(
         hos: hosRng.getState(),
         fuel: fuelRng?.getState(),
         induction: inductionRng?.getState(),
+        outbound: outboundRng?.getState(),
       },
       queue: queue.snapshot(),
       nextSeq: queue.peekNextSeq(),

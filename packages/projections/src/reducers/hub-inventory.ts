@@ -211,6 +211,12 @@ export function hubInventoryReducer(
         (acc, packageId) => placePackage(acc, packageId, null),
         state,
       );
+    case "PackageDelivered":
+      // OUT-04 / D-22-1: hard DELETE via null target. `placePackage(..., null)` is
+      // a guaranteed no-op when the package is absent (the `prior === undefined`
+      // guard inside placePackage), so this is idempotent and crash-safe on
+      // re-apply/replay. Removes the delivered package's inventory contribution.
+      return placePackage(state, event.payload.packageId, null);
     // Phase-3 RFID/detection events are no-ops for hub inventory — observed
     // evidence is projected separately (later Phase-3 plans), never folded into
     // the planned inventory read model (anti-P6). Phase-4 plan-lifecycle events

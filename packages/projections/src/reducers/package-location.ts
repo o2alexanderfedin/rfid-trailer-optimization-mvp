@@ -86,6 +86,14 @@ export function packageLocationReducer(
       });
       return next;
     }
+    case "PackageDelivered": {
+      // OUT-04 / D-22-1: hard DELETE — remove the row. `Map.delete()` returns
+      // false on a missing key (never throws), so this is naturally idempotent
+      // and crash-safe on re-apply/replay (no read-modify-write assuming the row).
+      const next = new Map(state);
+      next.delete(event.payload.packageId);
+      return next;
+    }
     // Phase-3 RFID/detection events do not change scan-derived package location
     // — the fused zone estimate is a separate read model (later Phase-3 plans).
     // Anti-P6: absence of an RFID read never changes a package's known location.

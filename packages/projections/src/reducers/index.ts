@@ -57,6 +57,10 @@ export {
   zoneEstimateKey,
 } from "./zone-estimate.js";
 
+// --- OUT-05 (P2) / D-22-3: event-derived delivery KPI (delivered + on-time) -
+export type { DeliveryKpiState } from "./delivery-kpi.js";
+export { deliveryKpiReducer, emptyDeliveryKpiState } from "./delivery-kpi.js";
+
 // --- SNS-04/05: open exceptions feed + false-positive-rate KPI --------------
 export type {
   ExceptionKind,
