@@ -120,7 +120,21 @@ Plans:
   3. Existing center→spoke distribution continues unbroken: a regression test with `consolidationEnabled: false` (default) produces a byte-identical golden to pre-Phase-21; empty-return consolidation trailers (no pendingAtSpoke freight) depart and arrive without error
   4. The optimizer handles both flow directions without double-counting: stale staged plan entries are cleared via plan supersession, the optimizer idempotency map persists across restarts (Postgres-backed), and `detectAffectedScope` correctly scopes spoke→center legs to `[spokeHubId, centerId]`
   5. (P2) A per-hub inbound/outbound inventory balance display (cross-dock utilization heat) is visible in the operator UI, showing consolidation value numerically
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+**Wave 1**
+- [ ] 21-01-PLAN.md — PlanSuperseded 5-file closed-union ceremony + round-trip/strict-reject test (FLOW-04 / D-21-1)
+- [ ] 21-02-PLAN.md — Wave-0 RED stubs: consolidation-determinism + DET-01 off-path + consolidation continuation-equivalence case (FLOW-01/02/03)
+- [ ] 21-06-PLAN.md — Detection active-scoping (makeProjectionReads) + bounded ≤5k benchmark (FLOW-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 21-03-PLAN.md — 11 reducers handle PlanSuperseded; hub-inventory delete-then-apply + Open-Q1 staged-target resolution + regression (FLOW-04)
+- [ ] 21-04-PLAN.md — Engine: consolidationEnabled + pendingAtSpoke + consolidation departure/center re-sort + continuation capture (FLOW-01/02/03)
+- [ ] 21-05-PLAN.md — optimizer_idempotency durable table + scopeHash ORDER BY + both-direction scope + PlanSuperseded co-commit + bounded restart int test (FLOW-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 21-07-PLAN.md — VIZ-12 ws direction field + driver threading + distinct consolidation map style + human-verify checkpoint (VIZ-12)
+- [ ] 21-08-PLAN.md — FLOW-05 (P2) hub inbound/outbound balance read API + operator panel + final phase-gate checkpoint (FLOW-05)
 **UI hint**: yes
 
 ### Phase 22: Outbound Delivery
@@ -142,7 +156,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 19. Continuous Operation Foundation | 8/8 | ✅ Complete | 2026-06-24 |
 | 20. External Induction | 6/6 | ✅ Complete | 2026-06-24 |
-| 21. Bidirectional Freight / Consolidation | 0/? | Not started | - |
+| 21. Bidirectional Freight / Consolidation | 0/8 | Planned | - |
 | 22. Outbound Delivery | 0/? | Not started | - |
 
 | Milestone | Phases | Status | Shipped |
