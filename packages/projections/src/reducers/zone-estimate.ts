@@ -199,10 +199,26 @@ function applyEvent(
     case "TruckRefueled":
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
-    case "PackageDelivered": // Phase-22 OUT-04: zone estimates are RFID-only; the
-      // Phase-21 is_active filter already excludes delivered packages from detection
-      // scope, and PackageDelivered carries no RFID data — so this is a no-op here.
       return state;
+    case "PackageDelivered": {
+      // Phase-22 OUT-04 / D-22-1: hard DELETE — the package EXITED the network, so
+      // purge EVERY zone estimate for it (keys are `${packageId}|${trailerId}`, a
+      // package may have been observed in more than one trailer). The Phase-21
+      // is_active filter only gates downstream READS; it does not reclaim the
+      // already-accumulated zone rows, so an RFID-observed delivered package would
+      // otherwise leak one stale row per trailer. Idempotent: if no key carries the
+      // prefix the same `state` reference is returned (no throw, no read-modify-write).
+      // O(n) prefix scan — acceptable at demo scale.
+      const prefix = `${event.payload.packageId}|`;
+      let next: Map<string, ZoneEstimate> | undefined;
+      for (const key of state.keys()) {
+        if (key.startsWith(prefix)) {
+          if (next === undefined) next = new Map(state);
+          next.delete(key);
+        }
+      }
+      return next ?? state;
+    }
     default:
       return assertNeverEvent(event);
   }

@@ -52,13 +52,6 @@ const deliveredEvents = (s: ReturnType<typeof simulate>): PackageDelivered[] =>
     .filter((e) => e.event.type === "PackageDelivered")
     .map((e) => e.event as PackageDelivered);
 
-const arrivedEvents = (
-  s: ReturnType<typeof simulate>,
-): PackageArrivedAtHub[] =>
-  s
-    .filter((e) => e.event.type === "PackageArrivedAtHub")
-    .map((e) => e.event as PackageArrivedAtHub);
-
 describe("OUT-02: outbound determinism keystone (flag-off)", () => {
   it("outboundDeliveryEnabled ABSENT ⇒ ZERO PackageDelivered events (DET-01)", () => {
     const s = simulate({ seed: SEED, durationTicks: TICKS });
