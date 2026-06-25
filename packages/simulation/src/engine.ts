@@ -279,6 +279,25 @@ export interface SimulateOptions {
    * the `SimContinuation`, so a chunked run is byte-identical to all-at-once.
    */
   readonly inductionEnabled?: boolean;
+  /**
+   * FLOW-01/02/03: OPT-IN spoke→center consolidation (bidirectional freight).
+   * **DEFAULT FALSE — the determinism keystone.** When absent or `false`, the
+   * engine populates NO `pendingAtSpoke` manifest, emits NO consolidation
+   * `TrailerDeparted`/`arriveConsolidationAtCenter` events, and makes ZERO new
+   * RNG draws ⇒ the existing seed-1234 + seed-42 goldens are BYTE-IDENTICAL
+   * (DET-01). When `true`, spoke-origin freight staged in `pendingAtSpoke` (from
+   * Phase-20 induction or center distribution — freight already drawn, so NO new
+   * randomness) is drained onto spoke→center consolidation trailers via an atomic
+   * splice (the double-drain guard), carried to the center, unloaded, and
+   * re-staged into `pendingBySpoke[destSpoke]` so the existing center→spoke
+   * distribution cross-docks it onward (Decision 2: spoke→spoke via the center).
+   * Cadence/selection are DETERMINISTIC (modular tick arithmetic + a stable
+   * priority+tick+freightId sort; idle trailers in `trailerId` order). Fully
+   * resumable — `pendingAtSpoke` is captured in the `SimContinuation.world` and
+   * the center-arrival is a DATA `SimTask` variant, so a chunked run is
+   * byte-identical to all-at-once.
+   */
+  readonly consolidationEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -490,6 +509,14 @@ export function runToHorizon(
   // engine emits NO `PackageInducted` and NEVER constructs/draws `inductionRng`,
   // so all existing goldens are byte-identical (the determinism keystone).
   const inductionOn = opts.inductionEnabled === true;
+
+  // FLOW-01/02/03: spoke→center consolidation is OPT-IN and DEFAULT OFF.
+  // Absent/false ⇒ the engine NEVER populates `pendingAtSpoke`, emits NO
+  // consolidation departure/center-arrival events, and draws NO new RNG, so the
+  // existing goldens are byte-identical (the determinism keystone). When on,
+  // consolidation reuses freight already drawn (induction/center-distribution),
+  // so NO new substream/salt is introduced — selection/cadence are deterministic.
+  const consolidationOn = opts.consolidationEnabled === true;
 
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
@@ -971,6 +998,33 @@ export function runToHorizon(
   }
   for (const s of spokes) if (!pendingBySpoke.has(s.hubId)) pendingBySpoke.set(s.hubId, []);
 
+  // FLOW-01: the SECOND queue — spoke-origin freight awaiting a spoke→center
+  // CONSOLIDATION trailer (the mirror of `pendingBySpoke`, which is center→spoke
+  // distribution). Populated ONLY when `consolidationOn`; on the off path it
+  // stays empty and emits zero behaviour, so the goldens are byte-identical.
+  // Restored from the continuation on resume so a chunked run is byte-identical
+  // to all-at-once (the determinism keystone — captured in `captureContinuation`).
+  const pendingAtSpoke = new Map<string, string[]>();
+  if (resuming) {
+    for (const [hubId, ids] of start.world.pendingAtSpoke) {
+      pendingAtSpoke.set(hubId, [...ids]);
+    }
+  }
+  for (const s of spokes) if (!pendingAtSpoke.has(s.hubId)) pendingAtSpoke.set(s.hubId, []);
+
+  // FLOW-02: the onward (post-center) destination spoke of each consolidation
+  // package (packageId → destHubId), so `arriveConsolidationAtCenter` can re-stage
+  // it into `pendingBySpoke[destSpoke]` (the cross-dock). Resolved at induction
+  // from the package's `destHubId` — freight already drawn, NO new RNG. Captured
+  // in the continuation so a chunk boundary between staging and the center re-sort
+  // resolves the dest identically (the determinism keystone). Off path empty.
+  const consolidationDestByPackage = new Map<string, string>();
+  if (resuming) {
+    for (const [packageId, destHubId] of start.world.consolidationDestByPackage) {
+      consolidationDestByPackage.set(packageId, destHubId);
+    }
+  }
+
   const createPackageBatch = (tick: number): void => {
     // CONT-05 (P2): sort-wave burst-quiet gate. ENTERED ONLY when `sortWave` is
     // present — so an absent config leaves the original code path (and RNG draw)
@@ -1101,6 +1155,18 @@ export function runToHorizon(
       },
     };
     emit(`package-${packageId}`, inducted);
+
+    // FLOW-01/02: when consolidation is ON, stage this spoke-origin package into
+    // the induction hub's consolidation manifest so a spoke→center consolidation
+    // trailer carries it to the center, where it cross-docks into
+    // `pendingBySpoke[destHub]` toward its onward spoke (Decision 2: spoke→spoke
+    // via the center). Reuses freight ALREADY drawn (the induction RNG above) — NO
+    // new randomness. Gated on `consolidationOn` so the off path is byte-identical
+    // (`pendingAtSpoke`/`consolidationDestByPackage` stay empty, zero events).
+    if (consolidationOn) {
+      pendingAtSpoke.get(inductionHub.hubId)!.push(packageId);
+      consolidationDestByPackage.set(packageId, destHub.hubId);
+    }
 
     // Self-reschedule the NEXT induction at an ABSOLUTE tick (same discipline as
     // createPackageBatch). `scheduleNext` RETAINS the task on the resumable path
@@ -1546,6 +1612,75 @@ export function runToHorizon(
       });
     }
 
+    // FLOW-01/02/03: spoke→center CONSOLIDATION. When consolidation is ON, this
+    // arriving trailer (now at the spoke, about to turn around for the center)
+    // picks up the spoke's staged consolidation freight for the return leg —
+    // mirroring the over-carry return leg but carrying the WHOLE drained manifest
+    // (real freight, not a single held-back package). `arriveTrailer` fires ONE
+    // trailer at a time in queue order, and the drain is an ATOMIC splice, so two
+    // trailers can NEVER take the same packages (the double-drain guard); a second
+    // trailer at the same spoke sees an empty manifest and departs EMPTY (FLOW-03,
+    // a valid, deterministic empty return — no silent/random empties).
+    if (consolidationOn) {
+      const atSpoke = pendingAtSpoke.get(spoke.hubId)!;
+      // Deterministic sort key (priority + tick + freightId): the manifest is
+      // filled in induction order; sorting by the unique, monotonic freightId
+      // (packageId) before the splice gives a stable, replay-identical order
+      // independent of any incidental insertion timing. NO RNG.
+      atSpoke.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      // ATOMIC peek+pop in one statement — the double-drain guard.
+      const consolidated = atSpoke.splice(0, atSpoke.length);
+
+      tripCounter += 1;
+      const consolidationTripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+
+      // Load scans for the consolidation freight at the spoke (origin of the leg).
+      for (const packageId of consolidated) {
+        const loadScan: PackageScanned = {
+          type: "PackageScanned",
+          schemaVersion: 1,
+          payload: { packageId, hubId: spoke.hubId, scanType: "load" },
+        };
+        emit(`package-${packageId}`, loadScan);
+      }
+
+      // SPOKE-ORIGIN consolidation departure (fromHubId=spoke, toHubId=center).
+      // packageIds may be EMPTY (a valid empty return) — a deterministic
+      // consequence of an empty `pendingAtSpoke` at this scheduled turnaround.
+      const consolidationDeparted: TrailerDeparted = {
+        type: "TrailerDeparted",
+        schemaVersion: 1,
+        payload: {
+          trailerId,
+          fromHubId: spoke.hubId,
+          toHubId: center.hubId,
+          tripId: consolidationTripId,
+          packageIds: consolidated,
+        },
+      };
+      emit(`trailer-${trailerId}`, consolidationDeparted);
+
+      // SIM-03: a DOCK-PORTAL read positively observes the consolidation freight
+      // aboard the trailer as it departs the spoke (parity with the over-carry
+      // return leg's corroborating read). Gated on RFID so the non-RFID stream is
+      // unaffected; skipped for an empty return (no freight to observe).
+      if (rfidEnabled && consolidated.length > 0) {
+        emitRfid("portal", trailerId, spoke.hubId, consolidated);
+      }
+
+      // Schedule the center arrival + re-sort. A fresh per-departure transit draw
+      // for the spoke→center return leg (its own departure). Carries the drained
+      // packageIds ARRAY as DATA so a resume reconstructs the cross-dock exactly.
+      const consolidationArriveTick =
+        arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
+      schedule(consolidationArriveTick, {
+        kind: "arriveConsolidationAtCenter",
+        trailerId,
+        packageIds: consolidated,
+        tripId: consolidationTripId,
+      });
+    }
+
     // TIME-02: model the trailer's full turnaround as TWO role-keyed dwells, each
     // applied EXACTLY ONCE (PITFALLS P4 — no double-count). The trailer first
     // turns around at the SPOKE (`dwellSpoke`), then returns to the center where
@@ -1612,6 +1747,65 @@ export function runToHorizon(
     emit(`package-${packageId}`, atHub);
   };
 
+  /**
+   * FLOW-02: the spoke→center CONSOLIDATION trailer's center arrival + RE-SORT
+   * (the cross-dock). It mirrors {@link arriveOverCarriedAtCenter} (the trailer's
+   * arrival + dock) but, for EACH consolidated package, unloads it at the center
+   * AND re-stages it into `pendingBySpoke[destSpoke]` — so the existing
+   * center→spoke distribution picks it up toward its onward spoke (Decision 2).
+   * An EMPTY manifest (a valid empty return) docks the trailer and re-stages
+   * nothing. All ids/times are deterministic (no draw against any rng here).
+   */
+  const arriveConsolidationAtCenter = (
+    trailerId: string,
+    packageIds: readonly string[],
+    tripId: string,
+  ): void => {
+    const arrived: TrailerArrivedAtHub = {
+      type: "TrailerArrivedAtHub",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, tripId },
+    };
+    emit(`trailer-${trailerId}`, arrived);
+
+    const docked: TrailerDocked = {
+      type: "TrailerDocked",
+      schemaVersion: 1,
+      payload: { trailerId, hubId: center.hubId, dockDoorId: `${center.hubId}-DOCK1` },
+    };
+    emit(`trailer-${trailerId}`, docked);
+
+    for (const packageId of packageIds) {
+      const unload: PackageScanned = {
+        type: "PackageScanned",
+        schemaVersion: 1,
+        payload: { packageId, hubId: center.hubId, scanType: "unload" },
+      };
+      emit(`package-${packageId}`, unload);
+
+      const atHub: PackageArrivedAtHub = {
+        type: "PackageArrivedAtHub",
+        schemaVersion: 1,
+        payload: { packageId, hubId: center.hubId },
+      };
+      emit(`package-${packageId}`, atHub);
+
+      // The cross-dock: re-stage into the onward spoke's distribution manifest so
+      // the existing center→spoke departure carries it the rest of the way. The
+      // dest was locked at induction (`consolidationDestByPackage`); fail loud if
+      // a package arrived without a recorded dest (an impossible-but-quiet state).
+      const destHubId = consolidationDestByPackage.get(packageId);
+      if (destHubId === undefined) {
+        throw new Error(
+          `arriveConsolidationAtCenter: no onward destination recorded for ` +
+            `consolidation package "${packageId}" — invalid state`,
+        );
+      }
+      consolidationDestByPackage.delete(packageId);
+      pendingBySpoke.get(destHubId)!.push(packageId);
+    }
+  };
+
   /** Schedule an action at `fireTick` with a stable insertion-order tie-break. */
   function schedule(fireTick: number, task: SimTask): void {
     queue.push(fireTick, queue.claimSeq(), task);
@@ -1662,6 +1856,9 @@ export function runToHorizon(
         return;
       case "arriveOverCarriedAtCenter":
         arriveOverCarriedAtCenter(task.trailerId, task.packageId, task.tripId);
+        return;
+      case "arriveConsolidationAtCenter":
+        arriveConsolidationAtCenter(task.trailerId, task.packageIds, task.tripId);
         return;
     }
   }
@@ -1723,6 +1920,19 @@ export function runToHorizon(
     const world: SerializedWorldState = {
       pendingBySpoke: [...pendingBySpoke.entries()].map(
         ([k, v]) => [k, [...v]] as const,
+      ),
+      // FLOW-01: capture the consolidation queue so a chunked run that crosses a
+      // boundary mid-consolidation is byte-identical to all-at-once. On the off
+      // path every spoke maps to [] (zero behaviour), so this does not perturb the
+      // off-path stream — the captured shape matches the empty restore.
+      pendingAtSpoke: [...pendingAtSpoke.entries()].map(
+        ([k, v]) => [k, [...v]] as const,
+      ),
+      // FLOW-02: the consolidation package → onward-destination map, captured so a
+      // resume between staging and the center re-sort cross-docks to the same
+      // spoke. Empty on the off path (byte-identical to pre-Phase-21).
+      consolidationDestByPackage: [...consolidationDestByPackage.entries()].map(
+        ([k, v]) => [k, v] as const,
       ),
       odometerByTrailer: [...odometerByTrailer.entries()].map(
         ([k, v]) => [k, v] as const,
