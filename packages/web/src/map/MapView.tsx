@@ -17,7 +17,9 @@ import {
   createRouteLayer,
   createTrailerLayer,
   createTrailerStopLayer,
+  createInductionLayer,
   applyTrailerStops,
+  flashInduction,
   upsertTrailerKeyframe,
   removeTrailerFeature,
   applyHubBuckets,
@@ -88,9 +90,14 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
   const routeSourceRef = useRef<VectorSource | null>(null);
   // SP2 (spec §8): the parked/refueling stop-marker source.
   const stopSourceRef = useRef<VectorSource | null>(null);
+  // VIZ-13: the transient external-induction pulsing-marker source.
+  const inductionSourceRef = useRef<VectorSource | null>(null);
 
   /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
   const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
+
+  /** Hub lon/lat cached (hubId → [lon, lat]) for VIZ-13 induction marker placement. */
+  const hubLonLatRef = useRef<Map<string, readonly [number, number]>>(new Map());
 
   /** Per-trailer animation targets (mutated in place by envelope handler). */
   const trailerAnimsRef = useRef<Map<string, TrailerAnim>>(new Map());
@@ -151,12 +158,18 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     const stop = createTrailerStopLayer();
     stopSourceRef.current = stop.source;
 
+    // VIZ-13: the transient external-induction layer, ABOVE the stop layer so a
+    // pulsing induction marker reads on top (it self-removes after ~2s).
+    const induction = createInductionLayer();
+    inductionSourceRef.current = induction.source;
+
     const map = new OlMap({
       target: container,
       layers: [
         new TileLayer({ source: new OSM({ crossOrigin: "anonymous" }) }),
         trailer.layer,
         stop.layer,
+        induction.layer,
       ],
       view: new View({
         center: fromLonLat([USA_CENTER[0], USA_CENTER[1]]),
@@ -237,6 +250,11 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
           routeDtosRef.current.set(r.routeId, r);
         }
 
+        // VIZ-13: cache hub lon/lat for placing induction markers by hubId.
+        for (const h of hubs) {
+          hubLonLatRef.current.set(h.hubId, [h.lon, h.lat]);
+        }
+
         const hubLayer = createHubLayer(hubs);
         const routeLayer = createRouteLayer(routes);
         hubSourceRef.current = hubLayer.source;
@@ -283,8 +301,10 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       hubSourceRef.current = null;
       routeSourceRef.current = null;
       stopSourceRef.current = null;
+      inductionSourceRef.current = null;
       trailerAnimsRef.current.clear();
       routeDtosRef.current.clear();
+      hubLonLatRef.current.clear();
     };
   }, [setAttr]);
 
@@ -295,6 +315,7 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       const hubSource = hubSourceRef.current;
       const routeSource = routeSourceRef.current;
       const stopSource = stopSourceRef.current;
+      const inductionSource = inductionSourceRef.current;
       if (trailerSource === null) return;
 
       // Drive the local clock's PLAYBACK RATE from the server's effective speed
@@ -356,6 +377,17 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
         // reconcile the parked-marker layer wholesale (undefined ⇒ unchanged).
         if (stopSource !== null && payload.trailerStops !== undefined) {
           applyTrailerStops(stopSource, payload.trailerStops);
+        }
+        // VIZ-13: flash a transient pulsing marker at each induction hub for ~2s
+        // (freight entering from outside). Hub lon/lat looked up from the static
+        // hub cache; an unknown hub is skipped (no marker rather than a crash).
+        if (inductionSource !== null && payload.inductionEvents !== undefined) {
+          for (const ev of payload.inductionEvents) {
+            const lonLat = hubLonLatRef.current.get(ev.inductionHubId);
+            if (lonLat !== undefined) {
+              flashInduction(inductionSource, ev.inductionHubId, lonLat[0], lonLat[1]);
+            }
+          }
         }
       }
 

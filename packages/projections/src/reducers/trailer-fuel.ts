@@ -158,8 +158,7 @@ export function trailerFuelReducer(
     case "LoadStarted":
     case "UnloadCompleted":
     case "TruckRested":
-    // v2.0 IND-01: external induction touches no trailer odometer — no-op here.
-    case "PackageInducted":
+    case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
       return state;
     default:
       return assertNeverEvent(event);

@@ -217,8 +217,7 @@ export function driverStatusReducer(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
-    // v2.0 IND-01: external induction changes no driver duty — no-op here.
-    case "PackageInducted":
+    case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
       return state;
     default:
       return assertNeverEvent(event);

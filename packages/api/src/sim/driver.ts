@@ -36,6 +36,7 @@ import { performance } from "node:perf_hooks";
 import type { ApiDb } from "../routes/queries.js";
 import { PRODUCTION_DETECTION_CONFIG } from "../detection-config.js";
 import type { Broadcast } from "../ws/snapshots.js";
+import type { InductionEvent } from "../ws/envelope.js";
 import { computeSimAdvanceMs, selectDrain } from "./pacing.js";
 import { makeCoalescedRunner } from "./coalesced-runner.js";
 
@@ -298,6 +299,29 @@ export interface DriveSimulationWithScenarioOptions extends DriveSimulationOptio
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * VIZ-13: map the `PackageInducted` events in a drained tick/frame into transient
+ * `InductionEvent` wire items for the tick payload. Empty when the slice has no
+ * inductions (the common case) — the broadcast then omits the field entirely.
+ */
+function collectInductions(
+  items: readonly SimulatedEvent[],
+): InductionEvent[] {
+  const out: InductionEvent[] = [];
+  for (const { event } of items) {
+    if (event.type !== "PackageInducted") continue;
+    out.push({
+      packageId: event.payload.packageId,
+      inductionHubId: event.payload.inductionHubId,
+      destHubId: event.payload.destHubId,
+      slaClass: event.payload.slaClass,
+      slaDeadlineIso: event.payload.slaDeadlineIso,
+      occurredAt: event.payload.occurredAt,
+    });
+  }
+  return out;
+}
+
 /** Group the deterministic stream into ordered ticks by `occurredAt`. */
 function intoTicks(stream: readonly SimulatedEvent[]): SimulatedEvent[][] {
   const ticks: SimulatedEvent[][] = [];
@@ -430,9 +454,10 @@ async function driveTickStream(
     await runner(tickEvents, tickMs);
 
     // 6. Push ONE batched snapshot per tick. Supply the tick's domain timestamp
-    //    as the authoritative sim-clock milliseconds for the ws envelope.
+    //    as the authoritative sim-clock milliseconds for the ws envelope, plus the
+    //    tick's transient induction events (VIZ-13).
     if (opts.broadcast !== undefined) {
-      await opts.broadcast(tickMs);
+      await opts.broadcast(tickMs, collectInductions(tick));
     }
   }
 
@@ -628,6 +653,9 @@ export async function driveSimulationPaced(
   let ticksSinceOpt = 0;
   let pendingOptEvents: SimulatedEvent["event"][] = [];
   let lastOptTickMs = 0;
+  // VIZ-13: induction events drained this frame, surfaced to the per-frame
+  // broadcast (read + cleared at the broadcast site).
+  let pendingInductions: InductionEvent[] = [];
 
   // Process exactly the ticks selected for THIS frame (in order): append each
   // tick (per-tick `occurredAt`), then fold the whole batch ONCE, then fire the
@@ -642,6 +670,7 @@ export async function driveSimulationPaced(
       const tickMs = tickTimesMs[idx]!;
       await appendTick(tick);
       for (const item of tick) pendingOptEvents.push(item.event);
+      pendingInductions.push(...collectInductions(tick));
       lastOptTickMs = tickMs;
       broadcastSimMs = tickMs;
       nextIndex += 1;
@@ -695,16 +724,20 @@ export async function driveSimulationPaced(
     const broadcastSimMs = await drainFrame(count, simClock);
 
     // ONE delta per FRAME — even when nothing drained — so the client clock /
-    // speed envelope keeps flowing (e.g. pause reflects via simSpeed:0).
+    // speed envelope keeps flowing (e.g. pause reflects via simSpeed:0). Attach +
+    // clear this frame's induction events (VIZ-13).
     if (opts.broadcast !== undefined) {
-      await opts.broadcast(broadcastSimMs);
+      const frameInductions = pendingInductions;
+      pendingInductions = [];
+      await opts.broadcast(broadcastSimMs, frameInductions);
     }
   }
 
   // Drain the coalesced optimizer to idle, then a final broadcast at the clock.
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
-    await opts.broadcast(simClock);
+    await opts.broadcast(simClock, pendingInductions);
+    pendingInductions = [];
   }
 
   return { ticks: nextIndex };
@@ -934,6 +967,8 @@ export async function driveSimulationOpenEnded(
   let lastOptTickMs = 0;
   let drainedTotal = 0;
   let lastRetentionAtCount = 0;
+  // VIZ-13: induction events drained this frame, surfaced to the per-frame broadcast.
+  let pendingInductions: InductionEvent[] = [];
 
   /**
    * Keep the undrained window long enough to feed a frame by advancing the
@@ -964,6 +999,7 @@ export async function driveSimulationOpenEnded(
       const tickMs = windowTimesMs[0]!;
       await appendTick(tick);
       for (const item of tick) pendingOptEvents.push(item.event);
+      pendingInductions.push(...collectInductions(tick));
       lastOptTickMs = tickMs;
       broadcastSimMs = tickMs;
       // Discard the drained tick from the front so RAM stays bounded.
@@ -1032,7 +1068,9 @@ export async function driveSimulationOpenEnded(
     opts.onWindowState?.({ retainedTicks: window.length, destHubSize: destHub.size });
 
     if (opts.broadcast !== undefined) {
-      await opts.broadcast(broadcastSimMs);
+      const frameInductions = pendingInductions;
+      pendingInductions = [];
+      await opts.broadcast(broadcastSimMs, frameInductions);
     }
   }
 
@@ -1044,7 +1082,8 @@ export async function driveSimulationOpenEnded(
   }
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
-    await opts.broadcast(simClock);
+    await opts.broadcast(simClock, pendingInductions);
+    pendingInductions = [];
   }
 
   return { ticks: drainedTotal };

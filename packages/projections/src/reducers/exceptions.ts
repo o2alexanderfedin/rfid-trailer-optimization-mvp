@@ -210,8 +210,7 @@ export function exceptionsReducer(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
-    // v2.0 IND-01: external induction raises no exception — no-op for exceptions.
-    case "PackageInducted":
+    case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
       return state;
     default:
       return assertNeverEvent(event);
