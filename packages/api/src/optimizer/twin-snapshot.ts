@@ -4,7 +4,12 @@ import { readAll } from "@mm/event-store";
 import type { OccurredEvent, ProjectionDb } from "@mm/projections";
 import { emptyTrailerFuelState, getTrailerMiles, trailerFuelReducer } from "@mm/projections";
 import type { Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
-import { DEFAULT_TIMING_CONFIG, expectedTransitMinutes, haversineKm } from "@mm/domain";
+import {
+  DEFAULT_TIMING_CONFIG,
+  expectedTransitMinutes,
+  haversineKm,
+  isoToEpochMinutes,
+} from "@mm/domain";
 import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
 import type {
@@ -103,6 +108,30 @@ async function computeMilesSinceRefuel(db: SnapshotDb): Promise<Map<string, numb
   const out = new Map<string, number>();
   for (const trailerId of state.fuel.keys()) {
     out.set(trailerId, getTrailerMiles(state, trailerId));
+  }
+  return out;
+}
+
+/**
+ * IND-03: scan the event log for `PackageInducted` events and build a
+ * `packageId → deadlineMin` map (epoch-minutes) from each event's `slaDeadlineIso`
+ * (locked at induction). The optimizer reads this to set `TwinBlock.deadlineMin`
+ * for inducted freight, enabling slack / critical-ratio prioritization (IND-03
+ * success criterion 2).
+ *
+ * Deterministic + PURE READ: the log is read in `global_seq` order, so a packageId
+ * appearing more than once resolves last-write-wins. No clock, no RNG, no writes.
+ */
+async function buildInductionDeadlines(db: SnapshotDb): Promise<Map<string, number>> {
+  const es = db as unknown as Kysely<Database>;
+  const stored = await readAll(es, 0n);
+  const out = new Map<string, number>();
+  for (const s of stored) {
+    if (s.event.type !== "PackageInducted") continue;
+    out.set(
+      s.event.payload.packageId,
+      isoToEpochMinutes(s.event.payload.slaDeadlineIso),
+    );
   }
   return out;
 }
@@ -239,6 +268,9 @@ function buildTrailerBlocks(
   hubOutboundIndex: ReadonlyMap<string, readonly string[]>,
   routes: readonly TwinRoute[],
   currentHubId: string | null,
+  // IND-03 — packageId → SLA deadline (epoch-minutes). Default empty so existing
+  // callers compile unchanged and non-inducted packages stay byte-identical.
+  inductionDeadlines: ReadonlyMap<string, number> = new Map(),
 ): readonly TwinBlock[] {
   if (assignedPackageIds.length === 0) return [];
 
@@ -273,10 +305,14 @@ function buildTrailerBlocks(
       pkgToHub.get(pkgId) ??
       [...routeDestHubs][0] ??
       "unknown";
+    // IND-03: carry the SLA deadline only for inducted packages — additive +
+    // optional, so non-inducted blocks reproduce byte-identically (no field).
+    const deadlineMin = inductionDeadlines.get(pkgId);
     return {
       blockId: pkgId,
       nextUnloadHubId,
       volume: 1, // unit-volume per package (integer, P12)
+      ...(deadlineMin !== undefined ? { deadlineMin } : {}),
     };
   });
 }
@@ -364,7 +400,13 @@ export async function buildTwinSnapshot(
   // `TruckRefueled`. Reading the events ordered by `global_seq` keeps the fold
   // deterministic (no clock/RNG). Only the four leg/refuel-relevant event types
   // affect the result; reading just those keeps the scan small.
-  const milesSinceRefuelByTrailer = await computeMilesSinceRefuel(db);
+  // IND-03: also scan the log for PackageInducted deadlines (packageId →
+  // epoch-minutes). Runs alongside the fuel fold — both are pure read scans of the
+  // same log. Used to set TwinBlock.deadlineMin for inducted freight.
+  const [milesSinceRefuelByTrailer, inductionDeadlines] = await Promise.all([
+    computeMilesSinceRefuel(db),
+    buildInductionDeadlines(db),
+  ]);
 
   // 3. Read operational projections. OPT-HOS-01: also read the Phase-13
   //    `driver_status` projection (driver → remaining legal drive minutes, already
@@ -426,6 +468,7 @@ export async function buildTwinSnapshot(
         hubOutboundIndex,
         routes,
         currentHubId,
+        inductionDeadlines,
       );
 
       const departureMin =

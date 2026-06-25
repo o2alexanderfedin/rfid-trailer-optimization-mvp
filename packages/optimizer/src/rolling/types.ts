@@ -53,6 +53,13 @@ export interface TwinBlock {
   readonly nextUnloadHubId: string;
   /** Integer freight units (the capacity + utilization driver). */
   readonly volume: number;
+  /**
+   * IND-03 — OPTIONAL SLA deadline in epoch-minutes (from `slaDeadlineIso`,
+   * locked at induction). When present, the optimizer uses it for slack /
+   * critical-ratio prioritization of inducted freight. Absent → pre-Phase-20
+   * `TwinBlock` objects reproduce byte-identically (additive, non-breaking).
+   */
+  readonly deadlineMin?: number;
 }
 
 /**
