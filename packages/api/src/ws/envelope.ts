@@ -56,6 +56,13 @@ export interface TrailerKeyframe {
   readonly state: "onTime" | "slaRisk" | "late" | "idle";
   /** 0..1 fill ratio — optional, only when it changes (UI-02 hint). */
   readonly util?: number;
+  /**
+   * VIZ-12 — flow direction of the current leg. `"outbound"` = center→spoke
+   * distribution; `"consolidation"` = spoke→center consolidation. Derived from
+   * the leg origin (center hub ⇒ outbound). OPTIONAL + additive (like `util`):
+   * older clients / snapshot payloads without it are unaffected.
+   */
+  readonly direction?: "outbound" | "consolidation";
 }
 
 /**
@@ -277,7 +284,8 @@ function trailerChanged(prev: TrailerKeyframe, next: TrailerKeyframe): boolean {
     prev.departMs !== next.departMs ||
     prev.etaMs !== next.etaMs ||
     prev.state !== next.state ||
-    prev.util !== next.util
+    prev.util !== next.util ||
+    prev.direction !== next.direction
   );
 }
 

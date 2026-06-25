@@ -202,6 +202,14 @@ export interface DriveSimulationOptions {
    * enabled: FUEL_ENABLED }` so trucks visibly rest + refuel mid-route.
    */
   readonly fuel?: FuelConfig;
+  /**
+   * Phase 21 (FLOW-01/02): OPT-IN spoke→center consolidation, threaded straight
+   * to `simulate` only when DEFINED. Absent/false ⇒ the golden stream is
+   * byte-identical (the engine default is consolidation-off, the determinism
+   * keystone). The live demo passes `true` so consolidation trailers carry real
+   * freight spoke→center and the center cross-docks it onward.
+   */
+  readonly consolidationEnabled?: boolean;
 }
 
 /**
@@ -493,6 +501,9 @@ export async function driveSimulation(
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
   });
   const ticks = intoTicks(stream);
   return driveTickStream(opts.db, ticks, opts, stream);
@@ -540,6 +551,9 @@ export async function driveSimulationPaced(
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
   });
   const ticks = intoTicks(stream);
   // Precompute each tick's DETERMINISTIC sim time (the first event's occurredAt).
@@ -837,6 +851,9 @@ export async function driveSimulationOpenEnded(
     ...(opts.hosConfig !== undefined ? { hosConfig: opts.hosConfig } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
   };
   const chunkTicks = Math.max(1, Math.floor(opts.chunkTicks ?? DEFAULT_CHUNK_TICKS));
 
@@ -1126,6 +1143,9 @@ export async function driveSimulationWithScenario(
     ...(opts.timing !== undefined ? { timing: opts.timing } : {}),
     ...(opts.fleetPerSpoke !== undefined ? { fleetPerSpoke: opts.fleetPerSpoke } : {}),
     ...(opts.fuel !== undefined ? { fuel: opts.fuel } : {}),
+    ...(opts.consolidationEnabled !== undefined
+      ? { consolidationEnabled: opts.consolidationEnabled }
+      : {}),
   });
 
   // 2. Apply the scenario knobs (seeded, deterministic).
