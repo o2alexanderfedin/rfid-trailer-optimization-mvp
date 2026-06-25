@@ -157,12 +157,14 @@ Plans:
 - [ ] 22-03-PLAN.md — Engine: outboundOn, outboundRng, slaDeadlineByPackage, deliverPackage(), arriveTrailer hook, captureContinuation + golden DET-01 gate + continuation-equivalence "outbound" activation (OUT-02, OUT-03, D-22-4)
 - [ ] 22-04-PLAN.md — Projection purge reducers (package-location, hub-inventory, zone-estimate) + delivery-kpi.ts new reducer (OUT-04, OUT-05)
 
-**Wave 3** *(blocked on Wave 2 — parallel with each other)*
+**Wave 3** *(blocked on Wave 2)*
 - [ ] 22-05-PLAN.md — WS DeliveryEvent + Broadcast extension + GET /api/delivery-kpi endpoint (VIZ-14, OUT-05)
-- [ ] 22-06-PLAN.md — Web VIZ-14 layer (deliveryColoring + flashDelivery) + DeliveryKpi.tsx panel + human-verify checkpoint (VIZ-14, OUT-05)
 
-**Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 22-07-PLAN.md — MapView.tsx: createDeliveryLayer() construction + deliveryEvents WS handler calling flashDelivery() (VIZ-14 end-to-end wiring)
+**Wave 4** *(blocked on Wave 3)*
+- [ ] 22-06-PLAN.md — Web VIZ-14 layer (deliveryColoring + flashDelivery) + DeliveryKpi.tsx panel (VIZ-14, OUT-05)
+
+**Wave 5** *(blocked on Wave 4)*
+- [ ] 22-07-PLAN.md — MapView.tsx: createDeliveryLayer() construction + deliveryEvents WS handler calling flashDelivery() + human-verify checkpoint (VIZ-14 end-to-end wiring)
 **UI hint**: yes
 
 ## Progress

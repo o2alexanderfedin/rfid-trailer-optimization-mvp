@@ -11,8 +11,7 @@ Pinned by a read-only code explorer. Implementers: verify each line still matche
     z.object({
       packageId: id,
       hubId: id,
-      slaDeadlineIso: z.string().min(1),
-      deliveredAtIso: z.string().min(1),
+      deliveredAt: z.string().min(1),
       onTime: z.boolean(),
     }),
   );
@@ -47,20 +46,20 @@ Pinned by a read-only code explorer. Implementers: verify each line still matche
 ## 4. RNG salts — `packages/simulation/src/engine.ts` L84-116
 Existing (6): `RFID_RNG_SALT=0x5f1da7c3`, `OVER_CARRY_RNG_SALT=0x3ca71d5f`, `TIMING_RNG_SALT=0x00007717`,
 `HOS_RNG_SALT=0x10510901`, `FUEL_RNG_SALT=0x2b3d91e7`, `INDUCTION_RNG_SALT=0x8f2c4ae1`.
-Add `OUTBOUND_DELIVERY_RNG_SALT = 0x<new distinct 32-bit>` (~L117).
+Add `OUTBOUND_RNG_SALT = 0xc4_f8_32_b6` (~L117).
 Pairwise-distinct test: `packages/simulation/test/fuel-determinism.unit.test.ts` L60-75 — extend the
 salts array + `new Set(salts).size === salts.length` assertion to include the 7th.
 
 ## 5. `SimContinuation` — `packages/simulation/src/continuation.ts`
 - DTO L142-168 (`rng`, `queue`, `nextSeq`, `world`, `nextSequenceId`, …).
-- `SerializedRngStates` L125-136 — add `readonly outboundDelivery: number | undefined;`.
+- `SerializedRngStates` L125-136 — add `readonly outbound: number | undefined;`.
 - `SerializedWorldState` L90-123 (has pendingBySpoke / pendingAtSpoke / consolidationDestByPackage /
   …counters incl. `inductionCounter`). Add `pendingDeliveryByHub` (or carry dwell in the task) +
   `deliveryCounter` + **`slaDeadlineByPackage`** (see §7 — needed so a delivery can compute onTime
   deterministically after a continuation boundary).
 - `SimTask` union L27-65 — add `| { kind: "deliverPackage"; tick: number; packageId: string; hubId: string }`
   (carry `slaDeadlineIso` in the task too if not kept in world map).
-- `captureContinuation()` engine.ts **L1919-1973** — add `outboundDelivery: outboundDeliveryRng?.getState()`
+- `captureContinuation()` engine.ts **L1919-1973** — add `outbound: outboundDeliveryRng?.getState()`
   to `rng` and the new world fields. (Mirror induction exactly.)
 
 ## 6. Event-queue comparator (LEAVE UNCHANGED — D-22-2)
@@ -70,7 +69,7 @@ salts array + `new Set(salts).size === salts.length` assertion to include the 7t
 ## 7. SLA deadline / onTime — `packages/simulation/src/engine.ts`
 - Deadline locked at induction: L1138-1142 (`deadlineMin = isoToEpochMinutes(occurredAtIso) + round(transitMin) + SLA_BUFFER_MIN[slaClass]`), emitted in `PackageInducted.payload.slaDeadlineIso` (L1152).
 - Clock: `clock.nowIso()` (L1137) — ISO-8601 string, never `Date.now()`.
-- onTime = `deliveredAtIso <= slaDeadlineIso` (ISO-8601 is lexicographically ordered).
+- onTime = `deliveredAt <= slaDeadlineIso` (ISO-8601 is lexicographically ordered).
 - **Open impl detail:** the engine must retain `slaDeadlineIso` per package (a `slaDeadlineByPackage`
   map populated at induction) so the later `deliverPackage` task can compute onTime — and that map MUST
   be in `SerializedWorldState` for continuation-equivalence. Packages WITHOUT an induction deadline
@@ -88,7 +87,7 @@ Hashes the EVENT STREAM, not projections. Flag-off must keep this byte-identical
 
 ## 10. WS tick + map (VIZ-14)
 - `packages/api/src/ws/envelope.ts` — `TickPayload` L203-232 (has `inductionEvents?`); `InductionEvent` L135-140.
-  Add `deliveryEvents?: readonly DeliveryEvent[]` + `interface DeliveryEvent { packageId; hubId; onTime; slaDeadlineIso; deliveredAtIso }`.
+  Add `deliveryEvents?: readonly DeliveryEvent[]` + `interface DeliveryEvent { packageId: string; hubId: string; deliveredAt: string; onTime: boolean; }`.
 - `packages/api/src/ws/snapshots.ts` L834-850 — inject `deliveryEvents` (tick-only; NEVER in snapshot →
   no reconnect re-flash, Phase-20 Pitfall-7). Driver collects per-tick on all paths (mirror inductionEvents).
 - `packages/web/src/map/layers.ts` L240-278 — add `createDeliveryLayer()` + `flashDelivery(source, hubId, lon, lat, onTime, durationMs=2000)` mirroring `createInductionLayer`/`flashInduction`; distinct style from VIZ-13 purple / VIZ-12 cyan.

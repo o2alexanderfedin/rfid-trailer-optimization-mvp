@@ -606,15 +606,16 @@ File: `packages/web/src/panels/HubBalance.tsx` — 147 lines, pure helpers + Rea
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`zoneEstimate` purge strategy** — CONTEXT.md D-22-1 says DELETE from `zoneEstimate`. The zone-estimate state is a `Map<string, ZoneEstimate>` keyed by `"${packageId}|${trailerId}"`. A purge requires iterating all keys that start with `packageId|`. The reducer currently has no helper for this. Should Phase 22 add a `purgePackage(state, packageId)` helper, or iterate inline?
-   - **Recommendation:** Add a `purgeZoneEstimate(state, packageId)` helper that filters the map by prefix — O(n) but the map is small in demo scale. Alternative: treat as no-op (safe for bounded memory because the Phase-21 detector already scopes to `is_active` packages).
+   - **RESOLVED (Plan 04):** Plan 04 deletes every zone-estimate key prefixed `${packageId}|` by filtering the map inline (or via a `purgeZoneEstimate(state, packageId)` helper) — full O(n) purge for OUT-04 bounded memory. This satisfies D-22-1 (true DELETE, not tombstone) while keeping the map small at demo scale.
 
 2. **`slaDeadlineByPackage` scope** — Only inducted packages have `slaDeadlineIso`. Should center-origin `PackageCreated` packages get `onTime: true` (no SLA) or simply not fire `PackageDelivered`? Or should all packages fire `PackageDelivered` but with `onTime: true` when no deadline exists?
-   - **Recommendation:** Fire `PackageDelivered` for ALL packages (OUT-02 terminal-completeness). For packages without a deadline (center-origin), `onTime: true` (no commitment violated). This keeps OUT-04 (bounded tables) complete for all packages.
+   - **RESOLVED (Plan 03):** All packages fire `PackageDelivered` for OUT-02 terminal-completeness (OUT-04 bounded tables must cover all packages). For center-origin packages with no induction deadline, `onTime: true` by convention (no SLA commitment violated). Plan 03 sets this in `deliverPackage()` via `deadline !== undefined ? deliveredAt <= deadline : true`.
 
 3. **Outbound dwell mean** — Claude's discretion. Suggested: `OUTBOUND_DWELL_TICKS_MAX = 20` (so dwell = `1 + outboundRng.int(20)` ticks = 1..20 ticks). At 1 tick/minute, 1-20 minutes of "last-mile dwell" is demo-reasonable.
+   - **RESOLVED (Plan 03):** `OUTBOUND_DWELL_TICKS_MAX = 20` chosen per the recommendation — dwell = `1 + outboundRng.int(OUTBOUND_DWELL_TICKS_MAX)` ticks (1..20 ticks), strictly positive (D-22-2 satisfied). Bound chosen in Plan 03 action.
 
 ---
 
@@ -763,6 +764,6 @@ No new authentication, session, access control, input validation beyond the exis
 | Pitfalls | HIGH | Derived from code analysis + locked decisions |
 | Validation Architecture | HIGH | Test templates directly verified |
 
-### Open Questions
-- `zoneEstimate` purge: no-op vs O(n) map-filter? (Recommendation: planner can start with no-op; OUT-04 is satisfied by `packageLocation` and `hubInventory` purge for the demo)
-- `onTime` for center-origin packages: `true` by convention (no deadline) — verify this matches demo intent
+### Open Questions (RESOLVED)
+- `zoneEstimate` purge: RESOLVED (Plan 04) — full prefix-purge of `${packageId}|` keys per D-22-1.
+- `onTime` for center-origin packages: RESOLVED (Plan 03) — `true` by convention (no deadline); all packages fire `PackageDelivered` for terminal-completeness (OUT-02).
