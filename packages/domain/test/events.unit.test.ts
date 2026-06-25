@@ -243,6 +243,9 @@ function describeEvent(e: DomainEvent): string {
     // v2.0 external induction (IND-01).
     case "PackageInducted":
       return e.payload.packageId;
+    // v2.0 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+    case "PlanSuperseded":
+      return e.payload.priorPlanId;
     default:
       return assertNever(e);
   }
@@ -307,7 +310,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 23 literal discriminators", () => {
+  it("DomainEventType is the union of the 24 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -335,6 +338,8 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       | "TruckRefueled"
       // v2.0 external induction (IND-01).
       | "PackageInducted"
+      // v2.0 bidirectional freight / consolidation (FLOW-04 / D-21-1).
+      | "PlanSuperseded"
     >();
   });
 
