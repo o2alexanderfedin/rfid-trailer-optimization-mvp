@@ -208,17 +208,13 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
 
   // Phase 21 (FLOW-03): consolidation is OPT-IN and DEFAULT OFF. The off path
   // must add ZERO new behavior — `consolidationEnabled: false` is byte-identical
-  // to the flag being absent (the determinism keystone). RED until 21-04 adds the
-  // field to SimulateOptions; the typed bridge keeps this file compiling meanwhile.
+  // to the flag being absent (the determinism keystone).
   it("explicit consolidationEnabled: false is byte-identical to the flag being absent", () => {
-    type ConsolidationOpts = Parameters<typeof simulate>[0] & {
-      readonly consolidationEnabled?: boolean;
-    };
     const absent = simulate(FLAGS_OFF_OPTS);
     const explicitFalse = simulate({
       ...FLAGS_OFF_OPTS,
       consolidationEnabled: false,
-    } as ConsolidationOpts);
+    });
     expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
 });

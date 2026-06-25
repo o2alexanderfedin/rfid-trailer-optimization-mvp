@@ -36,19 +36,9 @@ const SHORT_TIMING: TimingConfig = {
   dwellCenter: { median: 4, sigma: 0.05, min: 1, max: 30 },
 };
 
-/**
- * RED-UNTIL-21-04 typed bridge: `consolidationEnabled` is NOT yet a field on
- * `SimulateOptions`. To keep this file COMPILING + RUNNING (it asserts RED
- * behavior, it is not a type error), we widen the options type with the
- * forthcoming flag. 21-04 adds `consolidationEnabled?: boolean` to
- * `SimulateOptions` and this alias becomes redundant — REMOVE it then.
- */
-type ConsolidationOpts = Parameters<typeof simulate>[0] & {
-  readonly consolidationEnabled?: boolean;
-};
-
-const run = (opts: ConsolidationOpts): ReturnType<typeof simulate> =>
-  simulate(opts as Parameters<typeof simulate>[0]);
+const run = (
+  opts: Parameters<typeof simulate>[0],
+): ReturnType<typeof simulate> => simulate(opts);
 
 type Departed = TrailerDeparted["payload"];
 
