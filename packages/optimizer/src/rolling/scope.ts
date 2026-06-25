@@ -60,6 +60,10 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "WrongTrailerDetected":
     case "PlanGenerated":
     case "PlanAccepted":
+    // FLOW-04 / D-21-1: PlanSuperseded is an optimizer-internal supersession
+    // marker — it names no NEW demand hub (the superseding PlanAccepted + its
+    // scope already cover the affected hubs), so it is SCOPE-NEUTRAL here.
+    case "PlanSuperseded":
     case "DriverRegistered":
     case "DriverAssignedToTrip":
     case "DriverDutyStateChanged":
