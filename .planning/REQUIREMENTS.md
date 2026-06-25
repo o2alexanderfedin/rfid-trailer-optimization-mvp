@@ -41,11 +41,11 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 
 ### Bidirectional freight / consolidation (FLOW)
 
-- [ ] **FLOW-01**: **Spoke→center consolidation freight flows** — spoke-origin trailers depart carrying real freight, drained from a new `pendingAtSpoke` manifest queue (the reverse-direction routes are registered at bootstrap via reversed geometry, no new ORS call).
-- [ ] **FLOW-02**: The **center hub receives and re-sorts** spoke→center arrivals (inbound unload), enabling Spoke A → Center → Spoke B routing through the center cross-dock (Decision 2).
-- [ ] **FLOW-03**: Existing **center→spoke distribution continues unbroken** (regression-safe), and **empty-return legs remain valid** — a spoke→center trailer with no consolidation freight departs/returns without error.
-- [ ] **FLOW-04**: The **optimizer is aware of both flow directions** — scope detection and the travel model handle spoke→center legs, and consolidation freight is **not double-counted** at the center (stale staged plan entries are cleared via plan supersession; optimizer idempotency persists across restarts).
-- [ ] **FLOW-05** *(P2)*: A **per-hub inbound/outbound inventory balance** display (cross-dock utilization heat) showcases consolidation value.
+- [x] **FLOW-01**: **Spoke→center consolidation freight flows** — spoke-origin trailers depart carrying real freight, drained from a new `pendingAtSpoke` manifest queue (the reverse-direction routes are registered at bootstrap via reversed geometry, no new ORS call).
+- [x] **FLOW-02**: The **center hub receives and re-sorts** spoke→center arrivals (inbound unload), enabling Spoke A → Center → Spoke B routing through the center cross-dock (Decision 2).
+- [x] **FLOW-03**: Existing **center→spoke distribution continues unbroken** (regression-safe), and **empty-return legs remain valid** — a spoke→center trailer with no consolidation freight departs/returns without error.
+- [x] **FLOW-04**: The **optimizer is aware of both flow directions** — scope detection and the travel model handle spoke→center legs, and consolidation freight is **not double-counted** at the center (stale staged plan entries are cleared via plan supersession; optimizer idempotency persists across restarts).
+- [x] **FLOW-05** *(P2)*: A **per-hub inbound/outbound inventory balance** display (cross-dock utilization heat) showcases consolidation value.
 
 ### Outbound / last-mile delivery (OUT)
 
@@ -57,7 +57,7 @@ Requirements for this milestone. Each maps to a roadmap phase (19–22). **P1** 
 
 ### Visualization (VIZ) — continues from VIZ-11
 
-- [ ] **VIZ-12**: Spoke→center **consolidation trailers render with non-empty freight manifests** and **distinct direction styling** on the live map (Phase 21 / FLOW).
+- [x] **VIZ-12**: Spoke→center **consolidation trailers render with non-empty freight manifests** and **distinct direction styling** on the live map (Phase 21 / FLOW).
 - [x] **VIZ-13**: **Induction events animate on the map** — a pulsing marker at the induction hub on `PackageInducted` (Phase 20 / IND).
 - [ ] **VIZ-14**: **Delivery events animate on the map** — a destination-hub highlight on `PackageDelivered` (Phase 22 / OUT).
 
@@ -113,12 +113,12 @@ Phase mapping confirmed by roadmapper 2026-06-24. Continues numbering from v1.2'
 | IND-02 | Phase 20 | Complete |
 | IND-03 | Phase 20 | Complete |
 | VIZ-13 | Phase 20 | Complete |
-| FLOW-01 | Phase 21 | Pending |
-| FLOW-02 | Phase 21 | Pending |
-| FLOW-03 | Phase 21 | Pending |
-| FLOW-04 | Phase 21 | Pending |
-| VIZ-12 | Phase 21 | Pending |
-| FLOW-05 (P2) | Phase 21 | Pending |
+| FLOW-01 | Phase 21 | Complete |
+| FLOW-02 | Phase 21 | Complete |
+| FLOW-03 | Phase 21 | Complete |
+| FLOW-04 | Phase 21 | Complete |
+| VIZ-12 | Phase 21 | Complete |
+| FLOW-05 (P2) | Phase 21 | Complete |
 | OUT-01 | Phase 22 | Pending |
 | OUT-02 | Phase 22 | Pending |
 | OUT-03 | Phase 22 | Pending |

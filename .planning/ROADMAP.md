@@ -55,7 +55,7 @@
 
 - [x] **Phase 19: Continuous Operation Foundation** - Open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, and bidirectional route registration
 - [x] **Phase 20: External Induction** - `PackageInducted` event, spoke-hub induction from dedicated seeded substream, SLA deadline to optimizer, pulsing map marker
-- [ ] **Phase 21: Bidirectional Freight / Consolidation** - Spoke→center consolidation via `pendingAtSpoke` queue, center inbound re-sort, optimizer two-direction awareness, consolidation trailer map styling
+- [x] **Phase 21: Bidirectional Freight / Consolidation** - Spoke→center consolidation via `pendingAtSpoke` queue, center inbound re-sort, optimizer two-direction awareness, consolidation trailer map styling
 - [ ] **Phase 22: Outbound Delivery** - `PackageDelivered` terminal event, destination detection, `onTime` SLA flag, projection purge, delivery hub-highlight on map
 
 ## Phase Details
@@ -156,7 +156,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 19. Continuous Operation Foundation | 8/8 | ✅ Complete | 2026-06-24 |
 | 20. External Induction | 6/6 | ✅ Complete | 2026-06-24 |
-| 21. Bidirectional Freight / Consolidation | 0/8 | Planned | - |
+| 21. Bidirectional Freight / Consolidation | 9/9 | ✅ Complete | 2026-06-24 |
 | 22. Outbound Delivery | 0/? | Not started | - |
 
 | Milestone | Phases | Status | Shipped |
