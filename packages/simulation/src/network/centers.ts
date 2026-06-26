@@ -1,5 +1,6 @@
 import { haversineKm, type Hub } from "@mm/domain";
 import type { BigCityHub } from "./hubs.js";
+import { generateBigCityHubs } from "./hubs.js";
 
 /**
  * Phase 23 (NET-02..04) — pure multi-center topology functions.
@@ -26,12 +27,29 @@ import type { BigCityHub } from "./hubs.js";
 const COORD_DP = 6;
 
 /**
- * Default number of regional centers. PARAMETERIZED, never hard-coded into the
- * selection logic — this constant is only a sensible default inside the locked
- * 4-8 empirical envelope; the CONCRETE production value is chosen empirically in
- * plan 23-05 (the center-count checkpoint). Callers pass an explicit `count`.
+ * NET-02 — the EMPIRICALLY-CHOSEN regional-center count (plan 23-05 checkpoint).
+ *
+ * Chosen = **6** from a real continental run (seed 1234, 6000 ticks, induction +
+ * consolidation on) over the committed 92-hub dataset, comparing candidate counts
+ * 4/5/6/7/8 on bounded per-center fan-out, spoke->center leg length under the cap,
+ * near-full-mesh cost, anti-SPOF, and over-fragmentation. 6 keeps fan-out bounded
+ * and balanced (max 22 spokes/center, spread 13 — vs 27 at 4/5), the mesh cheap
+ * (30 directed legs, far under the <=56 envelope at 8), every spoke->center leg
+ * well under the 2500 km cap (max 1545 km, 0 over-cap orphans), passes anti-SPOF,
+ * and avoids the thin 1-4-spoke centers that appear at 7/8 (weak consolidation
+ * locality). The decision + full partition are recorded in the committed
+ * `center-partition.snapshot.json` (asserted by the drift guard). NEVER < 2 — the
+ * network never collapses to a single primary center.
  */
-export const DEFAULT_CENTER_COUNT = 6;
+export const EMPIRICAL_CENTER_COUNT = 6;
+
+/**
+ * Default number of regional centers — the {@link EMPIRICAL_CENTER_COUNT} chosen
+ * at the plan 23-05 checkpoint. PARAMETERIZED, never hard-coded into the selection
+ * logic: callers pass an explicit `count`, and this default is only the sensible
+ * fallback inside the locked 4-8 empirical envelope.
+ */
+export const DEFAULT_CENTER_COUNT = EMPIRICAL_CENTER_COUNT;
 
 /**
  * Default spoke→center leg-length cap (km). A spoke whose nearest in-partition
@@ -242,4 +260,101 @@ export function isConnectedWithoutAnyCenter(
     if (seen.size !== remaining.length) return false; // disconnected without `removed`
   }
   return true;
+}
+
+// --- NET-02 (plan 23-05): the committed center-partition + drift guard --------
+//
+// The empirically-chosen center count is recorded in a committed
+// `center-partition.snapshot.json`. `deriveCenterPartition` RE-DERIVES the full
+// partition from the committed hub dataset (so both the snapshot generator and
+// the drift-guard test recompute the SAME structure), and `partitionChecksum`
+// gives a stable FNV-1a digest over the sorted spoke->center assignment so any
+// silent re-route becomes a visible diff (T-23-14).
+
+/**
+ * A re-derivable continental center partition: the chosen `centerCount`, the
+ * selected center hub ids, the full sorted spoke->center assignment, the directed
+ * backbone leg ids, the anti-SPOF result, and the `partitionChecksum`. PURE (a
+ * function of the committed hub set + count + cap) — the same inputs always yield
+ * the same partition, which is exactly what the drift guard re-checks.
+ */
+export interface CenterPartition {
+  readonly centerCount: number;
+  readonly legCapKm: number;
+  /** Selected center hub ids, sorted ascending. */
+  readonly centerHubIds: readonly string[];
+  /** Sorted [spokeHubId, centerHubId] assignment pairs (stable order). */
+  readonly assignment: ReadonlyArray<readonly [string, string]>;
+  /** Directed `"<from>-><to>"` backbone leg ids, sorted. */
+  readonly backboneLegIds: readonly string[];
+  /** Anti-SPOF: true iff removing any single center keeps the mesh connected. */
+  readonly antiSpof: boolean;
+  /** FNV-1a digest over the sorted assignment (the partition drift checksum). */
+  readonly partitionChecksum: string;
+}
+
+/**
+ * A stable, order-insensitive FNV-1a checksum of a spoke->center assignment. The
+ * pairs are SORTED by spoke id first so the digest is independent of map/array
+ * iteration order (anti-P7). Mirrors `hubCoordsChecksum`'s 32-bit FNV-1a → 8-hex
+ * digest. Pure: a function of the assignment pairs only.
+ */
+export function partitionChecksum(
+  assignment: ReadonlyArray<readonly [string, string]>,
+): string {
+  const canon = [...assignment]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([spoke, center]) => `${spoke}=>${center}`)
+    .join("|");
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < canon.length; i += 1) {
+    hash ^= canon.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Re-derive the full continental center partition for `count` centers under
+ * `legCapKm`, defaulting to the committed continental hub set
+ * ({@link generateBigCityHubs}). This is the SINGLE source of truth shared by the
+ * snapshot generator and the drift-guard test: given the committed dataset + the
+ * committed `centerCount`/`legCapKm`, it deterministically reproduces the chosen
+ * centers, the spoke->center assignment, the backbone, the anti-SPOF result, and
+ * the `partitionChecksum`. Pure (no clock/RNG; the only effect is the committed
+ * dataset read inside {@link generateBigCityHubs}).
+ *
+ * Throws if `count < 2` — the network must NEVER collapse to a single primary
+ * center (the locked NET-02 invariant).
+ */
+export function deriveCenterPartition(
+  count: number,
+  legCapKm: number = DEFAULT_LEG_CAP_KM,
+  hubs: readonly BigCityHub[] = generateBigCityHubs(),
+): CenterPartition {
+  if (count < 2) {
+    throw new RangeError(
+      `deriveCenterPartition: centerCount must be >= 2 (never a single primary), got ${count}`,
+    );
+  }
+  const centers = pickRegionalCenters(hubs, count);
+  const centerIds = new Set(centers.map((c) => c.hubId));
+  const spokes = hubs.filter((h) => !centerIds.has(h.hubId));
+  const assignMap = assignSpokesToNearestCenter(spokes, centers, legCapKm);
+  const assignment: Array<readonly [string, string]> = [...assignMap.entries()].sort((a, b) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
+  );
+  const backbone = buildBackbone(centers);
+  const backboneLegIds = backbone
+    .map((l) => `${l.fromHubId}->${l.toHubId}`)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return {
+    centerCount: centers.length,
+    legCapKm,
+    centerHubIds: centers.map((c) => c.hubId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    assignment,
+    backboneLegIds,
+    antiSpof: isConnectedWithoutAnyCenter(centers, backbone),
+    partitionChecksum: partitionChecksum(assignment),
+  };
 }
