@@ -37,13 +37,21 @@ import {
   mayDriveNow,
   remainingLegalDriveMinutes,
 } from "@mm/domain";
-import { USA_HUBS, hubRegisteredEvent } from "./network/hubs.js";
+import { USA_HUBS, generateBigCityHubs, hubRegisteredEvent } from "./network/hubs.js";
 import {
   buildRoutes,
   buildTransitParamsByLeg,
   loadStaticRoadGeometry,
   routeId,
+  type RouteTopology,
 } from "./network/routes.js";
+import {
+  DEFAULT_CENTER_COUNT,
+  DEFAULT_LEG_CAP_KM,
+  assignSpokesToNearestCenter,
+  buildBackbone,
+  pickRegionalCenters,
+} from "./network/centers.js";
 import { makeRng, makeRngFromState, type Rng } from "./rng.js";
 import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
 import {
@@ -325,6 +333,40 @@ export interface SimulateOptions {
    * absent flag accidentally truthy and perturb the golden).
    */
   readonly outboundDeliveryEnabled?: boolean;
+
+  /**
+   * NET-01 (Phase 23): OPT-IN continental multi-center topology. **DEFAULT FALSE —
+   * the determinism keystone.** When absent or `false`, the engine runs the legacy
+   * 10-hub single-center (Memphis) star EXACTLY as before: `hubs = USA_HUBS`,
+   * `center = hubs[0]`, `buildRoutes(hubs)` (no topology) ⇒ the seed-1234 + seed-42
+   * goldens are BYTE-IDENTICAL (DET-01). It is checked with a STRICT `=== true`
+   * comparison (never `??`/`||`, which would make an absent flag accidentally
+   * truthy and perturb the golden).
+   *
+   * When `true`, the engine swaps in the committed continental big-city hub set
+   * (`generateBigCityHubs`), picks {@link centerCount} regional sort centers
+   * (`pickRegionalCenters`), assigns each spoke to its nearest center within
+   * {@link legCapKm} (`assignSpokesToNearestCenter`), and builds a near-full-mesh
+   * center<->center backbone. Freight then flows spoke -> its center -> backbone ->
+   * destination center -> destination spoke, with each spoke's center resolved per
+   * spoke (NOT a single global Memphis). The topology is PURE (committed data, no
+   * RNG): NO new substream/salt is constructed for it, so the flag-off path draws
+   * exactly the same values it always did.
+   */
+  readonly continentalTopology?: boolean;
+  /**
+   * NET-02: number of regional centers when {@link continentalTopology} is on.
+   * Ignored when the flag is off. Defaults to the topology module's
+   * `DEFAULT_CENTER_COUNT` (a sensible value inside the locked 4-8 envelope); the
+   * concrete empirical value is finalized in plan 23-05's center-count checkpoint.
+   */
+  readonly centerCount?: number;
+  /**
+   * NET-03: spoke->center leg-length cap (km) when {@link continentalTopology} is
+   * on. Ignored when the flag is off. Defaults to the topology module's
+   * `DEFAULT_LEG_CAP_KM`.
+   */
+  readonly legCapKm?: number;
 }
 
 /** Options for the store-driven run. */
@@ -658,6 +700,39 @@ export function runToHorizon(
     resuming ? start.world.odometerByTrailer.map(([k, v]) => [k, v]) : [],
   );
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
+
+  // NET-01 (Phase 23): resolve the network topology. The flag is read with a
+  // STRICT `=== true` (never `??`/`||`) so an absent flag stays falsy and the
+  // legacy single-center star runs byte-identically (the determinism keystone).
+  // When OFF: `hubs = USA_HUBS`, `routeTopology = undefined`, and `centerOf`
+  // collapses to the single `hubs[0]` center — so every downstream call site is
+  // EXACTLY today's behavior. When ON: the committed continental hub set, the
+  // picked regional centers, the nearest-center spoke assignment, and the
+  // near-full-mesh backbone drive a multi-center `RouteTopology`. The topology is
+  // PURE (committed data, deterministic functions) — NO new RNG substream is
+  // constructed, so the off path draws the exact same sequence it always did.
+  const continentalOn = opts.continentalTopology === true;
+  const hubs: readonly Hub[] = continentalOn ? generateBigCityHubs() : USA_HUBS;
+  const centerCount = Math.max(2, Math.floor(opts.centerCount ?? DEFAULT_CENTER_COUNT));
+  const legCapKm = opts.legCapKm ?? DEFAULT_LEG_CAP_KM;
+  // The multi-center assignment (spoke hubId -> center hubId). Empty when off.
+  const continentalCenterOf: ReadonlyMap<string, string> = continentalOn
+    ? (() => {
+        const bigCityHubs = generateBigCityHubs();
+        const centers = pickRegionalCenters(bigCityHubs, centerCount);
+        const centerIds = new Set(centers.map((c) => c.hubId));
+        const spokeHubs = bigCityHubs.filter((h) => !centerIds.has(h.hubId));
+        return assignSpokesToNearestCenter(spokeHubs, centers, legCapKm);
+      })()
+    : new Map<string, string>();
+  // The directed center<->center backbone (empty when off).
+  const continentalBackbone = continentalOn
+    ? buildBackbone(pickRegionalCenters(generateBigCityHubs(), centerCount))
+    : [];
+  const routeTopology: RouteTopology | undefined = continentalOn
+    ? { centerOf: continentalCenterOf, backbone: continentalBackbone }
+    : undefined;
+
   // TIME-01: per-DIRECTED-LEG transit params, with each leg's MEDIAN derived from
   // the real great-circle (haversine) distance between its two hubs at an 80 km/h
   // average HGV speed — replacing the single flat ~30-min global transit median.
@@ -674,7 +749,15 @@ export function runToHorizon(
   // NO-ORS-KEY PATH: see `transitParamsForLeg` in routes.ts — swap each leg's
   // median to its ORS `summary.duration` once VIZ-06's road-geometry exists.
   const useGeographyTransit = timing === undefined;
-  const transitByLeg = buildTransitParamsByLeg(USA_HUBS, timingConfig.transit.sigma);
+  // NET-01: when continental, build the per-leg map over the full hub set + the
+  // multi-center topology so EVERY spoke<->center + backbone leg has params. When
+  // off, this is `buildTransitParamsByLeg(USA_HUBS, sigma)` — byte-identical.
+  const transitByLeg = buildTransitParamsByLeg(
+    hubs,
+    timingConfig.transit.sigma,
+    undefined,
+    routeTopology,
+  );
   /** Draw a whole-tick transit duration (≥1) for one departure on a directed leg. */
   const drawTransitTicks = (fromHubId: string, toHubId: string): number => {
     const params = useGeographyTransit
@@ -706,10 +789,31 @@ export function runToHorizon(
   // order `(virtualTime, sequenceId)` is uninterrupted on resume.
   let nextSequenceId = resuming ? start.nextSequenceId : 0;
 
-  const hubs = USA_HUBS;
+  // NET-01: `center` is the LEGACY single center (`hubs[0]`) — still the global
+  // dispatch hub when the flag is off (byte-identical). When continental, the
+  // per-spoke center is resolved via `centerOf(spokeHubId)` instead; `center` is
+  // then only the deterministic fallback for any spoke without an explicit
+  // assignment (e.g. a center hub itself, which is never iterated as a spoke).
   const center = hubs[0]!;
-  const spokes = hubs.slice(1);
-  const routes = buildRoutes(hubs);
+  // Spokes: when off, every hub after `hubs[0]`. When continental, every hub that
+  // is NOT a center (the assignment's key set), sorted by hubId for stable order.
+  const centerIds = new Set(continentalCenterOf.values());
+  const spokes: readonly Hub[] = continentalOn
+    ? hubs.filter((h) => !centerIds.has(h.hubId)).slice()
+    : hubs.slice(1);
+  const routes = buildRoutes(hubs, undefined, routeTopology);
+
+  // NET-01: resolve a spoke's owning center. OFF ⇒ always the single `hubs[0]`
+  // center (so every legacy `center.hubId` use is byte-identical). ON ⇒ the
+  // spoke's assigned center from `assignSpokesToNearestCenter`, falling back to
+  // `hubs[0]` only for an unmapped id (defensive; never hit for a valid spoke).
+  const hubByIdAll = new Map<string, Hub>(hubs.map((h) => [h.hubId, h]));
+  const centerOf = (spokeHubId: string): Hub => {
+    if (!continentalOn) return center;
+    const centerHubId = continentalCenterOf.get(spokeHubId);
+    const resolved = centerHubId !== undefined ? hubByIdAll.get(centerHubId) : undefined;
+    return resolved ?? center;
+  };
 
   // SP2 (spec §5) + FIX 5 — per-DIRECTED-leg miles on the SAME distance basis as
   // the trailer-fuel projection + twin-snapshot, so the sim odometer, the twin's
@@ -1025,21 +1129,23 @@ export function runToHorizon(
   if (hosOn && !resuming) {
     const nowIso = clock.nowIso();
     const nowMin = isoToEpochMinutes(nowIso);
-    const registerDriver = (driverId: string): void => {
+    const registerDriver = (driverId: string, homeHubId: string = center.hubId): void => {
       clockByDriver.set(driverId, freshHosClock(nowIso));
       availableAtMinByDriver.set(driverId, nowMin);
       const registered: DriverRegistered = {
         type: "DriverRegistered",
         schemaVersion: 1,
-        payload: { driverId, homeHubId: center.hubId, occurredAt: nowIso },
+        payload: { driverId, homeHubId, occurredAt: nowIso },
       };
       emit(`driver-${driverId}`, registered);
     };
     // Primary roster: one driver bound to each trailer (from `trailerRoster`;
     // D001…D00N at fleetPerSpoke=1, continuing the sequence for extra slots).
+    // NET-01: a primary driver homes at its trailer's spoke center. OFF ⇒ `hubs[0]`
+    // (byte-identical to the legacy single dispatch hub).
     for (const entry of trailerRoster) {
       driverByTrailer.set(entry.trailerId, entry.driverId);
-      registerDriver(entry.driverId);
+      registerDriver(entry.driverId, centerOf(entry.spoke.hubId).hubId);
     }
     // Spare pool: extra fresh drivers a relay hands a trailer to, scaled by the
     // fleet so more concurrent trailers still usually find a fresh legal driver.
@@ -1120,13 +1226,17 @@ export function runToHorizon(
       const dest = rng.pick(spokes);
       const sizeClass = SIZE_CLASSES[rng.int(SIZE_CLASSES.length)]!;
       const weight = 1 + rng.int(50); // 1..50 kg (integer, byte-stable)
+      // NET-01: the package is created at the DEST spoke's owning center (so the
+      // existing center->spoke distribution carries it). OFF ⇒ `hubs[0]` (the
+      // legacy single center, byte-identical); ON ⇒ `centerOf(dest)`.
+      const originCenter = centerOf(dest.hubId);
 
       const created: PackageCreated = {
         type: "PackageCreated",
         schemaVersion: 1,
         payload: {
           packageId,
-          originHubId: center.hubId,
+          originHubId: originCenter.hubId,
           destHubId: dest.hubId,
           sizeClass,
           weight,
@@ -1140,7 +1250,7 @@ export function runToHorizon(
       const inbound: PackageScanned = {
         type: "PackageScanned",
         schemaVersion: 1,
-        payload: { packageId, hubId: center.hubId, scanType: "inbound" },
+        payload: { packageId, hubId: originCenter.hubId, scanType: "inbound" },
       };
       emit(`package-${packageId}`, inbound);
 
@@ -1197,10 +1307,20 @@ export function runToHorizon(
     // Deadline = occurredAt + expectedTravel(inductionHub→center→destHub) + buffer.
     // The same `expectedMinutes`-backed estimator the optimizer uses (one source
     // of truth). Locked here; never regenerated.
+    // NET-01: the route legs are inductionHub → centerOf(inductionHub) → [backbone
+    // → centerOf(destHub)] → destHub. OFF ⇒ `centerOf` returns `hubs[0]` = `center`,
+    // so the two-leg estimate is byte-identical to the legacy single-center one.
+    const originCenter = centerOf(inductionHub.hubId);
+    const destCenter = centerOf(destHub.hubId);
+    const backboneMin =
+      continentalOn && destCenter.hubId !== originCenter.hubId
+        ? expectedTransitMinutes(originCenter, destCenter, timingConfig)
+        : 0;
     const transitMin =
-      expectedTransitMinutes(inductionHub, center, timingConfig) +
+      expectedTransitMinutes(inductionHub, originCenter, timingConfig) +
       expectedDwellMinutes("center", timingConfig) +
-      expectedTransitMinutes(center, destHub, timingConfig);
+      backboneMin +
+      expectedTransitMinutes(destCenter, destHub, timingConfig);
     const occurredAtIso = clock.nowIso();
     const deadlineMin =
       isoToEpochMinutes(occurredAtIso) +
@@ -1460,6 +1580,9 @@ export function runToHorizon(
   const departTrailer = (trailerId: string, spoke: Hub, departTick: number): void => {
     tripCounter += 1;
     const tripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+    // NET-01: the trailer departs from THIS spoke's owning center. OFF ⇒ `hubs[0]`
+    // (byte-identical to the legacy `center.hubId`); ON ⇒ the spoke's assigned center.
+    const spokeCenter = centerOf(spoke.hubId);
 
     // Drain this spoke's pending manifest onto the trailer (load scans first).
     const manifest = pendingBySpoke.get(spoke.hubId)!;
@@ -1468,7 +1591,7 @@ export function runToHorizon(
       const loadScan: PackageScanned = {
         type: "PackageScanned",
         schemaVersion: 1,
-        payload: { packageId, hubId: center.hubId, scanType: "load" },
+        payload: { packageId, hubId: spokeCenter.hubId, scanType: "load" },
       };
       emit(`package-${packageId}`, loadScan);
     }
@@ -1476,7 +1599,7 @@ export function runToHorizon(
     // SIM-HOS-05: LoadStarted is emitted BEFORE the TrailerDeparted (after the
     // load scans), gated by `hosOn` so off-mode stays byte-identical.
     if (hosOn) {
-      emitPhase("LoadStarted", trailerId, center.hubId, tripId);
+      emitPhase("LoadStarted", trailerId, spokeCenter.hubId, tripId);
     }
 
     const departed: TrailerDeparted = {
@@ -1484,7 +1607,7 @@ export function runToHorizon(
       schemaVersion: 1,
       payload: {
         trailerId,
-        fromHubId: center.hubId,
+        fromHubId: spokeCenter.hubId,
         toHubId: spoke.hubId,
         tripId,
         packageIds: loaded,
@@ -1499,7 +1622,7 @@ export function runToHorizon(
     // the bound driver can legally complete THIS leg's minutes. No other timing
     // draw is interleaved in this function, so the timing-substream draw ORDER is
     // unchanged vs Phase 11 — the HOS-off stream stays byte-identical.
-    const transitTicks = drawTransitTicks(center.hubId, spoke.hubId);
+    const transitTicks = drawTransitTicks(spokeCenter.hubId, spoke.hubId);
 
     // SIM-HOS-02/04: pick the dispatch driver — a relay/swap fires here when the
     // bound driver is out of legal hours for the leg (DriverSwappedAtHub), else
@@ -1527,7 +1650,7 @@ export function runToHorizon(
     // SIM-03: DOCK-PORTAL reads as the loaded packages cross the door. Strong
     // RSSI, one candidate read per tag, subject to missRate (drops are omitted).
     if (rfidEnabled && loaded.length > 0) {
-      emitRfid("portal", trailerId, center.hubId, loaded);
+      emitRfid("portal", trailerId, spokeCenter.hubId, loaded);
     }
 
     // SIM-HOS-03: accrue the driving leg through the shared HOS engine and push
@@ -1551,7 +1674,7 @@ export function runToHorizon(
     let refuelOdometer = 0;
     let didRefuel = false;
     if (fuelOn) {
-      const accrued = (odometerByTrailer.get(trailerId) ?? 0) + legMilesFor(center.hubId, spoke.hubId);
+      const accrued = (odometerByTrailer.get(trailerId) ?? 0) + legMilesFor(spokeCenter.hubId, spoke.hubId);
       if (accrued >= fuelConfig.refuelThresholdMiles) {
         didRefuel = true;
         refuelOdometer = accrued;
@@ -1615,6 +1738,9 @@ export function runToHorizon(
     carried: readonly string[],
     arriveTick: number,
   ): void => {
+    // NET-01: the spoke's owning center (the return/consolidation legs terminate
+    // here). OFF ⇒ `hubs[0]` (byte-identical); ON ⇒ the spoke's assigned center.
+    const spokeCenter = centerOf(spoke.hubId);
     const arrived: TrailerArrivedAtHub = {
       type: "TrailerArrivedAtHub",
       schemaVersion: 1,
@@ -1718,7 +1844,7 @@ export function runToHorizon(
         payload: {
           trailerId,
           fromHubId: spoke.hubId,
-          toHubId: center.hubId,
+          toHubId: spokeCenter.hubId,
           tripId: returnTripId,
           packageIds: overCarried,
         },
@@ -1738,13 +1864,16 @@ export function runToHorizon(
       // per-departure transit draw (the return leg is its own departure).
       // TIME-01: the return leg is spoke→center, so it draws from that directed
       // leg's geography-derived params.
-      const returnArriveTick = arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
+      const returnArriveTick = arriveTick + drawTransitTicks(spoke.hubId, spokeCenter.hubId);
       const overCarriedId = heldBack;
       schedule(returnArriveTick, {
         kind: "arriveOverCarriedAtCenter",
         trailerId,
         packageId: overCarriedId,
         tripId: returnTripId,
+        // NET-01: the center the over-carried package unloads at. Absent ⇒ the
+        // dispatcher falls back to `hubs[0]` (legacy single-center, byte-identical).
+        ...(continentalOn ? { centerHubId: spokeCenter.hubId } : {}),
       });
     }
 
@@ -1789,7 +1918,7 @@ export function runToHorizon(
         payload: {
           trailerId,
           fromHubId: spoke.hubId,
-          toHubId: center.hubId,
+          toHubId: spokeCenter.hubId,
           tripId: consolidationTripId,
           packageIds: consolidated,
         },
@@ -1808,12 +1937,17 @@ export function runToHorizon(
       // for the spoke→center return leg (its own departure). Carries the drained
       // packageIds ARRAY as DATA so a resume reconstructs the cross-dock exactly.
       const consolidationArriveTick =
-        arriveTick + drawTransitTicks(spoke.hubId, center.hubId);
+        arriveTick + drawTransitTicks(spoke.hubId, spokeCenter.hubId);
       schedule(consolidationArriveTick, {
         kind: "arriveConsolidationAtCenter",
         trailerId,
         packageIds: consolidated,
         tripId: consolidationTripId,
+        // NET-01: the ORIGIN center this consolidation freight arrives at. Absent
+        // ⇒ `hubs[0]` (legacy single-center, byte-identical). When the package's
+        // dest spoke is served by a DIFFERENT center, the dispatcher hops it across
+        // the backbone before final distribution (spoke->center->backbone->center->spoke).
+        ...(continentalOn ? { centerHubId: spokeCenter.hubId } : {}),
       });
     }
 
@@ -1853,32 +1987,33 @@ export function runToHorizon(
     trailerId: string,
     packageId: string,
     tripId: string,
+    centerHubId: string = center.hubId,
   ): void => {
     const arrived: TrailerArrivedAtHub = {
       type: "TrailerArrivedAtHub",
       schemaVersion: 1,
-      payload: { trailerId, hubId: center.hubId, tripId },
+      payload: { trailerId, hubId: centerHubId, tripId },
     };
     emit(`trailer-${trailerId}`, arrived);
 
     const docked: TrailerDocked = {
       type: "TrailerDocked",
       schemaVersion: 1,
-      payload: { trailerId, hubId: center.hubId, dockDoorId: `${center.hubId}-DOCK1` },
+      payload: { trailerId, hubId: centerHubId, dockDoorId: `${centerHubId}-DOCK1` },
     };
     emit(`trailer-${trailerId}`, docked);
 
     const unload: PackageScanned = {
       type: "PackageScanned",
       schemaVersion: 1,
-      payload: { packageId, hubId: center.hubId, scanType: "unload" },
+      payload: { packageId, hubId: centerHubId, scanType: "unload" },
     };
     emit(`package-${packageId}`, unload);
 
     const atHub: PackageArrivedAtHub = {
       type: "PackageArrivedAtHub",
       schemaVersion: 1,
-      payload: { packageId, hubId: center.hubId },
+      payload: { packageId, hubId: centerHubId },
     };
     emit(`package-${packageId}`, atHub);
   };
@@ -1896,18 +2031,19 @@ export function runToHorizon(
     trailerId: string,
     packageIds: readonly string[],
     tripId: string,
+    arrivalCenterHubId: string = center.hubId,
   ): void => {
     const arrived: TrailerArrivedAtHub = {
       type: "TrailerArrivedAtHub",
       schemaVersion: 1,
-      payload: { trailerId, hubId: center.hubId, tripId },
+      payload: { trailerId, hubId: arrivalCenterHubId, tripId },
     };
     emit(`trailer-${trailerId}`, arrived);
 
     const docked: TrailerDocked = {
       type: "TrailerDocked",
       schemaVersion: 1,
-      payload: { trailerId, hubId: center.hubId, dockDoorId: `${center.hubId}-DOCK1` },
+      payload: { trailerId, hubId: arrivalCenterHubId, dockDoorId: `${arrivalCenterHubId}-DOCK1` },
     };
     emit(`trailer-${trailerId}`, docked);
 
@@ -1915,14 +2051,14 @@ export function runToHorizon(
       const unload: PackageScanned = {
         type: "PackageScanned",
         schemaVersion: 1,
-        payload: { packageId, hubId: center.hubId, scanType: "unload" },
+        payload: { packageId, hubId: arrivalCenterHubId, scanType: "unload" },
       };
       emit(`package-${packageId}`, unload);
 
       const atHub: PackageArrivedAtHub = {
         type: "PackageArrivedAtHub",
         schemaVersion: 1,
-        payload: { packageId, hubId: center.hubId },
+        payload: { packageId, hubId: arrivalCenterHubId },
       };
       emit(`package-${packageId}`, atHub);
 
@@ -1937,6 +2073,47 @@ export function runToHorizon(
             `consolidation package "${packageId}" — invalid state`,
         );
       }
+
+      // NET-01: cross-center routing. The dest spoke is served by `centerOf(dest)`.
+      // When that center DIFFERS from this arrival center, the package must hop the
+      // backbone (arrivalCenter -> destCenter) BEFORE final center->spoke
+      // distribution — the spoke -> origin center -> BACKBONE -> dest center ->
+      // dest spoke flow. When the dest center IS this center (single-center, or a
+      // same-center pair), the legacy cross-dock applies directly. The OFF path
+      // always takes the direct branch (`centerOf` returns `hubs[0]`).
+      const destCenter = centerOf(destHubId);
+      if (continentalOn && destCenter.hubId !== arrivalCenterHubId) {
+        // Backbone hop: a fresh directed center->center departure carrying the
+        // package, then a re-staging arrival at the dest center. The dest mapping
+        // is RETAINED until the package re-stages at its dest center.
+        tripCounter += 1;
+        const backboneTripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+        const backboneDeparted: TrailerDeparted = {
+          type: "TrailerDeparted",
+          schemaVersion: 1,
+          payload: {
+            trailerId,
+            fromHubId: arrivalCenterHubId,
+            toHubId: destCenter.hubId,
+            tripId: backboneTripId,
+            packageIds: [packageId],
+          },
+        };
+        emit(`trailer-${trailerId}`, backboneDeparted);
+        // Schedule the dest-center arrival, drawing the backbone leg's transit.
+        const backboneArriveTick =
+          isoToEpochMinutes(clock.nowIso()) +
+          drawTransitTicks(arrivalCenterHubId, destCenter.hubId);
+        schedule(backboneArriveTick, {
+          kind: "arriveConsolidationAtCenter",
+          trailerId,
+          packageIds: [packageId],
+          tripId: backboneTripId,
+          centerHubId: destCenter.hubId,
+        });
+        continue; // not yet at its final center — do NOT distribute here.
+      }
+
       consolidationDestByPackage.delete(packageId);
       pendingBySpoke.get(destHubId)!.push(packageId);
     }
@@ -1991,10 +2168,20 @@ export function runToHorizon(
         }
         return;
       case "arriveOverCarriedAtCenter":
-        arriveOverCarriedAtCenter(task.trailerId, task.packageId, task.tripId);
+        arriveOverCarriedAtCenter(
+          task.trailerId,
+          task.packageId,
+          task.tripId,
+          task.centerHubId ?? center.hubId,
+        );
         return;
       case "arriveConsolidationAtCenter":
-        arriveConsolidationAtCenter(task.trailerId, task.packageIds, task.tripId);
+        arriveConsolidationAtCenter(
+          task.trailerId,
+          task.packageIds,
+          task.tripId,
+          task.centerHubId ?? center.hubId,
+        );
         return;
       case "deliverPackage":
         // Phase-22 OUT-01: one-shot terminal delivery. The locked slaDeadlineIso

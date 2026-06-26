@@ -79,6 +79,8 @@ The platform is built across three milestones. Everything below is shipped and t
 - **Optimization:** custom greedy + local search, min-cost flow, VRPTW heuristic, HOS engine
 - **Realtime:** native `ws` with a small typed server→client diff protocol
 - **Tooling:** pnpm workspaces + Turborepo, Vitest 4, strict TypeScript 5.9, ESLint 9
+- **Map data:** OpenStreetMap basemap tiles; continental big-city hubs derived from the
+  GeoNames city dataset (CC BY 4.0) — see [Data attribution](#data-attribution)
 
 ## Quickstart
 
@@ -156,6 +158,16 @@ Project planning artifacts (managed by GSD) live in [`.planning/`](.planning/):
 
 See [`rfid_middle_mile_trailer_optimization_tech_spec.md`](rfid_middle_mile_trailer_optimization_tech_spec.md)
 for the full technical specification.
+
+## Data attribution
+
+- **Basemap:** map tiles © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+  contributors, rendered via OpenLayers.
+- **City / hub data:** the continental big-city hub set (`us-big-cities.generated.json`)
+  is derived from the [GeoNames](https://www.geonames.org/) geographical database (via the
+  `all-the-cities` dataset), licensed under
+  [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). City data © GeoNames, CC BY 4.0.
+  This credit also renders in the live map's on-map attribution control (HUB-04).
 
 ## License
 

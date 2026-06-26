@@ -1,4 +1,5 @@
 import type { ColumnType, Kysely } from "kysely";
+import { sql } from "kysely";
 import type { DomainEvent, DutyStatus } from "@mm/domain";
 import type {
   OperationalProjectionName,
@@ -390,28 +391,203 @@ async function applyDriverAssignment(
   }
 }
 
-async function applyHubInventory(
+/**
+ * The hub id(s) and package id(s) THIS event mutates in `hub_inventory`, or empty
+ * arrays for a no-op. PERF-01: this is the key-scope extractor that lets the
+ * applier load ONLY the affected rows instead of the whole table (the v2.1
+ * surgery, now applied to the last full-scan applier). The closed-union
+ * `default: never` forces a future event type to be classified here.
+ *
+ *   - PLACEMENT-ADDING (the package lands at a NAMED hub): the single hub id.
+ *       PackageArrivedAtHub → hubId · PackageInducted → inductionHubId ·
+ *       PackageScanned → hubId (a `load` scan removes the package, but it still
+ *       only ever sits at THAT hub, so the named hub is the only row to touch).
+ *   - PLACEMENT-REMOVING (the event names PACKAGE ids, not hubs): the package
+ *       ids; the applier resolves the rows currently HOLDING them via a JSONB
+ *       containment read (no full scan).
+ *       TrailerDeparted → packageIds · PlanSuperseded → supersededPackageIds ·
+ *       PackageDelivered → packageId.
+ */
+function affectedHubInventory(
+  event: DomainEvent,
+): { readonly hubIds: readonly string[]; readonly packageIds: readonly string[] } {
+  switch (event.type) {
+    case "PackageArrivedAtHub":
+      return { hubIds: [event.payload.hubId], packageIds: [] };
+    case "PackageInducted":
+      return { hubIds: [event.payload.inductionHubId], packageIds: [] };
+    case "PackageScanned":
+      return { hubIds: [event.payload.hubId], packageIds: [] };
+    case "TrailerDeparted":
+      return { hubIds: [], packageIds: event.payload.packageIds };
+    case "PlanSuperseded":
+      return { hubIds: [], packageIds: event.payload.supersededPackageIds };
+    case "PackageDelivered":
+      return { hubIds: [], packageIds: [event.payload.packageId] };
+    // Every other event leaves hub inventory untouched (mirrors the reducer's
+    // no-op arm). Classified explicitly so a new event type can't silently slip
+    // through as a no-op — the `default: never` below is the exhaustiveness gate.
+    case "HubRegistered":
+    case "RouteRegistered":
+    case "PackageCreated":
+    case "TrailerArrivedAtHub":
+    case "TrailerDocked":
+    case "RfidObserved":
+    case "WrongTrailerDetected":
+    case "MissedUnloadDetected":
+    case "PlanGenerated":
+    case "PlanAccepted":
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+    case "DriverSwappedAtHub":
+    case "UnloadStarted":
+    case "LoadStarted":
+    case "UnloadCompleted":
+    case "TruckRested":
+    case "TruckRefueled":
+      return { hubIds: [], packageIds: [] };
+    default: {
+      const _never: never = event;
+      return _never;
+    }
+  }
+}
+
+/** A `hub_inventory` row as read back (buckets are JSONB `string[]`). */
+interface HubInventoryReadRow {
+  hub_id: string;
+  inbound: string[];
+  outbound: string[];
+  staged: string[];
+}
+
+/**
+ * Resolve the rows currently HOLDING any of `packageIds`, in ANY bucket, WITHOUT
+ * a full-table scan. A placement-removing event (TrailerDeparted / PlanSuperseded
+ * / PackageDelivered) names package ids, not hubs; this is the package→hub lookup.
+ * Postgres `jsonb ?| text[]` is "does the array contain ANY of these elements?" —
+ * matching exactly the rows whose `inbound`/`outbound`/`staged` hold a touched
+ * package. The rows returned are bounded by how many hubs actually hold the
+ * touched packages (≤ packageIds.length), NEVER by total hub count.
+ *
+ * Injectable so the PERF-01 cost test can substitute an in-memory equivalent (the
+ * test counts rows-read; it does not run Postgres). The default is the production
+ * `?|` containment query.
+ */
+export type HubsContainingPackages = (
+  db: Kysely<ProjectionDb>,
+  packageIds: readonly string[],
+) => Promise<HubInventoryReadRow[]>;
+
+const defaultHubsContainingPackages: HubsContainingPackages = async (db, packageIds) => {
+  const ids = [...packageIds];
+  const rows = await db
+    .selectFrom("hub_inventory")
+    .selectAll()
+    .where(
+      sql<boolean>`inbound ?| ${ids} OR outbound ?| ${ids} OR staged ?| ${ids}`,
+    )
+    .execute();
+  return rows.map((r) => ({
+    hub_id: r.hub_id,
+    inbound: r.inbound,
+    outbound: r.outbound,
+    staged: r.staged,
+  }));
+};
+
+/**
+ * Exported for the PERF-01 cost test (`hub-inventory-cost.unit.test.ts`), which
+ * folds this applier against a counting in-memory db to witness that per-event
+ * row reads are independent of hub count. Not part of the public twin API.
+ *
+ * PERF-01 / Pitfall 9 (the v2.1 freeze, re-armed at 100 hubs): the prior body
+ * loaded the ENTIRE `hub_inventory` table per event, rebuilt the whole placement
+ * index, and re-upserted every row — O(events × hubs), the exact "time appears
+ * stopped" decay. This version loads ONLY the rows the event touches (its named
+ * hub id(s) for placement-adding events; the rows holding its package id(s),
+ * resolved via JSONB containment, for placement-removing events), folds with the
+ * SAME pure `hubInventoryReducer` (which mutates no other key, so the partial
+ * fold is byte-identical to a full-table fold and to a rebuild-from-0 — FND-04 /
+ * P5a preserved), then persists ONLY the delta: upsert the hubs the event
+ * touches — a hub the fold empties is written back as an EMPTY row, never
+ * deleted (FND-04 requires `DFW.outbound === []` to persist after a departure).
+ * Cost is O(affected keys per event),
+ * independent of hub count — the `hub-inventory-cost.unit.test.ts` witness.
+ */
+export async function applyHubInventory(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
+  hubsContainingPackages: HubsContainingPackages = defaultHubsContainingPackages,
 ): Promise<void> {
-  const rows = await db.selectFrom("hub_inventory").selectAll().execute();
-  // Reconstruct both the queryable hub state AND the internal placement index
-  // (a package's placement is wherever it currently appears in a bucket).
+  const { hubIds, packageIds } = affectedHubInventory(replay.event);
+  if (hubIds.length === 0 && packageIds.length === 0) return; // no-op ⇒ no read, no write
+
+  // Scoped read: the named hub rows (placement-adding) UNION the rows currently
+  // holding the touched packages (placement-removing), deduped by hub_id. Both
+  // reads are bounded by the event payload, never by total hub count.
+  const byHub = new Map<string, HubInventoryReadRow>();
+  if (hubIds.length > 0) {
+    const rows = await db
+      .selectFrom("hub_inventory")
+      .selectAll()
+      .where("hub_id", "in", [...hubIds])
+      .execute();
+    for (const r of rows) {
+      byHub.set(r.hub_id, {
+        hub_id: r.hub_id,
+        inbound: r.inbound,
+        outbound: r.outbound,
+        staged: r.staged,
+      });
+    }
+  }
+  if (packageIds.length > 0) {
+    const rows = await hubsContainingPackages(db, packageIds);
+    for (const r of rows) byHub.set(r.hub_id, r);
+  }
+
+  // The set of hub ids this fold may mutate: every loaded row PLUS any named hub
+  // that had no row yet (a placement-adding event can CREATE a hub row). Tracking
+  // it lets us delta-persist exactly the scoped hubs (an emptied hub is upserted
+  // as an EMPTY row, never deleted — see the byte-identical note on the upsert below).
+  const scopedHubIds = new Set<string>(byHub.keys());
+  for (const h of hubIds) scopedHubIds.add(h);
+
   const hubs = new Map(
-    rows.map((r) => [
+    [...byHub.values()].map((r) => [
       r.hub_id,
       { hubId: r.hub_id, inbound: r.inbound, outbound: r.outbound, staged: r.staged },
     ]),
   );
   const placement = new Map<string, { hubId: string; bucket: "inbound" | "outbound" | "staged" }>();
-  for (const r of rows) {
+  for (const r of byHub.values()) {
     for (const id of r.inbound) placement.set(id, { hubId: r.hub_id, bucket: "inbound" });
     for (const id of r.outbound) placement.set(id, { hubId: r.hub_id, bucket: "outbound" });
     for (const id of r.staged) placement.set(id, { hubId: r.hub_id, bucket: "staged" });
   }
+
   const state: HubInventoryState = { hubs, placement };
   const next = hubInventoryReducer(state, toOccurred(replay));
-  for (const hub of next.hubs.values()) {
+
+  // Persist ONLY the scoped hubs' delta. Because the reducer mutates no key
+  // outside this event's scope, every NEXT hub outside `scopedHubIds` is byte
+  // identical to its persisted row and is left untouched.
+  //
+  // BYTE-IDENTICAL to the prior full-table fold (FND-04, the golden-replay
+  // witness): the old applier iterated `next.hubs.values()` and UPSERTed every
+  // hub, INCLUDING ones the reducer emptied (the reducer's `placePackage` keeps an
+  // empty `HubInventory` in the map rather than deleting the key — see
+  // `projections-golden-replay`'s `DFW.outbound === []` assertion). So an emptied
+  // hub stays as an EMPTY ROW, never a deleted row. We replicate that exactly: for
+  // every scoped hub present in `next.hubs`, upsert it (empty or not). A scoped
+  // NAMED hub absent from `next.hubs` was never created (e.g. a `load` scan at a
+  // hub with no prior row removes the package without ever materializing the hub),
+  // so it correctly gets no row — matching the old applier, which never iterated it.
+  for (const hubId of scopedHubIds) {
+    const hub = next.hubs.get(hubId);
+    if (hub === undefined) continue; // never materialized ⇒ no row (old applier parity)
     await db
       .insertInto("hub_inventory")
       .values({

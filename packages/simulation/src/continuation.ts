@@ -52,6 +52,10 @@ export type SimTask =
       readonly trailerId: string;
       readonly packageId: string;
       readonly tripId: string;
+      // NET-01: the center the over-carried package unloads at. ABSENT ⇒ the legacy
+      // single center `hubs[0]` (byte-identical); present only under the
+      // `continentalTopology` flag (additive, non-breaking).
+      readonly centerHubId?: string;
     }
   // FLOW-02: a spoke→center CONSOLIDATION trailer's center arrival. Carries the
   // drained `packageIds` ARRAY (the whole manifest) — DATA, never a closure — so a
@@ -62,6 +66,11 @@ export type SimTask =
       readonly trailerId: string;
       readonly packageIds: readonly string[];
       readonly tripId: string;
+      // NET-01: the ORIGIN/destination center this consolidation freight arrives at
+      // (also reused for the cross-center backbone hop's dest-center arrival).
+      // ABSENT ⇒ the legacy single center `hubs[0]` (byte-identical); present only
+      // under the `continentalTopology` flag (additive, non-breaking).
+      readonly centerHubId?: string;
     }
   // Phase-22 OUT-01: a ONE-SHOT terminal delivery task scheduled at a
   // DESTINATION-hub arrival (NOT self-rescheduling). Carries ALL data needed to

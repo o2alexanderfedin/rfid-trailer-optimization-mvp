@@ -14,17 +14,17 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 ## v3.0 Requirements
 
 ### Big-city hubs (HUB) — Phase A
-- [ ] **HUB-01**: A dev-only build-time generator emits a committed, checksummed `us-big-cities.generated.json` (city, 2-letter state, lat/lon, population/rank, IANA timezone); the runtime imports only the committed JSON (no city-data dependency at runtime), mirroring the `road-geometry.generated.json` pattern.
-- [ ] **HUB-02**: Hub set is selected as **1–3 hubs per state** by MSA/metro-population rank (per-state floor 1, cap 3), yielding **~80–130 hubs**, fully deterministic/static (no clock/RNG).
-- [ ] **HUB-03**: Metros spanning state lines are de-duplicated to a single hub; the total stays within the ~80–130 continental envelope.
-- [ ] **HUB-04**: Dataset **attribution compliance** is shipped (SimpleMaps backlink OR "city data © GeoNames CC BY 4.0" credit) in README/UI footer.
+- [x] **HUB-01**: A dev-only build-time generator emits a committed, checksummed `us-big-cities.generated.json` (city, 2-letter state, lat/lon, population/rank, IANA timezone); the runtime imports only the committed JSON (no city-data dependency at runtime), mirroring the `road-geometry.generated.json` pattern.
+- [x] **HUB-02**: Hub set is selected as **1–3 hubs per state** by MSA/metro-population rank (per-state floor 1, cap 3), yielding **~80–130 hubs**, fully deterministic/static (no clock/RNG).
+- [x] **HUB-03**: Metros spanning state lines are de-duplicated to a single hub; the total stays within the ~80–130 continental envelope.
+- [x] **HUB-04**: Dataset **attribution compliance** is shipped (SimpleMaps backlink OR "city data © GeoNames CC BY 4.0" credit) in README/UI footer.
 
 ### Multi-center topology (NET) — Phase A
-- [ ] **NET-01**: The engine supports **more than one regional center**; `buildRoutes` is generalized off the hard-wired single center (`USA_HUBS[0]`) to a `centerOf(spoke)` model.
-- [ ] **NET-02**: The system auto-selects regional centers partitioned by **freight-corridor + timezone**, with the **center count parameterized** (not hard-coded). The concrete count is **chosen empirically in Phase A** from a real continental run (research envelope ~4–8; near-full-mesh stays cheap and per-center fan-out stays bounded across that range); never collapse to a single primary.
-- [ ] **NET-03**: Each big-city hub is assigned to a center by the corridor/timezone partition with a great-circle **nearest-center tie-break by stable id**, subject to a **leg-length cap** (no spoke assigned across an implausible distance).
-- [ ] **NET-04**: Centers are linked by a **near-full-mesh backbone** (great-circle legs), giving **≤2-hop** coast-to-coast routing, validated by an **anti-SPOF** (remove-any-center connectivity) check.
-- [ ] **NET-05**: Freight flows **spoke → center → backbone → center → spoke**; `detectAffectedScope` gains a **per-center scope partition** (the scaling fix).
+- [x] **NET-01**: The engine supports **more than one regional center**; `buildRoutes` is generalized off the hard-wired single center (`USA_HUBS[0]`) to a `centerOf(spoke)` model.
+- [x] **NET-02**: The system auto-selects regional centers partitioned by **freight-corridor + timezone**, with the **center count parameterized** (not hard-coded). The concrete count is **chosen empirically in Phase A** from a real continental run (research envelope ~4–8; near-full-mesh stays cheap and per-center fan-out stays bounded across that range); never collapse to a single primary.
+- [x] **NET-03**: Each big-city hub is assigned to a center by the corridor/timezone partition with a great-circle **nearest-center tie-break by stable id**, subject to a **leg-length cap** (no spoke assigned across an implausible distance).
+- [x] **NET-04**: Centers are linked by a **near-full-mesh backbone** (great-circle legs), giving **≤2-hop** coast-to-coast routing, validated by an **anti-SPOF** (remove-any-center connectivity) check.
+- [x] **NET-05**: Freight flows **spoke → center → backbone → center → spoke**; `detectAffectedScope` gains a **per-center scope partition** (the scaling fix).
 
 ### OODA step-agents (OODA) — Phase B
 - [ ] **OODA-01**: Each **truck** runs a deterministic `step()` = Observe→Orient→Decide→Act that emits existing/new domain events, on a **per-N-tick cadence with an "anything-to-decide?" guard** (never per-tick-decide-for-all).
@@ -42,7 +42,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **COORD-06**: A coordinator **may invoke the existing optimizer** as a **scoped, pure `runEpoch` suggestion engine called synchronously in-fold** (not the async worker path); the global `RollingLoop` is disabled under the coordinator flag so the two never double-plan. *(Phase D; sub-flag with a heuristic fallback if profiling shows the in-fold call is too heavy.)*
 
 ### Performance & plumbing (PERF)
-- [ ] **PERF-01**: `applyHubInventory` is **key-scoped to the touched hub id(s)** — shipped **in Phase A** (P1-blocking; prevents the latent v2.1-style O(events×hubs) freeze from going active at 100 hubs).
+- [x] **PERF-01**: `applyHubInventory` is **key-scoped to the touched hub id(s)** — shipped **in Phase A** (P1-blocking; prevents the latent v2.1-style O(events×hubs) freeze from going active at 100 hubs).
 - [ ] **PERF-02**: `twin-snapshot` reads **incremental cursor-fold projections** (`milesSinceRefuel`, `inductionDeadlines`) instead of two full event-log scans per epoch. *(Phase E)*
 - [ ] **PERF-03**: `@alexanderfedin/async-queue` is wired into **runtime plumbing only** (worker↔optimizer handoff, DB write-batching, ws backpressure), **banned from the deterministic core by ESLint**; the vendored `dist/` is resolved and `vendor/*` added to the workspace; an append-order==generation-order test guards it. *(Phase E)*
 - [ ] **PERF-04**: A **sustained continental-run** at ~80–130 hubs holds a target sim-min/wall-sec without the freeze/stall failure mode. *(Phase E)*
@@ -53,7 +53,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **VIZ-17**: An **advisory-suggestion overlay** (accept-green / reject-red) is opt-in / decluttered on the map.
 
 ### Determinism keystone (DET) — cross-cutting, every phase
-- [ ] **DET-01**: Every v3.0 feature is **flag-gated**; per flag, BOTH `flag:false === absent` AND `absent ⇒ golden 3920accc…` (the two-part flags-off gate); the generalized multi-center `buildRoutes` produces the **identical `Route[]`** for the legacy 10-hub input.
+- [x] **DET-01**: Every v3.0 feature is **flag-gated**; per flag, BOTH `flag:false === absent` AND `absent ⇒ golden 3920accc…` (the two-part flags-off gate); the generalized multi-center `buildRoutes` produces the **identical `Route[]`** for the legacy 10-hub input.
 - [ ] **DET-02**: Each new model (topology, OODA agents, coordinators) **captures its own new golden**, with **agent-order-shuffle**, **N-agent-RNG-decorrelation**, and **continuation-equivalence** tests green.
 - [ ] **DET-03**: No `Date.now()` / `Math.random()` / `async-queue` in the decision core; all hashed payloads go through `canonicalize`; a CI/ESLint static guard fails on a violation.
 
@@ -86,17 +86,17 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HUB-01 | Phase 23 — Multi-Center Topology | Pending |
-| HUB-02 | Phase 23 — Multi-Center Topology | Pending |
-| HUB-03 | Phase 23 — Multi-Center Topology | Pending |
-| HUB-04 | Phase 23 — Multi-Center Topology | Pending |
-| NET-01 | Phase 23 — Multi-Center Topology | Pending |
-| NET-02 | Phase 23 — Multi-Center Topology | Pending |
-| NET-03 | Phase 23 — Multi-Center Topology | Pending |
-| NET-04 | Phase 23 — Multi-Center Topology | Pending |
-| NET-05 | Phase 23 — Multi-Center Topology | Pending |
-| PERF-01 | Phase 23 — Multi-Center Topology | Pending |
-| DET-01 | Phase 23 — Multi-Center Topology (re-asserted every phase) | Pending |
+| HUB-01 | Phase 23 — Multi-Center Topology | Complete |
+| HUB-02 | Phase 23 — Multi-Center Topology | Complete |
+| HUB-03 | Phase 23 — Multi-Center Topology | Complete |
+| HUB-04 | Phase 23 — Multi-Center Topology | Complete |
+| NET-01 | Phase 23 — Multi-Center Topology | Complete |
+| NET-02 | Phase 23 — Multi-Center Topology | Complete |
+| NET-03 | Phase 23 — Multi-Center Topology | Complete |
+| NET-04 | Phase 23 — Multi-Center Topology | Complete |
+| NET-05 | Phase 23 — Multi-Center Topology | Complete |
+| PERF-01 | Phase 23 — Multi-Center Topology | Complete |
+| DET-01 | Phase 23 — Multi-Center Topology (re-asserted every phase) | Complete |
 | OODA-01 | Phase 24 — OODA Step-Agents | Pending |
 | OODA-02 | Phase 24 — OODA Step-Agents | Pending |
 | OODA-03 | Phase 24 — OODA Step-Agents | Pending |

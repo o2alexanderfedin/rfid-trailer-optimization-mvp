@@ -11,6 +11,12 @@ export default tseslint.config(
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
+      // Vendored git submodule (`@alexanderfedin/async-queue`) — third-party
+      // code with its own toolchain; not part of our typed program. It is
+      // runtime-plumbing-only and is barred from the deterministic core by a
+      // dedicated `no-restricted-imports` rule (added when it is wired in
+      // Phase 27), not by linting its own sources.
+      "vendor/**",
       "**/coverage/**",
       "**/playwright-report/**",
       "**/test-results/**",
