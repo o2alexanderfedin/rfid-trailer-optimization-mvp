@@ -26,6 +26,9 @@ export { decideTruck } from "./truck.js";
 export { decideHub } from "./hub.js";
 export type { HubDecision, HubHoldReason, HubObservation } from "./hub.js";
 
+// DET-03 (24-04): canonicalize every hashed OODA payload (fixed key order).
+export { canonicalizeOodaPayload } from "./canonical.js";
+
 // OODA-03 binding local feasibility (24-03) — pure adapters reusing the shared
 // HOS engine + fuel-threshold + dock logic.
 export { hubDockFeasibility, truckLegFeasibility } from "./feasibility.js";

@@ -57,6 +57,7 @@ import { makeRng, makeRngFromState, type Rng } from "./rng.js";
 import {
   type AgentObservation,
   type HubObservation,
+  canonicalizeOodaPayload,
   decideHub,
   decideTruck,
   deriveAgentRng,
@@ -1711,14 +1712,17 @@ export function runToHorizon(
             const diverted: TrailerDiverted = {
               type: "TrailerDiverted",
               schemaVersion: 1,
-              payload: {
+              // DET-03 (Pitfall 7): route the agent-decided payload through the ONE
+              // canonicalizer so its hashed key order is byte-stable regardless of
+              // how the literal is built or later refactored.
+              payload: canonicalizeOodaPayload({
                 trailerId: agent.stableId,
                 tripId: trip.tripId,
                 fromHubId: trip.fromHubId,
                 toHubId: decision.toHubId,
                 reason: decision.reason,
                 occurredAt: clock.nowIso(),
-              },
+              }),
             };
             emit(`trailer-${agent.stableId}`, diverted);
             break;
