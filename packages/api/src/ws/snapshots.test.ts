@@ -21,6 +21,7 @@ import type { SnapshotPayload, WsEnvelope } from "./envelope.js";
 import {
   attachSnapshotSocket,
   buildTrailerKeyframes,
+  deriveSimDay,
   driverBucketsPerHub,
   legRouteId,
   legTransitMinutes,
@@ -292,6 +293,91 @@ describe("ws snapshot channel: broadcast(simMs) → tick envelope", () => {
       expect(tick.speed.simSpeed).toBe(0);
       expect(tick.speed.paused).toBe(true);
       expect(tick.speed.tickIntervalMs).toBe(250); // interval retained while paused
+    } finally {
+      socket.close();
+      await app.close();
+    }
+  });
+
+  it("VIZ-RESUME: a connect AFTER ticks anchors the snapshot at the LIVE sim clock (not 0)", async () => {
+    // REGRESSION (v2.1 Bug 1 — "east→west restart on refresh"): the connect
+    // snapshot used to stamp simMs:0. Trailer keyframes carry absolute-epoch
+    // departMs/etaMs, so a 0 anchor made the client compute fraction
+    // (0 − departMs)/span ⇒ clamp to 0 ⇒ EVERY in-flight trailer re-rendered at
+    // its leg origin and re-animated the whole leg from t=0 on every refresh.
+    // The snapshot must anchor at the CURRENT authoritative sim clock so a
+    // reconnecting client places each trailer at its TRUE current progress.
+    const controller = makeSpeedController();
+    const app = Fastify({ logger: false });
+    await app.register(fastifyWebsocket);
+    const broadcast = attachSnapshotSocket(app, FAKE_DB, controller, {
+      buildPayload: () => Promise.resolve(emptyPayload()),
+    });
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") throw new Error("no port");
+
+    // Advance the live sim clock the way the driver does each tick (absolute-epoch).
+    const LIVE_SIM_MS = 1_778_310_840_000;
+    await broadcast(LIVE_SIM_MS);
+
+    // A NEW client connecting now (the page-refresh case) must receive a snapshot
+    // anchored at the live clock — not 0.
+    const { socket, next } = await openSocketBuffered(address.port);
+    try {
+      const snap = await next();
+      if (snap.type !== "snapshot") throw new Error("expected snapshot");
+      expect(snap.simMs).toBe(LIVE_SIM_MS);
+      expect(snap.simDay).toBe(deriveSimDay(LIVE_SIM_MS));
+    } finally {
+      socket.close();
+      await app.close();
+    }
+  });
+
+  it("VIZ-RESUME: the FIRST connect (before any tick) still anchors at 0 (back-compat)", async () => {
+    // Before the first broadcast `getLastSimMs()` is 0, so a connect at sim-start
+    // is unchanged from the legacy behaviour (no spurious non-zero anchor).
+    const { app: a, port } = await buildTestApp();
+    app = a;
+    const { socket, next } = await openSocketBuffered(port);
+    try {
+      const snap = await next();
+      if (snap.type !== "snapshot") throw new Error("expected snapshot");
+      expect(snap.simMs).toBe(0);
+      expect(snap.simDay).toBe(deriveSimDay(0));
+    } finally {
+      socket.close();
+    }
+  });
+
+  it("VIZ-RESUME: a resync request re-anchors at the LIVE sim clock (not 0)", async () => {
+    // Same root cause as the connect path: a client-requested resync must re-anchor
+    // the tween clock at the current sim time so in-flight trailers do NOT restart
+    // their legs from t=0.
+    const controller = makeSpeedController();
+    const app = Fastify({ logger: false });
+    await app.register(fastifyWebsocket);
+    const broadcast = attachSnapshotSocket(app, FAKE_DB, controller, {
+      buildPayload: () => Promise.resolve(emptyPayload()),
+    });
+    await app.ready();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    if (address === null || typeof address === "string") throw new Error("no port");
+
+    const LIVE_SIM_MS = 1_778_310_900_000;
+    await broadcast(LIVE_SIM_MS);
+
+    const { socket, next } = await openSocketBuffered(address.port);
+    try {
+      await next(); // consume the connect snapshot
+      socket.send(JSON.stringify({ type: "resync" }));
+      const resync = await next();
+      if (resync.type !== "snapshot") throw new Error("expected resync snapshot");
+      expect(resync.simMs).toBe(LIVE_SIM_MS);
+      expect(resync.simDay).toBe(deriveSimDay(LIVE_SIM_MS));
     } finally {
       socket.close();
       await app.close();
