@@ -34,9 +34,17 @@ describe("STATE_REGION_TZ (HUB-02/HUB-03 partition inputs)", () => {
     expect(Object.keys(STATE_REGION_TZ)).toHaveLength(51);
   });
 
-  it("every timezone is an IANA America/* string", () => {
+  it("every timezone is a valid IANA Area/Location string", () => {
+    // The continental hub set is all `America/*`. AK/HI are in the canonical
+    // 50-state table but never realize as hubs (outside the envelope); HI's only
+    // IANA zone is `Pacific/Honolulu` (geographically unavoidable), so the
+    // invariant is "valid IANA zone", with `America/*` guaranteed for any state
+    // that can actually contribute a continental hub.
     for (const [postal, meta] of Object.entries(STATE_REGION_TZ)) {
-      expect(meta.timezone, `${postal} timezone`).toMatch(/^America\//);
+      expect(meta.timezone, `${postal} timezone`).toMatch(/^[A-Za-z]+\/[A-Za-z_/]+$/);
+      if (postal !== "HI") {
+        expect(meta.timezone, `${postal} continental timezone`).toMatch(/^America\//);
+      }
     }
   });
 
