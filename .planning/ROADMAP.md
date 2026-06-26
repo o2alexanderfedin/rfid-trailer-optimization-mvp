@@ -6,6 +6,8 @@
 - ✅ **v1.1 Realistic Time Model + Hardening** — Phases 6–8 (shipped 2026-06-22) — full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - ✅ **v1.2 Driver HOS & Hub Detail** — Phases 9–18 (shipped 2026-06-22) — full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 - ✅ **v2.0 Complete Simulation Model** — Phases 19–22 (shipped 2026-06-25) — continuous · external induction · bidirectional freight · outbound delivery — full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
+- 🩹 **v2.1 (in develop, unreleased)** — sim-perf: O(n²)→O(affected-keys) projection fold (un-froze the live demo)
+- 📋 **v3.0 Continental OODA Network (planned)** — big-city hubs (1–3/state) · regional centers · OODA step-agents · event-driven coordination centers — design seed: [v3.0-DESIGN-NOTES.md](v3.0-DESIGN-NOTES.md) → run `/gsd-new-milestone`
 
 ## Phases
 

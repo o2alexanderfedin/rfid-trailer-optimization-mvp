@@ -15,6 +15,7 @@ import {
   emptyDriverStatusState,
   type ExceptionKind,
   type ExceptionsState,
+  exceptionId as exceptionIdKey,
   exceptionsReducer,
   emptyPackageLocationState,
   emptyTrailerStateMap,
@@ -110,13 +111,46 @@ function toOccurred(replay: ReplayEvent): OccurredEvent {
   return { event: replay.event, occurredAt: replay.occurredAt };
 }
 
-// --- Per-projection load → fold → persist -----------------------------------
+// --- Key-scoped fold (the BOUNDED per-event cost, P-perf) --------------------
+//
+// Every operational reducer is a PURE `(state, event) => state` that mutates ONLY
+// the row(s) keyed by ids in THIS event's payload — never the whole map. The
+// previous appliers loaded the ENTIRE projection table, folded, and re-WROTE
+// every row per event, so per-event cost was O(total state) and the run was
+// O(events²) (the live-demo "time appears stopped" decay). These appliers instead
+// load ONLY the affected key(s) into a PARTIAL state map, fold with the SAME pure
+// reducer (identical mutation, since the reducer touches no other key), then
+// persist ONLY the rows that changed/appeared and DELETE the rows the fold
+// removed. Cost is O(affected keys per event) — bounded, independent of run
+// length. The fold is byte-identical to a full-table fold (and to a
+// rebuild-from-0), so determinism / rebuild-equivalence (FND-04, P5a) is
+// preserved; the projections-golden-replay + idempotency tests are the witness.
+
+/** Extract the package id this event mutates in `package_location`, or null. */
+function affectedPackageLocationId(event: DomainEvent): string | null {
+  switch (event.type) {
+    case "PackageScanned":
+    case "PackageArrivedAtHub":
+    case "PackageDelivered":
+      return event.payload.packageId;
+    case "PackageInducted":
+      return event.payload.packageId;
+    default:
+      return null;
+  }
+}
 
 async function applyPackageLocation(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  const rows = await db.selectFrom("package_location").selectAll().execute();
+  const id = affectedPackageLocationId(replay.event);
+  if (id === null) return; // no-op event ⇒ no read, no write
+  const rows = await db
+    .selectFrom("package_location")
+    .selectAll()
+    .where("package_id", "=", id)
+    .execute();
   const state: PackageLocationState = new Map(
     rows.map((r) => [
       r.package_id,
@@ -129,23 +163,42 @@ async function applyPackageLocation(
     ]),
   );
   const next = packageLocationReducer(state, toOccurred(replay));
-  for (const loc of next.values()) {
-    await db
-      .insertInto("package_location")
-      .values({
-        package_id: loc.packageId,
+  // The reducer mutates only `id`: either it now has a row (upsert) or it was
+  // deleted (PackageDelivered ⇒ absent in `next`). Persist exactly that delta.
+  const loc = next.get(id);
+  if (loc === undefined) {
+    await db.deleteFrom("package_location").where("package_id", "=", id).execute();
+    return;
+  }
+  await db
+    .insertInto("package_location")
+    .values({
+      package_id: loc.packageId,
+      hub_id: loc.hubId,
+      confidence: loc.confidence,
+      last_seen_at: loc.lastSeenAt,
+    })
+    .onConflict((oc) =>
+      oc.column("package_id").doUpdateSet({
         hub_id: loc.hubId,
         confidence: loc.confidence,
         last_seen_at: loc.lastSeenAt,
-      })
-      .onConflict((oc) =>
-        oc.column("package_id").doUpdateSet({
-          hub_id: loc.hubId,
-          confidence: loc.confidence,
-          last_seen_at: loc.lastSeenAt,
-        }),
-      )
-      .execute();
+      }),
+    )
+    .execute();
+}
+
+/** Extract the trailer id this event mutates in `trailer_state`, or null. */
+function affectedTrailerStateId(event: DomainEvent): string | null {
+  switch (event.type) {
+    case "TrailerDeparted":
+    case "TrailerArrivedAtHub":
+    case "TrailerDocked":
+    case "DriverAssignedToTrip":
+    case "DriverSwappedAtHub":
+      return event.payload.trailerId;
+    default:
+      return null;
   }
 }
 
@@ -153,7 +206,13 @@ async function applyTrailerState(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  const rows = await db.selectFrom("trailer_state").selectAll().execute();
+  const id = affectedTrailerStateId(replay.event);
+  if (id === null) return; // no-op event ⇒ no read, no write
+  const rows = await db
+    .selectFrom("trailer_state")
+    .selectAll()
+    .where("trailer_id", "=", id)
+    .execute();
   const state: TrailerStateMap = new Map(
     rows.map((r) => [
       r.trailer_id,
@@ -198,11 +257,37 @@ async function applyTrailerState(
   }
 }
 
+/**
+ * Driver ids this event mutates (in BOTH driver projections), or `[]`. A relay
+ * swap touches TWO drivers (incoming + outgoing); every other driver event one.
+ * `DriverDutyStateChanged` mutates only `driver_status` — `applyDriverAssignment`
+ * filters it out via its own reducer no-op (the `next === state` guard), so the
+ * shared key list is safe to use for both appliers.
+ */
+function affectedDriverIds(event: DomainEvent): readonly string[] {
+  switch (event.type) {
+    case "DriverRegistered":
+    case "DriverAssignedToTrip":
+    case "DriverDutyStateChanged":
+      return [event.payload.driverId];
+    case "DriverSwappedAtHub":
+      return [event.payload.incomingDriverId, event.payload.outgoingDriverId];
+    default:
+      return [];
+  }
+}
+
 async function applyDriverStatus(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  const rows = await db.selectFrom("driver_status").selectAll().execute();
+  const ids = affectedDriverIds(replay.event);
+  if (ids.length === 0) return; // non-driver event ⇒ no read, no write
+  const rows = await db
+    .selectFrom("driver_status")
+    .selectAll()
+    .where("driver_id", "in", ids)
+    .execute();
   const state: DriverStatusState = new Map(
     rows.map((r) => [
       r.driver_id,
@@ -262,7 +347,13 @@ async function applyDriverAssignment(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  const rows = await db.selectFrom("driver_assignment").selectAll().execute();
+  const ids = affectedDriverIds(replay.event);
+  if (ids.length === 0) return; // non-driver event ⇒ no read, no write
+  const rows = await db
+    .selectFrom("driver_assignment")
+    .selectAll()
+    .where("driver_id", "in", ids)
+    .execute();
   const state: DriverAssignmentState = new Map(
     rows.map((r) => [
       r.driver_id,
@@ -344,15 +435,25 @@ async function applyTagRegistry(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  const rows = await db.selectFrom("tag_registry").selectAll().execute();
+  // Only `PackageCreated` with a bound `rfidTagId` mutates the registry (one
+  // `tagId` key); every other event is a no-op. Scope the read+write to that key.
+  const event = replay.event;
+  const tagId =
+    event.type === "PackageCreated" ? event.payload.rfidTagId : undefined;
+  if (tagId === undefined) return; // no tag mapping ⇒ no read, no write
+  const rows = await db
+    .selectFrom("tag_registry")
+    .selectAll()
+    .where("tag_id", "=", tagId)
+    .execute();
   const state: TagRegistryState = new Map(
     rows.map((r) => [r.tag_id, r.package_id]),
   );
   const next = tagRegistryReducer(state, toOccurred(replay));
-  for (const [tagId, packageId] of next) {
+  for (const [t, packageId] of next) {
     await db
       .insertInto("tag_registry")
-      .values({ tag_id: tagId, package_id: packageId })
+      .values({ tag_id: t, package_id: packageId })
       .onConflict((oc) =>
         oc.column("tag_id").doUpdateSet({ package_id: packageId }),
       )
@@ -364,36 +465,50 @@ async function applyZoneEstimate(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  // The zone-estimate fold needs the tag registry to attribute tagId ->
-  // packageId. Read the persisted registry slice within the SAME handle so the
-  // resolution is consistent with everything appended in this transaction
-  // (read-your-writes); an unmapped tag resolves to undefined (T-03-13).
-  const registryRows = await db.selectFrom("tag_registry").selectAll().execute();
-  const registry = new Map(registryRows.map((r) => [r.tag_id, r.package_id]));
-
-  const rows = await db.selectFrom("zone_estimate").selectAll().execute();
-  const state: ZoneEstimateState = new Map(
-    rows.map((r) => [
-      `${r.package_id}|${r.trailer_id}`,
-      {
-        packageId: r.package_id,
-        trailerId: r.trailer_id,
-        estimatedZone: asZone(r.estimated_zone),
-        confidence: r.confidence,
-        posterior: asDistribution(r.posterior),
-        lastReliableCheckpoint: r.last_reliable_checkpoint,
-        lastObservedAt: toIso(r.last_observed_at),
-      },
-    ]),
-  );
-
-  const reduce = makeZoneEstimateReducer({
-    resolveTag: (tagId) => registry.get(tagId),
-    config: DEFAULT_FUSION_CONFIG,
-  });
-  const next = reduce(state, toOccurred(replay));
-
-  for (const est of next.values()) {
+  // The zone estimate is mutated by EXACTLY two events:
+  //   - RfidObserved  ⇒ one key `${packageId}|${trailerId}` (needs the tag's
+  //     registry mapping; an unmapped tag is a no-op, T-03-13).
+  //   - PackageDelivered ⇒ DELETE every `${packageId}|*` row for the package.
+  // Every other event is a no-op. Scope the read+write to the affected key(s)
+  // instead of loading/rewriting the whole (unbounded) zone_estimate table.
+  const event = replay.event;
+  if (event.type === "RfidObserved") {
+    // Resolve tagId -> packageId from the registry (read ONLY that tag's row).
+    const reg = await db
+      .selectFrom("tag_registry")
+      .select(["tag_id", "package_id"])
+      .where("tag_id", "=", event.payload.tagId)
+      .executeTakeFirst();
+    if (reg === undefined) return; // unmapped tag ⇒ no estimate (T-03-13)
+    const packageId = reg.package_id;
+    const key = `${packageId}|${event.payload.trailerId}`;
+    const rows = await db
+      .selectFrom("zone_estimate")
+      .selectAll()
+      .where("package_id", "=", packageId)
+      .where("trailer_id", "=", event.payload.trailerId)
+      .execute();
+    const state: ZoneEstimateState = new Map(
+      rows.map((r) => [
+        `${r.package_id}|${r.trailer_id}`,
+        {
+          packageId: r.package_id,
+          trailerId: r.trailer_id,
+          estimatedZone: asZone(r.estimated_zone),
+          confidence: r.confidence,
+          posterior: asDistribution(r.posterior),
+          lastReliableCheckpoint: r.last_reliable_checkpoint,
+          lastObservedAt: toIso(r.last_observed_at),
+        },
+      ]),
+    );
+    const reduce = makeZoneEstimateReducer({
+      resolveTag: (t) => (t === event.payload.tagId ? packageId : undefined),
+      config: DEFAULT_FUSION_CONFIG,
+    });
+    const next = reduce(state, toOccurred(replay));
+    const est = next.get(key);
+    if (est === undefined) return; // reducer no-op for this key
     await db
       .insertInto("zone_estimate")
       .values({
@@ -415,6 +530,45 @@ async function applyZoneEstimate(
         }),
       )
       .execute();
+    return;
+  }
+  if (event.type === "PackageDelivered") {
+    // OUT-04 / D-22-1: purge every zone estimate for the delivered package (it
+    // EXITED the network). Direct keyed DELETE — idempotent (absent ⇒ no-op).
+    await db
+      .deleteFrom("zone_estimate")
+      .where("package_id", "=", event.payload.packageId)
+      .execute();
+    return;
+  }
+  // All other events are no-ops for the zone estimate.
+}
+
+/**
+ * The exception id THIS event would open in `exceptions`, or null. Mirrors the
+ * `exceptionsReducer` identity EXACTLY (so the keyed load contains precisely the
+ * row the reducer reads for its idempotent "already opened?" check). The KPI
+ * counters depend ONLY on whether this id was already present, so loading just
+ * that one row + the single KPI row reproduces the full-table fold byte-for-byte.
+ */
+function affectedExceptionId(event: DomainEvent): string | null {
+  switch (event.type) {
+    case "WrongTrailerDetected":
+      return exceptionIdKey(
+        "wrong-trailer",
+        event.payload.packageId,
+        event.payload.observedTrailerId,
+        event.payload.plannedTrailerId,
+      );
+    case "MissedUnloadDetected":
+      return exceptionIdKey(
+        "missed-unload",
+        event.payload.packageId,
+        event.payload.trailerId,
+        event.payload.hubId,
+      );
+    default:
+      return null;
   }
 }
 
@@ -422,10 +576,14 @@ async function applyExceptions(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
-  // Load the persisted exceptions slice + KPI counters into the reducer's state
-  // so the fold (and its idempotency) is identical live and on rebuild.
+  const exId = affectedExceptionId(replay.event);
+  if (exId === null) return; // non-detection event ⇒ no read, no write
+  // Load ONLY the affected exception row + the single KPI counters row into the
+  // reducer state. The reducer mutates only `exId` and the counters (which depend
+  // solely on whether `exId` was already open), so this partial fold is identical
+  // to the full-table fold (and to a rebuild-from-0) — P5a / FND-04 preserved.
   const [rows, kpi] = await Promise.all([
-    db.selectFrom("exceptions").selectAll().execute(),
+    db.selectFrom("exceptions").selectAll().where("exception_id", "=", exId).execute(),
     db.selectFrom("exception_kpi").selectAll().executeTakeFirst(),
   ]);
   const open = new Map<string, OpenException>(
