@@ -31,7 +31,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **OODA-02**: Each **hub** runs a deterministic `step()` emitting domain events (dispatch/hold/consolidate decisions).
 - [ ] **OODA-03**: Agents own **binding local feasibility** (fuel, HOS/rest, dock capacity) that a coordinator **cannot override** — the agent reuses the existing HOS/fuel/consolidation logic, it is not rebuilt.
 - [x] **OODA-04**: Per-tick agent passes iterate a **sorted-by-stable-id** array, draw from a **stable-id-derived seeded substream**, and read a **frozen per-tick observation surface** (no mid-tick read-your-writes).
-- [ ] **OODA-05**: Agent state serializes into the world state so a continued run is **byte-identical** to an uninterrupted run (continuation-equivalence).
+- [x] **OODA-05**: Agent state serializes into the world state so a continued run is **byte-identical** to an uninterrupted run (continuation-equivalence).
 
 ### Coordination centers (COORD) — Phases C (rule-based) + D (optimizer-backed)
 - [ ] **COORD-01**: **One advisory coordination center per regional center** — an event-sourcing process-manager that runs **in-fold** (not as an async subscriber), with bounded per-center scope.
@@ -101,7 +101,7 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | OODA-02 | Phase 24 — OODA Step-Agents | Pending |
 | OODA-03 | Phase 24 — OODA Step-Agents | Pending |
 | OODA-04 | Phase 24 — OODA Step-Agents | Complete |
-| OODA-05 | Phase 24 — OODA Step-Agents | Pending |
+| OODA-05 | Phase 24 — OODA Step-Agents | Complete |
 | DET-03 | Phase 24 — OODA Step-Agents (decision-core guard lands here) | Complete |
 | COORD-01 | Phase 25 — Coordination Centers | Pending |
 | COORD-02 | Phase 25 — Coordination Centers | Pending |
