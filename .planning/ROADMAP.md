@@ -111,7 +111,7 @@ Plans:
 Plans:
 - [x] 24-01-PLAN.md — OODA scaffolding (per-agent substream, sorted-id, frozen observation) + pure truck Decide + new TrailerDiverted event (OODA-01, OODA-04, DET-03)
 - [x] 24-02-PLAN.md — stepAgents SimTask wiring (dispatch case, bootstrap self-reschedule, oodaAgentsEnabled flag, decision bypass) + hub Decide (OODA-01, OODA-02, OODA-04)
-- [ ] 24-03-PLAN.md — Agent-owned binding local feasibility reusing the HOS/fuel/dock logic; infeasible outcomes unreachable (OODA-03)
+- [x] 24-03-PLAN.md — Agent-owned binding local feasibility reusing the HOS/fuel/dock logic; infeasible outcomes unreachable (OODA-03)
 - [ ] 24-04-PLAN.md — Agent state in SerializedWorldState + order-shuffle/decorrelation goldens + DET-03 ESLint guard + two-part flags-off gate + new OODA-on golden (OODA-04, OODA-05, DET-03)
 **UI hint**: yes
 
@@ -166,7 +166,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
-| 24. OODA Step-Agents | 2/4 | In Progress|  |
+| 24. OODA Step-Agents | 3/4 | In Progress|  |
 | 25. Coordination Centers | 0/TBD | Not started | - |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
