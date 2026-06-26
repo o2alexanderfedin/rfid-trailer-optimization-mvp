@@ -7,12 +7,14 @@ import type { Epoch } from "./types.js";
 /**
  * NET-05 (Phase 23) — the per-center SCOPE PARTITION.
  *
- * `partitionScopeByCenter(scope, centerOf)` groups a flat {@link detectAffectedScope}
- * result by each hub's owning center, so a single center's rolling epoch contains
- * ONLY that center's hubs/trailers (its slice size is independent of the rest of
- * the continental network — the real scaling fix). It is ADDITIVE: the original
- * `detectAffectedScope` output is unchanged (legacy byte-identical), and the
- * partition's UNION reproduces the flat scope (no hub lost).
+ * `partitionScopeByCenter(scope, centerOf, events)` groups a flat
+ * {@link detectAffectedScope} result by each hub's owning center, so a single
+ * center's rolling epoch contains ONLY that center's hubs/trailers (its slice size
+ * is independent of the rest of the continental network — the real scaling fix).
+ * The `events` re-supply the trailer↔hub linkage the flat scope flattens away, so
+ * a trailer is bucketed into the center(s) of the hubs IT touched. It is ADDITIVE:
+ * the original `detectAffectedScope` output is unchanged (legacy byte-identical),
+ * and the partition's UNION reproduces the flat scope (no hub lost).
  */
 
 const EPOCH: Epoch = { epochId: "e1", nowMin: 100, freezeWindowMin: 15 };
@@ -62,7 +64,7 @@ describe("detectAffectedScope — legacy unchanged (NET-05 additive regression)"
     expect(scope.trailerIds).toEqual(["T1", "T2"]);
     // Partitioning afterward does NOT mutate the input scope.
     const before = JSON.stringify(scope);
-    partitionScopeByCenter(scope, CENTER_OF);
+    partitionScopeByCenter(scope, CENTER_OF, events);
     expect(JSON.stringify(scope)).toBe(before);
   });
 });
@@ -75,7 +77,7 @@ describe("partitionScopeByCenter — per-center slices (NET-05)", () => {
       departed("T3", "SA2", "RA"), // SA2, RA -> center RA
     ];
     const flat = detectAffectedScope(events, EPOCH);
-    const byCenter = partitionScopeByCenter(flat, CENTER_OF);
+    const byCenter = partitionScopeByCenter(flat, CENTER_OF, events);
 
     // Exactly two centers are touched: RA and RB.
     expect([...byCenter.keys()].sort()).toEqual(["RA", "RB"]);
@@ -108,7 +110,7 @@ describe("partitionScopeByCenter — per-center slices (NET-05)", () => {
       departed("T3", "SC4", "RC"),
     ];
     const flat = detectAffectedScope(events, EPOCH);
-    const byCenter = partitionScopeByCenter(flat, CENTER_OF);
+    const byCenter = partitionScopeByCenter(flat, CENTER_OF, events);
 
     const union = new Set<string>();
     for (const slice of byCenter.values()) for (const h of slice.hubIds) union.add(h);
@@ -121,7 +123,7 @@ describe("partitionScopeByCenter — per-center slices (NET-05)", () => {
       arrived("T2", "SB1"), // T2 touches center RB
     ];
     const flat = detectAffectedScope(events, EPOCH);
-    const byCenter = partitionScopeByCenter(flat, CENTER_OF);
+    const byCenter = partitionScopeByCenter(flat, CENTER_OF, events);
 
     expect(byCenter.get("RA")!.trailerIds).toContain("T1");
     expect(byCenter.get("RB")!.trailerIds).toContain("T2");
@@ -131,7 +133,8 @@ describe("partitionScopeByCenter — per-center slices (NET-05)", () => {
 
   it("scope-size invariant: a single-center event's slice is independent of other centers' hub counts", () => {
     // One event entirely within center RA.
-    const flat = detectAffectedScope([departed("T1", "RA", "SA1")], EPOCH);
+    const events: DomainEvent[] = [departed("T1", "RA", "SA1")];
+    const flat = detectAffectedScope(events, EPOCH);
 
     // Two center maps: one with a SMALL RC, one with a HUGE RC. RA's slice must be
     // identical regardless of how many hubs the OTHER centers have.
@@ -139,17 +142,18 @@ describe("partitionScopeByCenter — per-center slices (NET-05)", () => {
     const hugeNetwork = new Map(CENTER_OF);
     for (let i = 0; i < 500; i += 1) hugeNetwork.set(`HUGE${i}`, "RC");
 
-    const raSmall = partitionScopeByCenter(flat, smallNetwork).get("RA")!;
-    const raHuge = partitionScopeByCenter(flat, hugeNetwork).get("RA")!;
+    const raSmall = partitionScopeByCenter(flat, smallNetwork, events).get("RA")!;
+    const raHuge = partitionScopeByCenter(flat, hugeNetwork, events).get("RA")!;
 
     expect(raHuge.hubIds).toEqual(raSmall.hubIds);
     expect(raHuge.hubIds.length).toBe(2); // RA + SA1, independent of RC's size
-    expect([...partitionScopeByCenter(flat, hugeNetwork).keys()]).toEqual(["RA"]);
+    expect([...partitionScopeByCenter(flat, hugeNetwork, events).keys()]).toEqual(["RA"]);
   });
 
   it("a hub with no center mapping is grouped under itself (defensive fallback)", () => {
-    const flat = detectAffectedScope([arrived("T1", "ORPHAN")], EPOCH);
-    const byCenter = partitionScopeByCenter(flat, CENTER_OF);
+    const events: DomainEvent[] = [arrived("T1", "ORPHAN")];
+    const flat = detectAffectedScope(events, EPOCH);
+    const byCenter = partitionScopeByCenter(flat, CENTER_OF, events);
     expect(byCenter.get("ORPHAN")!.hubIds).toEqual(["ORPHAN"]);
   });
 });
