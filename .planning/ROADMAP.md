@@ -90,7 +90,7 @@
   5. **Determinism gate:** the generalized multi-center `buildRoutes` produces the **identical `Route[]`** for the legacy 10-hub single-center input; with `continentalTopology` absent (and `:false`) the seed-42 10k-tick golden is byte-identical to `3920accc…` (DET-01 two-part gate); the new continental model captures its own new golden on a small (12–20-hub) fixture for a fast hash
 **Plans**: 5 plans
 Plans:
-- [ ] 23-01-PLAN.md — Big-city hub dataset generator + committed checksummed us-big-cities.generated.json (HUB-01/02/03)
+- [x] 23-01-PLAN.md — Big-city hub dataset generator + committed checksummed us-big-cities.generated.json (HUB-01/02/03)
 - [ ] 23-02-PLAN.md — Key-scope applyHubInventory + per-event projection-cost test (PERF-01, P1-BLOCKING)
 - [ ] 23-03-PLAN.md — Pure multi-center topology fns (centers, nearest-assign, backbone, anti-SPOF) + GeoNames attribution (HUB-04, NET-02/03/04)
 - [ ] 23-04-PLAN.md — Multi-center buildRoutes + centerOf engine flow + per-center scope partition behind continentalTopology flag (NET-01, NET-05)
@@ -160,7 +160,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 23. Multi-Center Topology | 0/5 | Not started | - |
+| 23. Multi-Center Topology | 1/5 | In Progress|  |
 | 24. OODA Step-Agents | 0/TBD | Not started | - |
 | 25. Coordination Centers | 0/TBD | Not started | - |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
