@@ -20,6 +20,7 @@ import type {
   severitySchema,
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
+  trailerDivertedSchema,
   trailerDockedSchema,
   truckRefueledSchema,
   truckRestedSchema,
@@ -169,6 +170,17 @@ export type PlanSuperseded = z.infer<typeof planSupersededSchema>;
  */
 export type PackageDelivered = z.infer<typeof packageDeliveredSchema>;
 
+// --- Phase-24 OODA truck divert (OODA-01) -----------------------------------
+
+/**
+ * The OODA truck agent's re-route decision (OODA-01 / Phase 24) — the ONE
+ * genuinely-new truck decision with no current centralized analog. A truck
+ * diverts from its planned next hub (`fromHubId`) to an alternate (`toHubId`)
+ * with a closed `reason`. Carries `tripId` + from/to hub ids for a replayable
+ * audit trail (T-24-02); NO lon/lat, NO RNG (geometry-free).
+ */
+export type TrailerDiverted = z.infer<typeof trailerDivertedSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -206,7 +218,9 @@ export type DomainEvent =
   // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
   | PlanSuperseded
   // Phase-22 terminal delivery event (OUT-01).
-  | PackageDelivered;
+  | PackageDelivered
+  // Phase-24 OODA truck divert (OODA-01).
+  | TrailerDiverted;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

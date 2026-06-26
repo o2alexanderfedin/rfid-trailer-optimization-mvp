@@ -446,6 +446,7 @@ function affectedHubInventory(
     case "UnloadCompleted":
     case "TruckRested":
     case "TruckRefueled":
+    case "TrailerDiverted": // Phase-24 OODA-01: a re-route leaves hub inventory untouched here
       return { hubIds: [], packageIds: [] };
     default: {
       const _never: never = event;

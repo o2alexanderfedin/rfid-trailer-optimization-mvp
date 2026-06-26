@@ -199,6 +199,7 @@ function applyEvent(
     case "TruckRefueled":
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
+    case "TrailerDiverted": // Phase-24 OODA-01: a re-route carries no zone evidence
       return state;
     case "PackageDelivered": {
       // Phase-22 OUT-04 / D-22-1: hard DELETE — the package EXITED the network, so

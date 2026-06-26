@@ -219,6 +219,7 @@ export function auditTimelineReducer(
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery is not an audit-timeline entry
+    case "TrailerDiverted": // Phase-24 OODA-01: no timeline row in this plan (24-02 may surface diverts)
       return null;
     default:
       return assertNeverAudit(event);

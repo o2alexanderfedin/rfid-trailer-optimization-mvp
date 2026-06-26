@@ -122,6 +122,7 @@ export function packageLocationReducer(
     case "TruckRested":
     case "TruckRefueled":
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
+    case "TrailerDiverted": // Phase-24 OODA-01: a re-route does not relocate packages (no-op until 24-02 wires it)
       return state;
     default:
       return assertNeverEvent(event);

@@ -74,6 +74,7 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "TruckRested":
     case "TruckRefueled":
     case "PackageDelivered":
+    case "TrailerDiverted":
       // SP2 stop events (TruckRested/TruckRefueled) are SCOPE-NEUTRAL — a
       // rest/refuel never re-scopes the optimizer, so an absent-fuelConfig epoch
       // stays byte-identical to the pre-SP2 result.
@@ -81,6 +82,8 @@ function hubsOf(event: DomainEvent): readonly string[] {
       // package is LEAVING the network, so it adds NO new demand hub to the
       // affected scope. SCOPE-NEUTRAL (the destination arrival that preceded it
       // already scoped the hub if needed).
+      // Phase-24 OODA-01: TrailerDiverted is a truck re-route decision; the
+      // optimizer re-scoping on diverts is deferred to 24-02+ — SCOPE-NEUTRAL here.
       return [];
     default: {
       // Exhaustiveness guard — a new event type must be classified here.

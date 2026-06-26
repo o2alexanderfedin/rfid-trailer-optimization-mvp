@@ -249,6 +249,9 @@ function describeEvent(e: DomainEvent): string {
     // v2.0 outbound delivery (OUT-01) — terminal event.
     case "PackageDelivered":
       return e.payload.packageId;
+    // v3.0 OODA truck divert (OODA-01).
+    case "TrailerDiverted":
+      return e.payload.trailerId;
     default:
       return assertNever(e);
   }
@@ -313,7 +316,7 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
     ).toThrow();
   });
 
-  it("DomainEventType is the union of the 25 literal discriminators", () => {
+  it("DomainEventType is the union of the 26 literal discriminators", () => {
     expectTypeOf<DomainEventType>().toEqualTypeOf<
       | "HubRegistered"
       | "RouteRegistered"
@@ -345,6 +348,8 @@ describe("DomainEvent closed discriminated union (FND-01)", () => {
       | "PlanSuperseded"
       // v2.0 outbound delivery (OUT-01) — terminal event.
       | "PackageDelivered"
+      // v3.0 OODA truck divert (OODA-01).
+      | "TrailerDiverted"
     >();
   });
 
