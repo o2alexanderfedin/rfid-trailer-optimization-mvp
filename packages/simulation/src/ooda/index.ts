@@ -25,3 +25,12 @@ export { decideTruck } from "./truck.js";
 // OODA-02 hub Decide (24-02).
 export { decideHub } from "./hub.js";
 export type { HubDecision, HubHoldReason, HubObservation } from "./hub.js";
+
+// OODA-03 binding local feasibility (24-03) — pure adapters reusing the shared
+// HOS engine + fuel-threshold + dock logic.
+export { hubDockFeasibility, truckLegFeasibility } from "./feasibility.js";
+export type {
+  FuelFeasibilityConfig,
+  HubDockFeasibility,
+  TruckLegFeasibility,
+} from "./feasibility.js";
