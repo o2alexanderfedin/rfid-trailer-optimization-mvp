@@ -69,7 +69,7 @@
 >
 > **Keystone constraint — determinism (every phase):** OODA decision logic *changes the event stream*, so v3.0 is a **NEW model with NEW goldens**. Every feature is flag-gated. For **each** flag, the **two-part flags-off gate** holds: `flag:false === absent` AND `absent ⇒ seed-42 10k-tick golden 3920accc…` (byte-identical to v2.0). Model-changing phases capture their **own new golden** (continental → ooda → coordinator). New RNG substreams are constructed **lazily** (only when the flag is on), use salts pairwise-distinct from the existing 8 (asserted by the salt-collision test), and derive per-agent streams from the **stable agent id** (never spawn index). The decision core stays sync + pure: no `Date.now()` / `Math.random()` / `async-queue`; all hashed payloads go through `canonicalize`.
 
-- [ ] **Phase 23: Multi-Center Topology** — big-city hub generation (1–3/state, ~80–130) + parameterized regional centers + near-full-mesh backbone + per-center scope partition + **`applyHubInventory` key-scoping (P1-BLOCKING)**; FOUNDATION for everything (HUB-01..04, NET-01..05, PERF-01, DET-01)
+- [x] **Phase 23: Multi-Center Topology** — big-city hub generation (1–3/state, ~80–130) + parameterized regional centers + near-full-mesh backbone + per-center scope partition + **`applyHubInventory` key-scoping (P1-BLOCKING)**; FOUNDATION for everything (HUB-01..04, NET-01..05, PERF-01, DET-01) (completed 2026-06-26)
 - [ ] **Phase 24: OODA Step-Agents** — deterministic per-truck + per-hub `step()` (Observe→Orient→Decide→Act) emitting domain events, sorted-by-stable-id passes, per-agent seeded substreams, frozen observation surface, continuation-equivalent agent state; the decentralized decision core (OODA-01..05, DET-03)
 - [ ] **Phase 25: Coordination Centers** — one advisory process-manager per regional center emitting `ActionSuggested`; agents accept/reject-with-reason on local feasibility; the five anti-oscillation/anti-deadlock guards + scope-neutral suggestion events; the headline "smart and honest" differentiator (COORD-01..05)
 - [ ] **Phase 26: Coordinator ↔ Optimizer** — coordinators invoke the proven optimizer as a scoped, pure `runEpoch` suggestion engine called synchronously in-fold; global `RollingLoop` disabled under the flag so the two never double-plan (COORD-06)
@@ -94,7 +94,7 @@ Plans:
 - [x] 23-02-PLAN.md — Key-scope applyHubInventory + per-event projection-cost test (PERF-01, P1-BLOCKING)
 - [x] 23-03-PLAN.md — Pure multi-center topology fns (centers, nearest-assign, backbone, anti-SPOF) + GeoNames attribution (HUB-04, NET-02/03/04)
 - [x] 23-04-PLAN.md — Multi-center buildRoutes + centerOf engine flow + per-center scope partition behind continentalTopology flag (NET-01, NET-05)
-- [ ] 23-05-PLAN.md — Empirical center-count decision + flags-off two-part gate + new continental golden + drift guard (HUB-01, NET-02, DET-01)
+- [x] 23-05-PLAN.md — Empirical center-count decision + flags-off two-part gate + new continental golden + drift guard (HUB-01, NET-02, DET-01)
 **UI hint**: yes
 
 ### Phase 24: OODA Step-Agents
@@ -160,7 +160,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 23. Multi-Center Topology | 4/5 | In Progress|  |
+| 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
 | 24. OODA Step-Agents | 0/TBD | Not started | - |
 | 25. Coordination Centers | 0/TBD | Not started | - |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
