@@ -789,12 +789,21 @@ export function attachSnapshotSocket(
         fetchAndUpdateBaseline()
           .then((payload) => {
             seq += 1;
+            // VIZ-RESUME (v2.1): stamp the snapshot with the CURRENT authoritative
+            // sim clock (`getLastSimMs()` — the simMs of the most recent broadcast),
+            // NOT 0. The trailer keyframes carry absolute-epoch departMs/etaMs, so a
+            // 0 anchor made the client compute fraction (0 − departMs)/span ⇒ clamp
+            // to 0 ⇒ EVERY in-flight trailer re-rendered at its leg origin and
+            // re-animated the whole leg from t=0 (the "east→west restart" on every
+            // refresh/resync). Anchoring at the real clock places each trailer at its
+            // TRUE current progress immediately.
+            const simMs = speedController.getLastSimMs();
             const envelope: WsEnvelope = {
               v: 1,
               type: "snapshot",
               seq,
-              simMs: 0, // resync resets the client's tween clock to the current state
-              simDay: deriveSimDay(0), // 0 — re-anchored at the connect epoch
+              simMs, // re-anchor the client's tween clock at the live sim time
+              simDay: deriveSimDay(simMs),
               speed: currentSpeed(),
               payload,
             };
@@ -812,12 +821,22 @@ export function attachSnapshotSocket(
     fetchAndUpdateBaseline()
       .then((payload) => {
         seq += 1;
+        // VIZ-RESUME (v2.1): anchor the initial-connect snapshot at the CURRENT
+        // authoritative sim clock (`getLastSimMs()` — the simMs of the most recent
+        // broadcast), NOT 0. Trailer keyframes carry absolute-epoch departMs/etaMs;
+        // a 0 anchor made the client place every in-flight trailer at its leg origin
+        // and re-animate the whole leg from t=0 on every page refresh. With the real
+        // clock the client computes the correct fraction = (simNow − departMs)/span
+        // and each trailer resumes at its TRUE current position. Before the first
+        // broadcast `getLastSimMs()` is 0 (no ticks yet) — the legacy behaviour — so
+        // a connect at sim-start is unchanged.
+        const simMs = speedController.getLastSimMs();
         const envelope: WsEnvelope = {
           v: 1,
           type: "snapshot",
           seq,
-          simMs: 0, // initial snapshot: sim clock starts at 0
-          simDay: deriveSimDay(0), // 0 — the first day of the sim
+          simMs, // anchor the client's tween clock at the live sim time
+          simDay: deriveSimDay(simMs),
           speed: currentSpeed(),
           payload,
         };
