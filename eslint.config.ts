@@ -86,6 +86,75 @@ export default tseslint.config(
     },
   },
   {
+    // Phase-24 DET-03 — THE OODA DECISION-CORE STATIC GUARD.
+    //
+    // The decentralized OODA decision core (`packages/simulation/src/ooda/**`) MUST
+    // be a pure, synchronous, seeded leaf: NO wall-clock (`Date.now`), NO ambient
+    // randomness (`Math.random`), NO async-queue plumbing, and NO database access
+    // (`kysely`). Any of these silently entering the core breaks byte-identical
+    // replay (the determinism keystone). This rule FAILS the lint on a violation —
+    // the CI gate that makes T-24-11 (tampering) structurally caught, not merely
+    // discouraged. Test siblings (`*.test.ts`) are excluded: they legitimately
+    // import seed constants from the engine and assert on the core's purity.
+    //
+    // (This is the concrete realization of the `no-restricted-imports` intent noted
+    // for the deterministic core at the top of this file; the async-queue plumbing
+    // ban widens engine-side in Phase 27.)
+    files: ["packages/simulation/src/ooda/**/*.ts"],
+    ignores: ["packages/simulation/src/ooda/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "kysely",
+              message:
+                "DET-03: the OODA decision core must not touch the database. Read frozen observations only.",
+            },
+            {
+              name: "@alexanderfedin/async-queue",
+              message:
+                "DET-03: async-queue is runtime plumbing only — the OODA decision core stays synchronous + pure (Pitfall 5).",
+            },
+          ],
+          patterns: [
+            {
+              group: ["*async-queue*"],
+              message:
+                "DET-03: async-queue is runtime plumbing only — the OODA decision core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              group: ["kysely/*", "*/kysely", "pg", "@mm/persistence", "*/persistence"],
+              message:
+                "DET-03: the OODA decision core must not touch the database/driver layer.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.object.name='Date'][callee.property.name='now']",
+          message:
+            "DET-03: no Date.now() in the OODA decision core — read the frozen virtual-clock observation (Pitfall 6).",
+        },
+        {
+          selector: "NewExpression[callee.name='Date'][arguments.length=0]",
+          message:
+            "DET-03: no wall-clock `new Date()` in the OODA decision core — use the frozen virtual-clock observation (Pitfall 6).",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          message:
+            "DET-03: no Math.random() in the OODA decision core — draw from the seeded per-agent substream (deriveAgentRng) (Pitfall 6).",
+        },
+      ],
+    },
+  },
+  {
     // Vitest Browser Mode tests (`*.browser.test.tsx`) execute in a real browser
     // type universe — their `vitest-browser-react` `render()` result and the
     // `@vitest/browser` `expect.element`/locator augmentations are not part of
