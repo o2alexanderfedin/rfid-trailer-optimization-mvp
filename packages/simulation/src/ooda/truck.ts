@@ -1,4 +1,10 @@
+import type { HosConfig } from "@mm/domain";
+
 import type { Rng } from "../rng.js";
+import {
+  type FuelFeasibilityConfig,
+  truckLegFeasibility,
+} from "./feasibility.js";
 import type { AgentObservation, DivertReason, TruckDecision } from "./observe.js";
 
 /**
@@ -59,30 +65,91 @@ const DIVERT_QUEUE_TOLERANCE = 50;
 const DIVERT_ALTERNATES: readonly string[] = ["DFW", "ATL", "DEN", "ORD", "MEM"];
 
 /**
+ * Build the `refuel` decision from the frozen observation (the deterministic tank
+ * model mirrors `DEFAULT_FUEL_CONFIG`). Shared by both the binding-gate path and
+ * the standalone fallback (DRY) so the refuel outcome is identical either way.
+ */
+function refuelDecision(obs: AgentObservation): TruckDecision {
+  const gallons = Math.round(
+    Math.min(obs.odometerMiles / MILES_PER_GALLON, TANK_CAPACITY_GALLONS),
+  );
+  return {
+    kind: "refuel",
+    gallons,
+    odometerMiles: obs.odometerMiles,
+    durationMin: REFUEL_TIME_MIN,
+  };
+}
+
+/**
+ * The OODA-03 BINDING-FEASIBILITY context (optional). When supplied, `decideTruck`
+ * gates every outcome through {@link truckLegFeasibility}, which DELEGATES to the
+ * shared `@mm/domain` HOS engine + the engine fuel-threshold rule — the SAME logic
+ * the simulator/optimizer use. The verdict short-circuits to rest/refuel BEFORE any
+ * proceed/divert branch, so an infeasible action is structurally UNREACHABLE (the
+ * contract a P25 coordinator cannot override). When omitted, the Decide falls back
+ * to the observation-derived thresholds (the standalone 24-01 behavior).
+ */
+export interface TruckFeasibilityContext {
+  readonly hosConfig: HosConfig;
+  readonly fuelConfig: FuelFeasibilityConfig;
+  /** The observation's virtual-clock epoch-MINUTE (never `Date.now()` — DET-03). */
+  readonly now: number;
+}
+
+/**
  * The pure truck decision. See the priority ladder above. The single `rng` draw
  * (the divert tie-break) is the only stochastic element; every other branch is a
  * deterministic function of the frozen observation.
+ *
+ * When `feasibility` is supplied (the engine path), the FIRST ladder step consults
+ * the shared HOS/fuel engine via {@link truckLegFeasibility} and BINDS to rest /
+ * refuel before any proceed/divert can be constructed — so no caller (a future
+ * coordinator) can force an infeasible action through the agent (OODA-03 / T-24-08).
  */
-export function decideTruck(obs: AgentObservation, rng: Rng): TruckDecision {
-  // (1) REST — HOS is the hard, binding legal constraint (highest priority).
-  if (obs.remainingLegalDriveMinutes <= 0) {
-    return { kind: "rest", reason: "rest-10h", durationMin: REST_10H_MIN };
-  }
-  if (obs.minutesSinceLastBreak >= BREAK_BOUNDARY_MIN) {
-    return { kind: "rest", reason: "break-30min", durationMin: BREAK_30_MIN };
-  }
-
-  // (2) REFUEL — second binding constraint (a truck out of fuel cannot proceed).
-  if (obs.odometerMiles >= REFUEL_THRESHOLD_MILES) {
-    const gallons = Math.round(
-      Math.min(obs.odometerMiles / MILES_PER_GALLON, TANK_CAPACITY_GALLONS),
+export function decideTruck(
+  obs: AgentObservation,
+  rng: Rng,
+  feasibility?: TruckFeasibilityContext,
+): TruckDecision {
+  // (0) BINDING FEASIBILITY GATE (OODA-03) — the un-overridable first step. The
+  // verdict DELEGATES to the shared domain HOS engine (`mayDriveNow`/`applyDrivingLeg`)
+  // and the engine fuel-threshold; if the truck may NOT legally drive it BINDS to
+  // rest (or refuel when that is the binding shortfall), so an infeasible
+  // proceed/divert is never even reached. This is what makes infeasibility
+  // structurally UNREACHABLE rather than merely discouraged.
+  if (feasibility !== undefined) {
+    const verdict = truckLegFeasibility(
+      obs,
+      feasibility.hosConfig,
+      feasibility.fuelConfig,
+      feasibility.now,
     );
-    return {
-      kind: "refuel",
-      gallons,
-      odometerMiles: obs.odometerMiles,
-      durationMin: REFUEL_TIME_MIN,
-    };
+    if (verdict.mustRest) {
+      // HOS is the hard legal constraint — it OUTRANKS refuel (a rest also
+      // refuels-capable downtime). Read the binding rest off the engine's verdict.
+      return verdict.restReason === "break-30min"
+        ? { kind: "rest", reason: "break-30min", durationMin: BREAK_30_MIN }
+        : { kind: "rest", reason: "rest-10h", durationMin: REST_10H_MIN };
+    }
+    if (verdict.mustRefuel) {
+      return refuelDecision(obs);
+    }
+    // Legal to drive AND fueled per the SHARED engine — fall through to the
+    // (now-feasible) divert/hold/proceed ladder. No proceed/divert can be infeasible.
+  } else {
+    // Standalone (24-01) fallback: derive the same outcomes from the observation's
+    // pre-computed integer fields (the engine pre-rounds them from the SAME HOS/fuel
+    // logic). Kept so the pure leaf is testable without a config.
+    if (obs.remainingLegalDriveMinutes <= 0) {
+      return { kind: "rest", reason: "rest-10h", durationMin: REST_10H_MIN };
+    }
+    if (obs.minutesSinceLastBreak >= BREAK_BOUNDARY_MIN) {
+      return { kind: "rest", reason: "break-30min", durationMin: BREAK_30_MIN };
+    }
+    if (obs.odometerMiles >= REFUEL_THRESHOLD_MILES) {
+      return refuelDecision(obs);
+    }
   }
 
   // No trip to run ⇒ hold (nothing to proceed/divert toward).

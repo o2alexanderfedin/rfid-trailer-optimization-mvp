@@ -1657,7 +1657,24 @@ export function runToHorizon(
         // Lazy per-agent substream — constructed ONLY here, on the on path, for an
         // agent that actually decides (flag-off allocates nothing).
         const rng = deriveAgentRng(seed, agent.stableId);
-        const decision = decideTruck(obs, rng);
+        // BINDING LOCAL FEASIBILITY (OODA-03): hand the SHARED HOS limits + fuel
+        // threshold + the virtual-clock epoch-minute to the Decide so its first
+        // ladder step delegates to the domain HOS engine (`mayDriveNow`/
+        // `applyDrivingLeg`) — an infeasible proceed/divert is structurally
+        // unreachable. `now` is the frozen observation's virtual clock (DET-03:
+        // never `Date.now()`).
+        const decision = decideTruck(obs, rng, {
+          hosConfig: hosLimits,
+          // When fuel is OFF the refuel rule must never fire (no fuel events in a
+          // fuel-off run) — pass an unreachable threshold so `mustRefuel` stays
+          // false; when ON, pass the SAME `refuelThresholdMiles` the engine uses.
+          fuelConfig: {
+            refuelThresholdMiles: fuelOn
+              ? fuelConfig.refuelThresholdMiles
+              : Number.MAX_SAFE_INTEGER,
+          },
+          now: isoToEpochMinutes(clock.nowIso()),
+        });
         // ACT: route each outcome through the EXISTING emit helpers (+ the new
         // TrailerDiverted). proceed/hold are no-ops (no event).
         switch (decision.kind) {

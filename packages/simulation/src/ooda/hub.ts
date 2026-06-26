@@ -1,5 +1,6 @@
 import type { Rng } from "../rng.js";
 import type { AgentKind } from "./agent.js";
+import { hubDockFeasibility } from "./feasibility.js";
 
 /**
  * OODA-02 — the PURE hub Observe→Decide→Act function + its frozen observation and
@@ -23,6 +24,11 @@ import type { AgentKind } from "./agent.js";
  *
  * PRIORITY LADDER (documented, deterministic):
  *
+ *   0. BINDING DOCK FEASIBILITY (OODA-03) — the un-overridable first step. When no
+ *      dock door is free, {@link hubDockFeasibility} forbids BOTH dispatch and
+ *      consolidate, so the hub BINDS to `hold` before either branch can be
+ *      constructed. An infeasible dispatch (no dock) is structurally UNREACHABLE —
+ *      the contract a P25 coordinator cannot override (T-24-08).
  *   1. DISPATCH — outbound freight is queued AND a trailer is filled enough to run
  *      AND a dock door is free. A loaded trailer with a free door should move
  *      freight outbound; this is the highest-value action.
@@ -98,11 +104,25 @@ export function decideHub(obs: HubObservation, rng: Rng): HubDecision {
   // `void rng` documents the intentional no-draw (an unused-but-contractual arg).
   void rng;
 
-  // (1) DISPATCH — a filled trailer + a free dock + outbound demand: move freight.
+  // (0) BINDING DOCK FEASIBILITY (OODA-03) — the un-overridable first step. The
+  // verdict REUSES the engine's dock-availability rule (the frozen
+  // `dockDoorsAvailable`); when no door is free BOTH dispatch and consolidate are
+  // forbidden, so the hub BINDS to `hold` here and NO infeasible
+  // dispatch/consolidate branch below is ever reached.
+  const dock = hubDockFeasibility(obs);
+  if (!dock.canDispatch && !dock.canConsolidate) {
+    // No free door: a dock-bound wait if there is outbound demand, else idle.
+    return obs.outboundQueueDepth > 0
+      ? { kind: "hold", reason: "dock-busy" }
+      : { kind: "hold", reason: "nothing-to-do" };
+  }
+
+  // (1) DISPATCH — a filled trailer + outbound demand (dock feasibility already
+  // proven above). A loaded trailer with a free door moves freight outbound.
   if (
+    dock.canDispatch &&
     obs.outboundQueueDepth > 0 &&
-    obs.trailerFillCount >= DISPATCH_FILL_THRESHOLD &&
-    obs.dockDoorsAvailable > 0
+    obs.trailerFillCount >= DISPATCH_FILL_THRESHOLD
   ) {
     // The dispatching trailer is identified by the hub's own stable id namespace
     // (the engine resolves the concrete staged trailer; the pure leaf names the
@@ -110,15 +130,12 @@ export function decideHub(obs: HubObservation, rng: Rng): HubDecision {
     return { kind: "dispatch", trailerId: `${obs.stableId}-OUT` };
   }
 
-  // (2) CONSOLIDATE — staged spoke-origin freight awaiting a consolidation leg.
-  if (obs.pendingConsolidationCount > 0) {
+  // (2) CONSOLIDATE — staged spoke-origin freight awaiting a consolidation leg
+  // (dock feasibility already proven above).
+  if (dock.canConsolidate && obs.pendingConsolidationCount > 0) {
     return { kind: "consolidate", spokeHubId: obs.stableId, packageIds: [] };
   }
 
-  // (3) HOLD — the no-op default. Distinguish a dock-bound wait (outbound demand
-  // but every door busy) from a genuinely idle hub, so the reason is auditable.
-  if (obs.outboundQueueDepth > 0 && obs.dockDoorsAvailable === 0) {
-    return { kind: "hold", reason: "dock-busy" };
-  }
+  // (3) HOLD — the no-op default (dock free but nothing to dispatch/consolidate).
   return { kind: "hold", reason: "nothing-to-do" };
 }
