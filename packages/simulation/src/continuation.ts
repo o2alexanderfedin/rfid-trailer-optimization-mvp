@@ -30,6 +30,13 @@ export type SimTask =
   // as createPackageBatch). The pending task's absolute `fireTick` is captured by
   // SerializedScheduled, so a resume between two inductions never loses/reorders it.
   | { readonly kind: "inductPackage"; readonly tick: number }
+  // Phase-24 OODA-01/02: the per-tick (per-OODA_INTERVAL_TICKS) agent step pass —
+  // a self-rescheduling task with the SAME tick-based shape as `inductPackage`.
+  // Seeded ONLY when `oodaAgentsEnabled` (the off path schedules none, so the
+  // golden is byte-identical); on every fire it re-enqueues its `+OODA_INTERVAL`
+  // successor. The absolute `fireTick` is captured by SerializedScheduled, so a
+  // resume between two OODA passes never loses/reorders it (continuation-safe).
+  | { readonly kind: "stepAgents"; readonly tick: number }
   | { readonly kind: "departTrailer"; readonly trailerId: string; readonly spokeHubId: string; readonly departTick: number }
   | {
       readonly kind: "arriveTrailer";

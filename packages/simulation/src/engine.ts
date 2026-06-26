@@ -367,6 +367,30 @@ export interface SimulateOptions {
    * `DEFAULT_LEG_CAP_KM`.
    */
   readonly legCapKm?: number;
+
+  /**
+   * OODA-01/02 (Phase 24): OPT-IN decentralized agent decision core. **DEFAULT
+   * FALSE — the determinism keystone.** When absent or `false`, the engine
+   * schedules NO `stepAgents` task, constructs ZERO per-agent OODA substreams,
+   * and runs the EXISTING centralized decision code UNCHANGED ⇒ the seed-42 10k
+   * golden is BYTE-IDENTICAL to `3920accc…` (the two-part flags-off gate, like
+   * `outboundDeliveryEnabled`/`continentalTopology`). It is checked with a STRICT
+   * `=== true` comparison (never `??`/`||`, which would make an absent flag
+   * accidentally truthy and perturb the golden).
+   *
+   * When `true`, a self-rescheduling `stepAgents` EventQueue task fires at a fixed
+   * `OODA_INTERVAL_TICKS` cadence (mirroring `inductPackage`). Each pass builds a
+   * FROZEN observation per agent at pass entry, iterates agents in
+   * sorted-by-stable-id order, applies an "anything-to-decide?" guard, and routes
+   * each decision's Act through the EXISTING `emit` (plus the new `TrailerDiverted`
+   * for the divert choice) via the pure 24-01 `decideTruck` / 24-02 `decideHub`.
+   * Under the flag the agents OWN the dispatch/hold/refuel/rest/consolidate
+   * decisions and the engine's centralized code for those points is BYPASSED (no
+   * double-decision). Per-agent OODA substreams are constructed LAZILY (only on
+   * the on path). A flag-on run is REPRODUCIBLE per seed (same seed twice ⇒
+   * byte-identical); capturing the full OODA-on golden is plan 24-04.
+   */
+  readonly oodaAgentsEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -394,6 +418,21 @@ const SIZE_CLASSES: readonly SizeClass[] = ["small", "medium", "large"];
 const INDUCTION_INTERVAL_TICKS = 30;
 /** First induction fires at tick 1 (deterministic, fixed offset; off by default). */
 const INDUCTION_START_TICK = 1;
+
+// --- Phase-24 OODA step-agents (OODA-01/02) ---------------------------------
+
+/**
+ * OODA-01/02: ticks between successive `stepAgents` passes — a fixed modular
+ * constant like {@link PACKAGE_INTERVAL_TICKS}/{@link INDUCTION_INTERVAL_TICKS}
+ * (pure tick arithmetic, no wall-clock). Chosen 5 (Claude's discretion per
+ * ARCHITECTURE §3: "1 or 5"): a per-5-tick cadence is cheaper than every tick yet
+ * fine-grained enough for the demo. The cadence is PART of the OODA model, so it is
+ * baked into the new OODA-on golden (captured in 24-04). OFF by default ⇒ no pass
+ * is ever scheduled, so this constant never affects the flags-off golden.
+ */
+const OODA_INTERVAL_TICKS = 5;
+/** First `stepAgents` pass fires at tick 1 (deterministic, fixed offset; off by default). */
+const OODA_START_TICK = 1;
 /** SLA classes in a fixed order (the induction RNG picks an index). */
 const SLA_CLASSES: readonly SlaClass[] = [
   "express",
@@ -606,6 +645,15 @@ export function runToHorizon(
   // so all existing goldens are byte-identical (the determinism keystone). STRICT
   // `=== true` — never `??`/`||` (an absent flag must stay falsy).
   const outboundOn = opts.outboundDeliveryEnabled === true;
+
+  // Phase-24 OODA-01/02: the decentralized agent decision core is OPT-IN and
+  // DEFAULT OFF. Absent/false ⇒ the engine schedules NO `stepAgents` task,
+  // constructs ZERO per-agent OODA substreams, and runs the existing centralized
+  // decision code UNCHANGED, so all existing goldens are byte-identical (the
+  // determinism keystone). STRICT `=== true` — never `??`/`||` (an absent flag
+  // must stay falsy). When ON, agents OWN dispatch/hold/refuel/rest/consolidate and
+  // the centralized code for those points is bypassed (no double-decision).
+  const oodaAgentsEnabled = opts.oodaAgentsEnabled === true;
 
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
@@ -1370,6 +1418,34 @@ export function runToHorizon(
     // (captured into the continuation) or DROPS it past the horizon (finite path).
     const nextTick = tick + INDUCTION_INTERVAL_TICKS;
     scheduleNext(nextTick, { kind: "inductPackage", tick: nextTick });
+  };
+
+  /**
+   * Phase-24 OODA-01/02: the per-tick agent step pass — the decentralized decision
+   * core. A self-rescheduling EventQueue task (like {@link inductPackage}) so the
+   * order stays single-threaded + deterministic. Guards on `oodaAgentsEnabled` so
+   * the off path NEVER runs (the determinism keystone): zero passes, zero events,
+   * zero per-agent substream construction — the flags-off golden is byte-identical.
+   *
+   * On the ON path it builds a FROZEN observation per agent at pass ENTRY, iterates
+   * agents in sorted-by-stable-id order (the order-independence witness), applies
+   * the "anything-to-decide?" guard, runs the pure 24-01 `decideTruck` / 24-02
+   * `decideHub` over each frozen observation, and routes each decision's Act through
+   * the EXISTING emit helpers (plus the new `TrailerDiverted`). The pass body lands
+   * in Task 3; this skeleton is the empty-but-self-rescheduling foundation so the
+   * OFF path is provably inert (byte-identical) before any agent logic is wired.
+   */
+  const stepAgents = (tick: number): void => {
+    if (!oodaAgentsEnabled) return; // never runs when off (the determinism keystone)
+
+    // (Task 3) — frozen observation array at pass entry, sorted-by-stable-id
+    // iteration, the anything-to-decide guard, decideTruck/decideHub, Act via emit.
+
+    // Self-reschedule the NEXT pass at an ABSOLUTE tick (same discipline as
+    // inductPackage). `scheduleNext` RETAINS the task on the resumable path
+    // (captured into the continuation) or DROPS it past the horizon (finite path).
+    const nextTick = tick + OODA_INTERVAL_TICKS;
+    scheduleNext(nextTick, { kind: "stepAgents", tick: nextTick });
   };
 
   /**
@@ -2147,6 +2223,11 @@ export function runToHorizon(
       case "inductPackage":
         inductPackage(task.tick);
         return;
+      case "stepAgents":
+        // Phase-24 OODA-01/02: the decentralized agent step pass. Self-reschedules
+        // its successor (off path returns immediately, scheduling nothing).
+        stepAgents(task.tick);
+        return;
       case "departTrailer":
         departTrailer(task.trailerId, hubById.get(task.spokeHubId)!, task.departTick);
         return;
@@ -2213,6 +2294,15 @@ export function runToHorizon(
       schedule(INDUCTION_START_TICK, {
         kind: "inductPackage",
         tick: INDUCTION_START_TICK,
+      });
+    }
+    // Phase-24 OODA-01/02: seed the first agent step pass (off by default). On a
+    // RESUME the pending stepAgents task is restored from the captured queue, so
+    // this is skipped — the self-rescheduling chain continues uninterrupted.
+    if (oodaAgentsEnabled) {
+      schedule(OODA_START_TICK, {
+        kind: "stepAgents",
+        tick: OODA_START_TICK,
       });
     }
   }
