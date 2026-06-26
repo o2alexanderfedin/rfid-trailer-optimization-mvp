@@ -79,4 +79,42 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 
 ## Traceability
 
-*(Filled by the roadmap — REQ-ID → Phase mapping.)*
+REQ-ID → Phase mapping (every v3.0 requirement maps to exactly one phase; 31/31 mapped, no orphans).
+Roadmap phase labels A–E map to integer phases: **A → Phase 23**, **B → Phase 24**, **C → Phase 25**,
+**D → Phase 26**, **E → Phase 27**, plus **Phase 28 (Continental Hardening)** as the consolidated
+determinism/golden home. Every phase additionally re-asserts the flags-off `3920accc…` gate (DET-01).
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| HUB-01 | Phase 23 — Multi-Center Topology | Pending |
+| HUB-02 | Phase 23 — Multi-Center Topology | Pending |
+| HUB-03 | Phase 23 — Multi-Center Topology | Pending |
+| HUB-04 | Phase 23 — Multi-Center Topology | Pending |
+| NET-01 | Phase 23 — Multi-Center Topology | Pending |
+| NET-02 | Phase 23 — Multi-Center Topology | Pending |
+| NET-03 | Phase 23 — Multi-Center Topology | Pending |
+| NET-04 | Phase 23 — Multi-Center Topology | Pending |
+| NET-05 | Phase 23 — Multi-Center Topology | Pending |
+| PERF-01 | Phase 23 — Multi-Center Topology | Pending |
+| DET-01 | Phase 23 — Multi-Center Topology (re-asserted every phase) | Pending |
+| OODA-01 | Phase 24 — OODA Step-Agents | Pending |
+| OODA-02 | Phase 24 — OODA Step-Agents | Pending |
+| OODA-03 | Phase 24 — OODA Step-Agents | Pending |
+| OODA-04 | Phase 24 — OODA Step-Agents | Pending |
+| OODA-05 | Phase 24 — OODA Step-Agents | Pending |
+| DET-03 | Phase 24 — OODA Step-Agents (decision-core guard lands here) | Pending |
+| COORD-01 | Phase 25 — Coordination Centers | Pending |
+| COORD-02 | Phase 25 — Coordination Centers | Pending |
+| COORD-03 | Phase 25 — Coordination Centers | Pending |
+| COORD-04 | Phase 25 — Coordination Centers | Pending |
+| COORD-05 | Phase 25 — Coordination Centers | Pending |
+| COORD-06 | Phase 26 — Coordinator ↔ Optimizer | Pending |
+| PERF-02 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| PERF-03 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| PERF-04 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| VIZ-15 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| VIZ-16 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| VIZ-17 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| DET-02 | Phase 28 — Continental Hardening (consolidated new-golden/order-shuffle/continuation audit) | Pending |
+
+**Coverage: 31/31 requirements mapped to exactly one phase. No orphans, no duplicates.**
