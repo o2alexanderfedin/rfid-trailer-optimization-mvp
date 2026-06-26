@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { simulate } from "../src/engine.js";
+import { simulate, runToHorizon } from "../src/engine.js";
+import type { SimContinuation } from "../src/continuation.js";
 
 /**
  * Phase 23 (NET-01) — the `continentalTopology` engine flow.
@@ -34,14 +35,17 @@ describe("continentalTopology flags-off gate (NET-01 keystone)", () => {
 });
 
 describe("continentalTopology ON — multi-center freight flow (NET-01)", () => {
-  // Induction routes spoke->spoke (via the center backbone), so it is the demand
-  // path that produces cross-center freight. A modest horizon exercises a full
-  // spoke -> center -> backbone -> center -> spoke traversal.
+  // Induction routes spoke->spoke; consolidation is the spoke->center return path
+  // that, under continental topology, hops the backbone when origin + dest centers
+  // differ. Together they exercise the full spoke -> origin center -> backbone ->
+  // dest center -> dest spoke traversal. A long horizon lets at least one
+  // cross-center package complete its multi-leg journey.
   const ON = {
     seed: 7,
-    durationTicks: 4000,
+    durationTicks: 8000,
     continentalTopology: true,
     inductionEnabled: true,
+    consolidationEnabled: true,
   } as const;
 
   const stream = simulate(ON);
@@ -101,5 +105,32 @@ describe("continentalTopology ON — multi-center freight flow (NET-01)", () => 
     const a = simulate(ON);
     const b = simulate({ ...ON });
     expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+
+  it("is continuation-equivalent — chunked === all-at-once (the new centerHubId tasks + backbone hop survive a resume)", () => {
+    const horizon = ON.durationTicks;
+    const allAtOnce = simulate(ON);
+
+    // Drive the SAME run in fixed chunks via the continuation API. The new
+    // arriveOverCarried/arriveConsolidation `centerHubId` task fields + the
+    // cross-center backbone-hop tasks must serialize + resume byte-identically.
+    const opts = {
+      continentalTopology: ON.continentalTopology,
+      inductionEnabled: ON.inductionEnabled,
+      consolidationEnabled: ON.consolidationEnabled,
+    } as const;
+    const chunk = 500;
+    const collected: ReturnType<typeof simulate> = [];
+    let continuation: SimContinuation | undefined;
+    for (let target = chunk; ; target += chunk) {
+      const h = Math.min(target, horizon);
+      const start = continuation ?? { seed: ON.seed };
+      const { events, continuation: next } = runToHorizon(start, h, opts);
+      collected.push(...events);
+      continuation = next;
+      if (h >= horizon) break;
+    }
+    expect(collected.length).toBe(allAtOnce.length);
+    expect(JSON.stringify(collected)).toBe(JSON.stringify(allAtOnce));
   });
 });
