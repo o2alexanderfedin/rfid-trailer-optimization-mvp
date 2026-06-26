@@ -177,7 +177,20 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     const map = new OlMap({
       target: container,
       layers: [
-        new TileLayer({ source: new OSM({ crossOrigin: "anonymous" }) }),
+        new TileLayer({
+          source: new OSM({
+            crossOrigin: "anonymous",
+            // HUB-04: the hub set is derived from the GeoNames city dataset
+            // (via `all-the-cities`), which is CC BY 4.0 and requires visible
+            // attribution. OL APPENDS these to its default "© OpenStreetMap
+            // contributors" credit, so both render in the on-map attribution
+            // control alongside the basemap credit.
+            attributions: [
+              'City data © <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">GeoNames</a>, ' +
+                '<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>',
+            ],
+          }),
+        }),
         trailer.layer,
         stop.layer,
         induction.layer,
