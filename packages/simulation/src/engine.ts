@@ -769,6 +769,20 @@ export function runToHorizon(
     string,
     { readonly tripId: string; readonly fromHubId: string; readonly toHubId: string }
   >();
+  // OODA-05: restore the captured active-trip context on resume so a chunked OODA-on
+  // run picks up each in-flight leg exactly where the previous chunk left it (the
+  // continuation-equivalence keystone). Empty on a fresh run and on the off path
+  // (the captured array is `[]` whenever `oodaAgentsEnabled` is off), so this adds
+  // ZERO behaviour to the flag-off stream.
+  if (resuming) {
+    for (const [trailerId, trip] of start.world.activeTripByTrailer) {
+      activeTripByTrailer.set(trailerId, {
+        tripId: trip.tripId,
+        fromHubId: trip.fromHubId,
+        toHubId: trip.toHubId,
+      });
+    }
+  }
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
 
   // NET-01 (Phase 23): resolve the network topology. The flag is read with a
@@ -946,7 +960,13 @@ export function runToHorizon(
         });
         // SP2: seed the per-trailer odometer at 0 (only when fuel is on, so an
         // off run leaves `odometerByTrailer` empty — no state, no deltas).
-        if (fuelOn) odometerByTrailer.set(`T${id}`, 0);
+        // OODA-05 fix (T-24-12): seed to 0 ONLY on a FRESH run — on a RESUME the
+        // odometer was already restored from `start.world.odometerByTrailer` above,
+        // so this seeding MUST NOT overwrite the restored mid-leg miles back to 0
+        // (a latent continuation gap the OODA-on refuel decision — which reads the
+        // accrued odometer — makes observable: a chunk boundary would lose the
+        // accrued miles and the agent would never cross the refuel threshold).
+        if (fuelOn && !resuming) odometerByTrailer.set(`T${id}`, 0);
       }
     }
   }
@@ -2690,6 +2710,18 @@ export function runToHorizon(
       deliveredCounter,
       slaDeadlineByPackage: [...slaDeadlineByPackage.entries()].map(
         ([k, v]) => [k, v] as const,
+      ),
+      // Phase-24 OODA-05 (continuation-equivalence): capture the per-trailer active
+      // trip context so a chunked/continued OODA-on run that crosses a boundary
+      // mid-leg restores the SAME trip the next `stepAgents` pass observes — the
+      // chunked OODA-on stream is then byte-identical to all-at-once (T-24-12). The
+      // map is EMPTY on the off path (only `departTrailer` under `oodaAgentsEnabled`
+      // writes it), so this is byte-identical to pre-Phase-24 when off. Each value
+      // is re-built with a FIXED key order (`tripId, fromHubId, toHubId`) so the
+      // serialized bytes are deterministic regardless of source insertion order.
+      activeTripByTrailer: [...activeTripByTrailer.entries()].map(
+        ([k, v]) =>
+          [k, { tripId: v.tripId, fromHubId: v.fromHubId, toHubId: v.toHubId }] as const,
       ),
     };
     return {

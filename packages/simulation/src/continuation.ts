@@ -159,6 +159,26 @@ export interface SerializedWorldState {
    * delivery), so a resume mid-dwell can still compute `onTime` deterministically.
    */
   readonly slaDeadlineByPackage: readonly (readonly [string, string])[];
+  /**
+   * Phase-24 OODA-05 (continuation-equivalence): the per-trailer ACTIVE trip
+   * context the `stepAgents` truck Observe reads — trailerId → the directed leg
+   * the trailer is currently driving (`tripId` + `fromHubId -> toHubId`). Written
+   * at `departTrailer` ONLY when `oodaAgentsEnabled`, so on the off path it is
+   * ALWAYS empty (`[]`) and the serialized form is byte-identical to pre-Phase-24
+   * (the determinism keystone). Captured here so a chunked/continued OODA-on run
+   * that crosses a boundary mid-leg restores the same trip context the next
+   * `stepAgents` pass observes — making the chunked OODA-on stream byte-identical
+   * to all-at-once (T-24-12). The per-agent RNG is a STATELESS re-derive
+   * (`deriveAgentRng(seed, id)` is rebuilt each pass from `seed`+id with NO stored
+   * stream position), so NO new `SerializedRngStates` field is needed and the off
+   * path is trivially clean. Field order is fixed; the map is serialized as an
+   * ordered `[trailerId, {tripId, fromHubId, toHubId}]` tuple array (deterministic,
+   * pointer-free) — mirroring `pendingBySpoke`.
+   */
+  readonly activeTripByTrailer: readonly (readonly [
+    string,
+    { readonly tripId: string; readonly fromHubId: string; readonly toHubId: string },
+  ])[];
 }
 
 /** The raw seeded RNG sub-stream states (one `uint32` each; deterministic order). */
