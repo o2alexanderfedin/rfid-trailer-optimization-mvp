@@ -17,13 +17,13 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **HUB-01**: A dev-only build-time generator emits a committed, checksummed `us-big-cities.generated.json` (city, 2-letter state, lat/lon, population/rank, IANA timezone); the runtime imports only the committed JSON (no city-data dependency at runtime), mirroring the `road-geometry.generated.json` pattern.
 - [ ] **HUB-02**: Hub set is selected as **1–3 hubs per state** by MSA/metro-population rank (per-state floor 1, cap 3), yielding **~80–130 hubs**, fully deterministic/static (no clock/RNG).
 - [ ] **HUB-03**: Metros spanning state lines are de-duplicated to a single hub; the total stays within the ~80–130 continental envelope.
-- [ ] **HUB-04**: Dataset **attribution compliance** is shipped (SimpleMaps backlink OR "city data © GeoNames CC BY 4.0" credit) in README/UI footer.
+- [x] **HUB-04**: Dataset **attribution compliance** is shipped (SimpleMaps backlink OR "city data © GeoNames CC BY 4.0" credit) in README/UI footer.
 
 ### Multi-center topology (NET) — Phase A
 - [ ] **NET-01**: The engine supports **more than one regional center**; `buildRoutes` is generalized off the hard-wired single center (`USA_HUBS[0]`) to a `centerOf(spoke)` model.
-- [ ] **NET-02**: The system auto-selects regional centers partitioned by **freight-corridor + timezone**, with the **center count parameterized** (not hard-coded). The concrete count is **chosen empirically in Phase A** from a real continental run (research envelope ~4–8; near-full-mesh stays cheap and per-center fan-out stays bounded across that range); never collapse to a single primary.
-- [ ] **NET-03**: Each big-city hub is assigned to a center by the corridor/timezone partition with a great-circle **nearest-center tie-break by stable id**, subject to a **leg-length cap** (no spoke assigned across an implausible distance).
-- [ ] **NET-04**: Centers are linked by a **near-full-mesh backbone** (great-circle legs), giving **≤2-hop** coast-to-coast routing, validated by an **anti-SPOF** (remove-any-center connectivity) check.
+- [x] **NET-02**: The system auto-selects regional centers partitioned by **freight-corridor + timezone**, with the **center count parameterized** (not hard-coded). The concrete count is **chosen empirically in Phase A** from a real continental run (research envelope ~4–8; near-full-mesh stays cheap and per-center fan-out stays bounded across that range); never collapse to a single primary.
+- [x] **NET-03**: Each big-city hub is assigned to a center by the corridor/timezone partition with a great-circle **nearest-center tie-break by stable id**, subject to a **leg-length cap** (no spoke assigned across an implausible distance).
+- [x] **NET-04**: Centers are linked by a **near-full-mesh backbone** (great-circle legs), giving **≤2-hop** coast-to-coast routing, validated by an **anti-SPOF** (remove-any-center connectivity) check.
 - [ ] **NET-05**: Freight flows **spoke → center → backbone → center → spoke**; `detectAffectedScope` gains a **per-center scope partition** (the scaling fix).
 
 ### OODA step-agents (OODA) — Phase B
@@ -89,11 +89,11 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | HUB-01 | Phase 23 — Multi-Center Topology | Pending |
 | HUB-02 | Phase 23 — Multi-Center Topology | Pending |
 | HUB-03 | Phase 23 — Multi-Center Topology | Pending |
-| HUB-04 | Phase 23 — Multi-Center Topology | Pending |
+| HUB-04 | Phase 23 — Multi-Center Topology | Complete |
 | NET-01 | Phase 23 — Multi-Center Topology | Pending |
-| NET-02 | Phase 23 — Multi-Center Topology | Pending |
-| NET-03 | Phase 23 — Multi-Center Topology | Pending |
-| NET-04 | Phase 23 — Multi-Center Topology | Pending |
+| NET-02 | Phase 23 — Multi-Center Topology | Complete |
+| NET-03 | Phase 23 — Multi-Center Topology | Complete |
+| NET-04 | Phase 23 — Multi-Center Topology | Complete |
 | NET-05 | Phase 23 — Multi-Center Topology | Pending |
 | PERF-01 | Phase 23 — Multi-Center Topology | Pending |
 | DET-01 | Phase 23 — Multi-Center Topology (re-asserted every phase) | Pending |
