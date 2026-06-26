@@ -3,11 +3,11 @@ import type { Kysely } from "kysely";
 import type { DomainEvent } from "@mm/domain";
 import {
   applyHubInventory,
+  type HubsContainingPackages,
   type ProjectionDb,
   type ReplayEvent,
 } from "../src/runner/inline.js";
 import {
-  emptyHubInventoryState,
   hubInventoryReducer,
   type HubInventoryState,
 } from "../src/reducers/hub-inventory.js";
@@ -32,13 +32,16 @@ import {
  * right thing; the key-scoped fix reads only the touched hub id(s).
  *
  * REBUILD-EQUIVALENCE (T-23-04): the same fake also proves the key-scoped fold is
- * byte-identical to a full-table fold (build-from-0) for a fixed event sequence,
- * at BOTH 10 and 100 hubs — so the perf win cannot mask a correctness regression.
+ * byte-identical to a full-table fold (pure-reducer fold) for a fixed event
+ * sequence, at BOTH 10 and 100 hubs — so the perf win cannot mask a correctness
+ * regression.
  *
  * No Postgres: `@mm/projections` depends ONLY on `@mm/domain` + `kysely` (acyclic
  * DAG, see index.ts). The fake models the precise builder chains the applier
  * invokes against `hub_inventory`, which is all that is needed to count reads and
- * verify the fold.
+ * verify the fold. The package→hub placement read (production: a JSONB `?|`
+ * containment query) is the applier's injectable `HubsContainingPackages` port;
+ * the fake supplies an in-memory equivalent that increments the SAME counter.
  */
 
 const T0 = Date.parse("2026-08-01T00:00:00.000Z");
@@ -59,18 +62,18 @@ interface HubRow {
  * rows the applier touched per event. The supported builder chains are EXACTLY:
  *
  *   selectFrom("hub_inventory").selectAll().execute()                       (full scan)
- *   selectFrom("hub_inventory").selectAll().where("hub_id","in",ids).execute()
- *   selectFrom("hub_inventory").selectAll().whereJsonbContainsAny(col,ids).execute()
+ *   selectFrom("hub_inventory").selectAll().where("hub_id","in"|"=",..).execute()
  *   insertInto("hub_inventory").values(v).onConflict(...).execute()
- *   deleteFrom("hub_inventory").where("hub_id","in"|"=",...).execute()
  *
- * `whereJsonbContainsAny` is the package→hub placement read mechanism: in
- * production it is a Kysely raw-`sql` JSONB-array-containment predicate; here the
- * fake evaluates the same membership semantics in memory. Any OTHER table the
- * applier might touch is irrelevant to hub-inventory cost and is not modeled.
+ * The package→hub placement read is supplied to the applier as the injectable
+ * `HubsContainingPackages` port (`fx.containment`), counted against the same
+ * counter. Any OTHER table the applier might touch is irrelevant to hub-inventory
+ * cost and is not modeled.
  */
 interface FakeDb {
   db: Kysely<ProjectionDb>;
+  /** In-memory equivalent of the production JSONB `?|` placement read (counted). */
+  containment: HubsContainingPackages;
   /** Total `hub_inventory` ROWS returned by reads since the last reset. */
   rowsRead: () => number;
   resetCounter: () => void;
@@ -86,22 +89,18 @@ function makeFakeDb(initial: readonly HubRow[]): FakeDb {
   );
   let counter = 0;
 
-  function rowsContainingAny(column: Bucket, ids: readonly string[]): HubRow[] {
-    const want = new Set(ids);
-    const out: HubRow[] = [];
-    for (const r of table.values()) {
-      if (r[column].some((id) => want.has(id))) out.push(r);
-    }
-    return out;
+  function copy(r: HubRow): HubRow {
+    return {
+      hub_id: r.hub_id,
+      inbound: [...r.inbound],
+      outbound: [...r.outbound],
+      staged: [...r.staged],
+    };
   }
 
   // --- select builder (only the `hub_inventory` chains the applier uses) ------
   function makeSelect(): unknown {
-    let scope:
-      | { kind: "all" }
-      | { kind: "hubIn"; ids: string[] }
-      | { kind: "contains"; column: Bucket; ids: string[] } = { kind: "all" };
-
+    let scope: { kind: "all" } | { kind: "hubIn"; ids: string[] } = { kind: "all" };
     const builder = {
       selectAll() {
         return builder;
@@ -116,29 +115,16 @@ function makeFakeDb(initial: readonly HubRow[]): FakeDb {
         }
         return builder;
       },
-      // The package→hub placement read: rows whose `column` array contains ANY id.
-      whereJsonbContainsAny(column: Bucket, ids: readonly string[]) {
-        scope = { kind: "contains", column, ids: [...ids] };
-        return builder;
-      },
-      async execute(): Promise<HubRow[]> {
+      execute(): Promise<HubRow[]> {
         let result: HubRow[];
         if (scope.kind === "all") {
           result = [...table.values()];
-        } else if (scope.kind === "hubIn") {
+        } else {
           const want = new Set(scope.ids);
           result = [...table.values()].filter((r) => want.has(r.hub_id));
-        } else {
-          result = rowsContainingAny(scope.column, scope.ids);
         }
         counter += result.length;
-        // Deep-copy so the applier cannot mutate the backing store via the rows.
-        return result.map((r) => ({
-          hub_id: r.hub_id,
-          inbound: [...r.inbound],
-          outbound: [...r.outbound],
-          staged: [...r.staged],
-        }));
+        return Promise.resolve(result.map(copy)); // copy so the applier can't mutate the store
       },
     };
     return builder;
@@ -162,26 +148,9 @@ function makeFakeDb(initial: readonly HubRow[]): FakeDb {
       onConflict() {
         return builder;
       },
-      async execute(): Promise<void> {
+      execute(): Promise<void> {
         if (pending !== null) table.set(pending.hub_id, pending);
-      },
-    };
-    return builder;
-  }
-
-  // --- delete builder (remove emptied hub rows) -------------------------------
-  function makeDelete(): unknown {
-    let toDelete: string[] = [];
-    const builder = {
-      where(col: string, op: string, val: unknown) {
-        if (col !== "hub_id") throw new Error(`fake delete: unsupported where(${col})`);
-        if (op === "in" && Array.isArray(val)) toDelete = val as string[];
-        else if (op === "=" && typeof val === "string") toDelete = [val];
-        else throw new Error(`fake delete: unsupported op ${op}`);
-        return builder;
-      },
-      async execute(): Promise<void> {
-        for (const id of toDelete) table.delete(id);
+        return Promise.resolve();
       },
     };
     return builder;
@@ -196,26 +165,35 @@ function makeFakeDb(initial: readonly HubRow[]): FakeDb {
       if (t !== "hub_inventory") throw new Error(`fake: unexpected insertInto(${t})`);
       return makeInsert();
     },
-    deleteFrom(t: string) {
-      if (t !== "hub_inventory") throw new Error(`fake: unexpected deleteFrom(${t})`);
-      return makeDelete();
+    deleteFrom(t: string): never {
+      throw new Error(`fake: unexpected deleteFrom(${t}) — the key-scoped applier upserts (never deletes) hub rows`);
     },
   } as unknown as Kysely<ProjectionDb>;
 
+  // The injectable placement read: rows whose ANY bucket contains ANY packageId.
+  // Counted against the SAME counter so the cost assertion sees the placement read.
+  const containment: HubsContainingPackages = (_db, packageIds) => {
+    const want = new Set(packageIds);
+    const matched = [...table.values()].filter(
+      (r) =>
+        r.inbound.some((id) => want.has(id)) ||
+        r.outbound.some((id) => want.has(id)) ||
+        r.staged.some((id) => want.has(id)),
+    );
+    counter += matched.length;
+    return Promise.resolve(matched.map(copy));
+  };
+
   return {
     db,
+    containment,
     rowsRead: () => counter,
     resetCounter: () => {
       counter = 0;
     },
     rows: () =>
       [...table.values()]
-        .map((r) => ({
-          hub_id: r.hub_id,
-          inbound: [...r.inbound],
-          outbound: [...r.outbound],
-          staged: [...r.staged],
-        }))
+        .map(copy)
         .sort((a, b) => (a.hub_id < b.hub_id ? -1 : a.hub_id > b.hub_id ? 1 : 0)),
   };
 }
@@ -300,8 +278,8 @@ describe("applyHubInventory per-event row reads are independent of hub count (PE
     fx10.resetCounter();
     fx100.resetCounter();
     const ev = replay(arrived("PKG-Q", "HUB-007"), 1n, 1);
-    await applyHubInventory(fx10.db, ev);
-    await applyHubInventory(fx100.db, ev);
+    await applyHubInventory(fx10.db, ev, fx10.containment);
+    await applyHubInventory(fx100.db, ev, fx100.containment);
 
     // A full-scan applier reads 10 vs 100 here; the key-scoped fix reads the same
     // bounded constant regardless of hub count.
@@ -316,13 +294,13 @@ describe("applyHubInventory per-event row reads are independent of hub count (PE
     fx10.resetCounter();
     fx100.resetCounter();
     const ev = replay(departed("TRL-1", "HUB-005", "HUB-009", [P]), 1n, 1);
-    await applyHubInventory(fx10.db, ev);
-    await applyHubInventory(fx100.db, ev);
+    await applyHubInventory(fx10.db, ev, fx10.containment);
+    await applyHubInventory(fx100.db, ev, fx100.containment);
 
     expect(fx10.rowsRead()).toBe(fx100.rowsRead());
   });
 
-  it("rebuild-equivalence: incremental fold === build-from-0 fold at 10 AND 100 hubs (T-23-04)", async () => {
+  it("rebuild-equivalence: incremental fold === pure-reducer fold at 10 AND 100 hubs (T-23-04)", async () => {
     const P = "PKG-P";
     for (const n of [10, 100]) {
       const fx = makeFakeDb(seedInventory(n, "HUB-005", P));
@@ -334,12 +312,11 @@ describe("applyHubInventory per-event row reads are independent of hub count (PE
         replay(arrived("PKG-B", "HUB-002"), 2n, 2),
         replay(departed("TRL-9", "HUB-002", "HUB-008", ["PKG-A", P]), 3n, 3),
       ];
-      for (const ev of events) await applyHubInventory(fx.db, ev);
+      for (const ev of events) await applyHubInventory(fx.db, ev, fx.containment);
 
-      // Build-from-0: fold the SAME events over the seeded starting rows with the
-      // pure reducer directly (the canonical full-table fold).
+      // Canonical full-table fold: fold the SAME events over the seeded starting
+      // rows with the pure reducer directly.
       let state: HubInventoryState = stateFromRows(seedInventory(n, "HUB-005", P));
-      void emptyHubInventoryState; // (the reducer is associative from any prior state)
       for (const ev of events) {
         state = hubInventoryReducer(state, { event: ev.event, occurredAt: ev.occurredAt });
       }
@@ -350,9 +327,9 @@ describe("applyHubInventory per-event row reads are independent of hub count (PE
         staged: [...h.staged],
       }));
 
-      // The incremental (key-scoped) persisted rows must match the full fold
-      // for every NON-EMPTY hub. (An emptied hub may be DELETEd incrementally; the
-      // pure reducer keeps it as an empty row — compare on non-empty content.)
+      // Compare on NON-EMPTY hub contents: the key-scoped applier upserts emptied
+      // hubs as empty rows (preserving the prior full-table behavior), so for any
+      // hub the incremental and full folds carry IDENTICAL bucket contents.
       const nonEmpty = (rows: readonly HubRow[]): HubRow[] =>
         rows.filter((r) => r.inbound.length + r.outbound.length + r.staged.length > 0);
 
