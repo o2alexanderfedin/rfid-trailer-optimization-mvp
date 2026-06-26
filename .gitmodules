@@ -1,0 +1,3 @@
+[submodule "vendor/async-queue"]
+	path = vendor/async-queue
+	url = https://github.com/o2alexanderfedin/async-queue-js.git
