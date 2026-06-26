@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hubSchema, haversineKm, type Hub } from "@mm/domain";
+import { hubSchema, haversineKm } from "@mm/domain";
 import { generateBigCityHubs, type BigCityHub } from "../../src/network/hubs.js";
 import {
   pickRegionalCenters,
