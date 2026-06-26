@@ -15,8 +15,8 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 
 ### Big-city hubs (HUB) — Phase A
 - [x] **HUB-01**: A dev-only build-time generator emits a committed, checksummed `us-big-cities.generated.json` (city, 2-letter state, lat/lon, population/rank, IANA timezone); the runtime imports only the committed JSON (no city-data dependency at runtime), mirroring the `road-geometry.generated.json` pattern.
-- [ ] **HUB-02**: Hub set is selected as **1–3 hubs per state** by MSA/metro-population rank (per-state floor 1, cap 3), yielding **~80–130 hubs**, fully deterministic/static (no clock/RNG).
-- [ ] **HUB-03**: Metros spanning state lines are de-duplicated to a single hub; the total stays within the ~80–130 continental envelope.
+- [x] **HUB-02**: Hub set is selected as **1–3 hubs per state** by MSA/metro-population rank (per-state floor 1, cap 3), yielding **~80–130 hubs**, fully deterministic/static (no clock/RNG).
+- [x] **HUB-03**: Metros spanning state lines are de-duplicated to a single hub; the total stays within the ~80–130 continental envelope.
 - [x] **HUB-04**: Dataset **attribution compliance** is shipped (SimpleMaps backlink OR "city data © GeoNames CC BY 4.0" credit) in README/UI footer.
 
 ### Multi-center topology (NET) — Phase A
@@ -42,7 +42,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **COORD-06**: A coordinator **may invoke the existing optimizer** as a **scoped, pure `runEpoch` suggestion engine called synchronously in-fold** (not the async worker path); the global `RollingLoop` is disabled under the coordinator flag so the two never double-plan. *(Phase D; sub-flag with a heuristic fallback if profiling shows the in-fold call is too heavy.)*
 
 ### Performance & plumbing (PERF)
-- [ ] **PERF-01**: `applyHubInventory` is **key-scoped to the touched hub id(s)** — shipped **in Phase A** (P1-blocking; prevents the latent v2.1-style O(events×hubs) freeze from going active at 100 hubs).
+- [x] **PERF-01**: `applyHubInventory` is **key-scoped to the touched hub id(s)** — shipped **in Phase A** (P1-blocking; prevents the latent v2.1-style O(events×hubs) freeze from going active at 100 hubs).
 - [ ] **PERF-02**: `twin-snapshot` reads **incremental cursor-fold projections** (`milesSinceRefuel`, `inductionDeadlines`) instead of two full event-log scans per epoch. *(Phase E)*
 - [ ] **PERF-03**: `@alexanderfedin/async-queue` is wired into **runtime plumbing only** (worker↔optimizer handoff, DB write-batching, ws backpressure), **banned from the deterministic core by ESLint**; the vendored `dist/` is resolved and `vendor/*` added to the workspace; an append-order==generation-order test guards it. *(Phase E)*
 - [ ] **PERF-04**: A **sustained continental-run** at ~80–130 hubs holds a target sim-min/wall-sec without the freeze/stall failure mode. *(Phase E)*
@@ -87,15 +87,15 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | HUB-01 | Phase 23 — Multi-Center Topology | Complete |
-| HUB-02 | Phase 23 — Multi-Center Topology | Pending |
-| HUB-03 | Phase 23 — Multi-Center Topology | Pending |
+| HUB-02 | Phase 23 — Multi-Center Topology | Complete |
+| HUB-03 | Phase 23 — Multi-Center Topology | Complete |
 | HUB-04 | Phase 23 — Multi-Center Topology | Complete |
 | NET-01 | Phase 23 — Multi-Center Topology | Complete |
 | NET-02 | Phase 23 — Multi-Center Topology | Complete |
 | NET-03 | Phase 23 — Multi-Center Topology | Complete |
 | NET-04 | Phase 23 — Multi-Center Topology | Complete |
 | NET-05 | Phase 23 — Multi-Center Topology | Complete |
-| PERF-01 | Phase 23 — Multi-Center Topology | Pending |
+| PERF-01 | Phase 23 — Multi-Center Topology | Complete |
 | DET-01 | Phase 23 — Multi-Center Topology (re-asserted every phase) | Complete |
 | OODA-01 | Phase 24 — OODA Step-Agents | Pending |
 | OODA-02 | Phase 24 — OODA Step-Agents | Pending |

@@ -510,8 +510,10 @@ const defaultHubsContainingPackages: HubsContainingPackages = async (db, package
  * resolved via JSONB containment, for placement-removing events), folds with the
  * SAME pure `hubInventoryReducer` (which mutates no other key, so the partial
  * fold is byte-identical to a full-table fold and to a rebuild-from-0 — FND-04 /
- * P5a preserved), then persists ONLY the delta: upsert hubs that still have
- * contents, DELETE hubs the fold emptied. Cost is O(affected keys per event),
+ * P5a preserved), then persists ONLY the delta: upsert the hubs the event
+ * touches — a hub the fold empties is written back as an EMPTY row, never
+ * deleted (FND-04 requires `DFW.outbound === []` to persist after a departure).
+ * Cost is O(affected keys per event),
  * independent of hub count — the `hub-inventory-cost.unit.test.ts` witness.
  */
 export async function applyHubInventory(
@@ -548,8 +550,8 @@ export async function applyHubInventory(
 
   // The set of hub ids this fold may mutate: every loaded row PLUS any named hub
   // that had no row yet (a placement-adding event can CREATE a hub row). Tracking
-  // it lets us DELETE a hub the fold emptied (delta-persist, mirroring
-  // applyPackageLocation's absent ⇒ delete branch).
+  // it lets us delta-persist exactly the scoped hubs (an emptied hub is upserted
+  // as an EMPTY row, never deleted — see the byte-identical note on the upsert below).
   const scopedHubIds = new Set<string>(byHub.keys());
   for (const h of hubIds) scopedHubIds.add(h);
 
