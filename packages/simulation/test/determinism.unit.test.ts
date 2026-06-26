@@ -253,4 +253,41 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     });
     expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
+
+  // Phase 23 (NET-01/DET-01): the continental multi-center topology is OPT-IN and
+  // DEFAULT OFF. The two-part flags-off gate (mirrors the outboundDelivery case):
+  //   (a) `continentalTopology: false` is byte-identical to the flag being absent,
+  //   (b) the flag ABSENT => the seed-42 10k golden is still 3920accc... .
+  // This is the keystone witness that the whole Phase-23 generalization preserved
+  // byte-identical legacy replay (the seed-42 stream never moved).
+
+  // (a) explicit false === absent over a short run.
+  it("explicit continentalTopology: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      continentalTopology: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // (b) flag ABSENT => the seed-42 10k golden is byte-identical to 3920accc... .
+  it("continentalTopology ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(
+      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
+    );
+  });
+
+  // ...and the EXPLICIT false 10k-tick continental run is byte-identical to absent.
+  it("continentalTopology: false is byte-identical to absent over the 10k golden run", () => {
+    const absent = simulate({ seed: 42, durationTicks: 10000 });
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      continentalTopology: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
 });
