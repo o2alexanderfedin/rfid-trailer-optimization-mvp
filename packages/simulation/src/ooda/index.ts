@@ -21,3 +21,7 @@ export type {
 
 // OODA-01 truck Decide.
 export { decideTruck } from "./truck.js";
+
+// OODA-02 hub Decide (24-02).
+export { decideHub } from "./hub.js";
+export type { HubDecision, HubHoldReason, HubObservation } from "./hub.js";
