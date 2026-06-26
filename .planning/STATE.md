@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
-stopped_at: roadmap created, awaiting user approval
-last_updated: "2026-06-26T18:01:03.339Z"
-last_activity: 2026-06-26 -- Phase 23 execution started
+stopped_at: Completed 23-04-PLAN.md (NET-01 multi-center centerOf flow + NET-05 per-center scope; golden 3920accc byte-identical)
+last_updated: "2026-06-26T19:00:01.098Z"
+last_activity: 2026-06-26
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 5
-  completed_plans: 0
-  percent: 0
+  completed_plans: 4
+  percent: 80
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-26)
 ## Current Position
 
 Phase: 23 (Multi-Center Topology) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 23
-Last activity: 2026-06-26 -- Phase 23 execution started
+Plan: 4 of 5 complete (23-05 center-count checkpoint + continental golden remaining)
+Status: 23-04 complete (NET-01 + NET-05)
+Last activity: 2026-06-26
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Last activity: 2026-06-26 -- Phase 23 execution started
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 23 P04 | 50 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -62,6 +63,7 @@ Recent decisions affecting v3.0:
 - [v3.0 Roadmap 2026-06-26]: **PERF-01 (`applyHubInventory` key-scoping) pulled into Phase 23 as P1-BLOCKING** — the rest of E's perf work is deferrable, but this one converts a latent O(events×hubs) freeze into an active one the moment hub count jumps to 100. It ships with the topology, not as hardening.
 - [v3.0 Roadmap 2026-06-26]: **Center count is parameterized and chosen empirically in Phase 23** (user deferred the exact number to Phase A). Research default ~5–6 on a near-full-mesh backbone (envelope ~4–8); the leg-length cap + anti-SPOF remove-any-center connectivity test are mandatory regardless; never collapse to a single primary.
 - [v3.0 Design (PROJECT.md Key Decisions)]: multi–regional-center topology · great-circle arcs (no per-leg ORS at scale) · OODA as event-emitting `step()` (not ABM) · coordinators as ES process-managers · advisory-first (agents arbitrate w/ local feasibility) · coordinators *may* use the optimizer · `async-queue` for runtime plumbing only (ESLint-banned from the core) · every feature flag-gated, new goldens, flags-off byte-identical to `3920accc…`.
+- [Phase 23-04 NET-01/NET-05]: `continentalTopology` flag (strict `=== true`, default off) generalizes `buildRoutes`/`buildTransitParamsByLeg` + the engine freight flow off the hard-wired Memphis center to a `centerOf(spoke)` model. OFF ⇒ `centerOf` collapses to `hubs[0]`, no new RNG substream is constructed, and the legacy single-center stream + the seed-42 10k golden `3920accc…` are byte-identical; ON ⇒ freight flows spoke → its center → backbone → dest center → dest spoke (the cross-center hop lives in `arriveConsolidationAtCenter`). `detectAffectedScope` gains an additive `partitionScopeByCenter(scope, centerOf, events)` so one center's epoch never pulls another's trailers. Empirical `centerCount` + the partition snapshot are deferred to plan 23-05.
 
 ### Pending Todos
 
@@ -92,8 +94,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-26 — v3.0 roadmap authored (Phases 23–28; 31/31 requirements mapped)
-Stopped at: roadmap created, awaiting user approval
+Last session: 2026-06-26T19:00:01.093Z
+Stopped at: Completed 23-04-PLAN.md (NET-01 multi-center centerOf flow + NET-05 per-center scope; golden 3920accc byte-identical)
 Resume file: None
 
 ## Operator Next Steps
