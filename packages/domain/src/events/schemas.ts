@@ -466,6 +466,36 @@ export const packageDeliveredSchema = eventSchema(
   }),
 );
 
+// --- Phase-24 OODA truck divert (OODA-01) -----------------------------------
+
+/**
+ * `TrailerDiverted` — the OODA truck agent's re-route decision (OODA-01 /
+ * Phase 24). The ONE genuinely-new truck decision with no current centralized
+ * analog: a truck agent, observing its frozen frame-N state, chooses to divert
+ * from its planned next hub (`fromHubId`) to an alternate (`toHubId`) — e.g. the
+ * next hub is congested/blocked, or a rebalance is warranted.
+ *
+ * ANTI-REPUDIATION (T-24-02): the payload carries `reason` + `tripId` + from/to
+ * hub ids so every divert is replayable/auditable. `reason` is a CLOSED enum
+ * matching the agent's `DivertReason`.
+ *
+ * DETERMINISM (DET-03): the payload is ids + a domain clock string ONLY — NO
+ * lon/lat and NO RNG value (the geo-track projection computes any map position
+ * from the logged route geometry). All ids are non-empty; the boundary rejects
+ * empty ids, unknown reasons, and extra fields structurally.
+ */
+export const trailerDivertedSchema = eventSchema(
+  "TrailerDiverted",
+  z.object({
+    trailerId: id,
+    tripId: id,
+    fromHubId: id,
+    toHubId: id,
+    reason: z.enum(["next-hub-congested", "next-hub-blocked", "rebalance"]),
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -503,4 +533,6 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   planSupersededSchema,
   // Phase-22 terminal delivery (OUT-01).
   packageDeliveredSchema,
+  // Phase-24 OODA truck divert (OODA-01).
+  trailerDivertedSchema,
 ]);

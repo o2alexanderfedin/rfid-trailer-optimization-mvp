@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
-stopped_at: Completed 23-05-PLAN.md (NET-02 center count=6 + DET-01 two-part gate + continental golden 8f91b13f + drift guard) — Phase 23 COMPLETE
-last_updated: "2026-06-26T19:17:48.164Z"
+stopped_at: Completed 24-01-PLAN.md
+last_updated: "2026-06-26T23:12:19.882Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 2
+  total_plans: 9
+  completed_plans: 9
   percent: 100
 ---
 
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-26)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** Phase 23 — Multi-Center Topology
+**Current focus:** Phase 24 — OODA Step-Agents
 
 ## Current Position
 
-Phase: 23 (Multi-Center Topology) — COMPLETE
-Plan: 5 of 5 complete (23-05 empirical center count=6 + DET-01 two-part gate + continental golden + drift guard)
-Status: Phase 23 complete — center count empirically chosen (6), DET-01 keystone green, ready for Phase 24
+Phase: 24 (OODA Step-Agents) — EXECUTING
+Plan: 3 of 4
+Status: Ready to execute
 Last activity: 2026-06-26
 
 ## Performance Metrics
@@ -52,6 +52,8 @@ Last activity: 2026-06-26
 *Updated after each plan completion*
 | Phase 23 P04 | 50 | 3 tasks | 8 files |
 | Phase 23 P05 | 70min | 4 tasks | 6 files |
+| Phase 24 P24-01 | 13min | 3 tasks | 31 files |
+| Phase 24 P24-04 | 15min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -67,6 +69,11 @@ Recent decisions affecting v3.0:
 - [Phase 23-04 NET-01/NET-05]: `continentalTopology` flag (strict `=== true`, default off) generalizes `buildRoutes`/`buildTransitParamsByLeg` + the engine freight flow off the hard-wired Memphis center to a `centerOf(spoke)` model. OFF ⇒ `centerOf` collapses to `hubs[0]`, no new RNG substream is constructed, and the legacy single-center stream + the seed-42 10k golden `3920accc…` are byte-identical; ON ⇒ freight flows spoke → its center → backbone → dest center → dest spoke (the cross-center hop lives in `arriveConsolidationAtCenter`). `detectAffectedScope` gains an additive `partitionScopeByCenter(scope, centerOf, events)` so one center's epoch never pulls another's trailers. Empirical `centerCount` + the partition snapshot are deferred to plan 23-05.
 - [Phase 23]: Center count = 6 (empirical, NET-02): best fan-out balance + cheap 30-leg mesh + anti-SPOF + all spoke legs under cap; recorded in committed center-partition.snapshot.json (partitionChecksum=883c337b)
 - [Phase 23]: Continental golden 8f91b13f captured reproducibility-first on a 14-hub fixture; DET-01 two-part gate: continentalTopology:false===absent AND absent=>seed-42 10k golden 3920accc byte-identical
+- [Phase ?]: OODA_RNG_SALT = 0x7a9e3f1d (eighth substream salt, pairwise-distinct from the 7 engine salts)
+- [Phase ?]: TrailerDiverted payload = {trailerId, tripId, fromHubId, toHubId, reason, occurredAt} — ids + clock only, no geo/RNG
+- [Phase ?]: Truck Decide priority ladder: rest > refuel > divert > hold > proceed (binding feasibility first)
+- [Phase ?]: [Phase 24-04] OODA-05: activeTripByTrailer serialized into SerializedWorldState (present-only-when-on); per-agent RNG stateless re-derive so no new rng field; chunked OODA-on run byte-identical to all-at-once
+- [Phase ?]: [Phase 24-04] OODA-on golden 94689f99… (seed 42/10k, 9170 events) captured reproducibility-first, != flags-off 3920accc; DET-03 ESLint guard bans Date.now/Math.random/async-queue/kysely in ooda/** (proven); TrailerDiverted canonicalized
 
 ### Pending Todos
 
@@ -97,8 +104,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-26T19:17:41.669Z
-Stopped at: Completed 23-05-PLAN.md (NET-02 center count=6 + DET-01 two-part gate + continental golden 8f91b13f + drift guard) — Phase 23 COMPLETE
+Last session: 2026-06-26T23:11:50.606Z
+Stopped at: Completed 24-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

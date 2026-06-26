@@ -30,6 +30,13 @@ export type SimTask =
   // as createPackageBatch). The pending task's absolute `fireTick` is captured by
   // SerializedScheduled, so a resume between two inductions never loses/reorders it.
   | { readonly kind: "inductPackage"; readonly tick: number }
+  // Phase-24 OODA-01/02: the per-tick (per-OODA_INTERVAL_TICKS) agent step pass —
+  // a self-rescheduling task with the SAME tick-based shape as `inductPackage`.
+  // Seeded ONLY when `oodaAgentsEnabled` (the off path schedules none, so the
+  // golden is byte-identical); on every fire it re-enqueues its `+OODA_INTERVAL`
+  // successor. The absolute `fireTick` is captured by SerializedScheduled, so a
+  // resume between two OODA passes never loses/reorders it (continuation-safe).
+  | { readonly kind: "stepAgents"; readonly tick: number }
   | { readonly kind: "departTrailer"; readonly trailerId: string; readonly spokeHubId: string; readonly departTick: number }
   | {
       readonly kind: "arriveTrailer";
@@ -152,6 +159,26 @@ export interface SerializedWorldState {
    * delivery), so a resume mid-dwell can still compute `onTime` deterministically.
    */
   readonly slaDeadlineByPackage: readonly (readonly [string, string])[];
+  /**
+   * Phase-24 OODA-05 (continuation-equivalence): the per-trailer ACTIVE trip
+   * context the `stepAgents` truck Observe reads — trailerId → the directed leg
+   * the trailer is currently driving (`tripId` + `fromHubId -> toHubId`). Written
+   * at `departTrailer` ONLY when `oodaAgentsEnabled`, so on the off path it is
+   * ALWAYS empty (`[]`) and the serialized form is byte-identical to pre-Phase-24
+   * (the determinism keystone). Captured here so a chunked/continued OODA-on run
+   * that crosses a boundary mid-leg restores the same trip context the next
+   * `stepAgents` pass observes — making the chunked OODA-on stream byte-identical
+   * to all-at-once (T-24-12). The per-agent RNG is a STATELESS re-derive
+   * (`deriveAgentRng(seed, id)` is rebuilt each pass from `seed`+id with NO stored
+   * stream position), so NO new `SerializedRngStates` field is needed and the off
+   * path is trivially clean. Field order is fixed; the map is serialized as an
+   * ordered `[trailerId, {tripId, fromHubId, toHubId}]` tuple array (deterministic,
+   * pointer-free) — mirroring `pendingBySpoke`.
+   */
+  readonly activeTripByTrailer: readonly (readonly [
+    string,
+    { readonly tripId: string; readonly fromHubId: string; readonly toHubId: string },
+  ])[];
 }
 
 /** The raw seeded RNG sub-stream states (one `uint32` each; deterministic order). */

@@ -70,7 +70,7 @@
 > **Keystone constraint — determinism (every phase):** OODA decision logic *changes the event stream*, so v3.0 is a **NEW model with NEW goldens**. Every feature is flag-gated. For **each** flag, the **two-part flags-off gate** holds: `flag:false === absent` AND `absent ⇒ seed-42 10k-tick golden 3920accc…` (byte-identical to v2.0). Model-changing phases capture their **own new golden** (continental → ooda → coordinator). New RNG substreams are constructed **lazily** (only when the flag is on), use salts pairwise-distinct from the existing 8 (asserted by the salt-collision test), and derive per-agent streams from the **stable agent id** (never spawn index). The decision core stays sync + pure: no `Date.now()` / `Math.random()` / `async-queue`; all hashed payloads go through `canonicalize`.
 
 - [x] **Phase 23: Multi-Center Topology** — big-city hub generation (1–3/state, ~80–130) + parameterized regional centers + near-full-mesh backbone + per-center scope partition + **`applyHubInventory` key-scoping (P1-BLOCKING)**; FOUNDATION for everything (HUB-01..04, NET-01..05, PERF-01, DET-01) (completed 2026-06-26)
-- [ ] **Phase 24: OODA Step-Agents** — deterministic per-truck + per-hub `step()` (Observe→Orient→Decide→Act) emitting domain events, sorted-by-stable-id passes, per-agent seeded substreams, frozen observation surface, continuation-equivalent agent state; the decentralized decision core (OODA-01..05, DET-03)
+- [x] **Phase 24: OODA Step-Agents** — deterministic per-truck + per-hub `step()` (Observe→Orient→Decide→Act) emitting domain events, sorted-by-stable-id passes, per-agent seeded substreams, frozen observation surface, continuation-equivalent agent state; the decentralized decision core (OODA-01..05, DET-03) (completed 2026-06-26)
 - [ ] **Phase 25: Coordination Centers** — one advisory process-manager per regional center emitting `ActionSuggested`; agents accept/reject-with-reason on local feasibility; the five anti-oscillation/anti-deadlock guards + scope-neutral suggestion events; the headline "smart and honest" differentiator (COORD-01..05)
 - [ ] **Phase 26: Coordinator ↔ Optimizer** — coordinators invoke the proven optimizer as a scoped, pure `runEpoch` suggestion engine called synchronously in-fold; global `RollingLoop` disabled under the flag so the two never double-plan (COORD-06)
 - [ ] **Phase 27: Perf + Plumbing + Scale Viz** — incremental cursor-fold twin-snapshot projections + `async-queue` runtime-plumbing wiring (ESLint-banned from the core) + 100+-hub clustered/decluttered scale viz + sustained continental-run perf (PERF-02..04, VIZ-15..17)
@@ -107,7 +107,12 @@ Plans:
   3. **Agent-order independence:** each per-tick agent pass iterates a sorted-by-stable-id array drawing from a stable-id-derived seeded substream over a frozen per-tick observation surface (no mid-tick read-your-writes) — shuffling the per-tick agent set produces a byte-identical event batch, and N agents yield N decorrelated streams (no two share their first K draws; renaming/reordering agents does not change the golden)
   4. **Continuation-equivalence:** agent state serializes into `SerializedWorldState` so a chunked/continued run is byte-identical to an uninterrupted run
   5. **Determinism gate (DET-03):** no `Date.now()` / `Math.random()` / `async-queue` appears in the OODA decision core (a CI/ESLint static guard fails on a violation); all hashed payloads go through `canonicalize`; with `oodaAgentsEnabled` absent (and `:false`) the seed-42 10k golden stays byte-identical to `3920accc…`, and the OODA-on model captures its own new golden
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [x] 24-01-PLAN.md — OODA scaffolding (per-agent substream, sorted-id, frozen observation) + pure truck Decide + new TrailerDiverted event (OODA-01, OODA-04, DET-03)
+- [x] 24-02-PLAN.md — stepAgents SimTask wiring (dispatch case, bootstrap self-reschedule, oodaAgentsEnabled flag, decision bypass) + hub Decide (OODA-01, OODA-02, OODA-04)
+- [x] 24-03-PLAN.md — Agent-owned binding local feasibility reusing the HOS/fuel/dock logic; infeasible outcomes unreachable (OODA-03)
+- [x] 24-04-PLAN.md — Agent state in SerializedWorldState + order-shuffle/decorrelation goldens + DET-03 ESLint guard + two-part flags-off gate + new OODA-on golden (OODA-04, OODA-05, DET-03)
 **UI hint**: yes
 
 ### Phase 25: Coordination Centers
@@ -161,7 +166,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
-| 24. OODA Step-Agents | 0/TBD | Not started | - |
+| 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
 | 25. Coordination Centers | 0/TBD | Not started | - |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |

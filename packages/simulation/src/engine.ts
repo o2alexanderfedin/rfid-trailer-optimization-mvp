@@ -19,6 +19,7 @@ import type {
   SlaClass,
   TrailerArrivedAtHub,
   TrailerDeparted,
+  TrailerDiverted,
   TrailerDocked,
   TruckRefueled,
   TruckRested,
@@ -53,6 +54,15 @@ import {
   pickRegionalCenters,
 } from "./network/centers.js";
 import { makeRng, makeRngFromState, type Rng } from "./rng.js";
+import {
+  type AgentObservation,
+  type HubObservation,
+  canonicalizeOodaPayload,
+  decideHub,
+  decideTruck,
+  deriveAgentRng,
+  sortAgentsByStableId,
+} from "./ooda/index.js";
 import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
 import {
   isContinuation,
@@ -367,6 +377,30 @@ export interface SimulateOptions {
    * `DEFAULT_LEG_CAP_KM`.
    */
   readonly legCapKm?: number;
+
+  /**
+   * OODA-01/02 (Phase 24): OPT-IN decentralized agent decision core. **DEFAULT
+   * FALSE — the determinism keystone.** When absent or `false`, the engine
+   * schedules NO `stepAgents` task, constructs ZERO per-agent OODA substreams,
+   * and runs the EXISTING centralized decision code UNCHANGED ⇒ the seed-42 10k
+   * golden is BYTE-IDENTICAL to `3920accc…` (the two-part flags-off gate, like
+   * `outboundDeliveryEnabled`/`continentalTopology`). It is checked with a STRICT
+   * `=== true` comparison (never `??`/`||`, which would make an absent flag
+   * accidentally truthy and perturb the golden).
+   *
+   * When `true`, a self-rescheduling `stepAgents` EventQueue task fires at a fixed
+   * `OODA_INTERVAL_TICKS` cadence (mirroring `inductPackage`). Each pass builds a
+   * FROZEN observation per agent at pass entry, iterates agents in
+   * sorted-by-stable-id order, applies an "anything-to-decide?" guard, and routes
+   * each decision's Act through the EXISTING `emit` (plus the new `TrailerDiverted`
+   * for the divert choice) via the pure 24-01 `decideTruck` / 24-02 `decideHub`.
+   * Under the flag the agents OWN the dispatch/hold/refuel/rest/consolidate
+   * decisions and the engine's centralized code for those points is BYPASSED (no
+   * double-decision). Per-agent OODA substreams are constructed LAZILY (only on
+   * the on path). A flag-on run is REPRODUCIBLE per seed (same seed twice ⇒
+   * byte-identical); capturing the full OODA-on golden is plan 24-04.
+   */
+  readonly oodaAgentsEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -394,6 +428,21 @@ const SIZE_CLASSES: readonly SizeClass[] = ["small", "medium", "large"];
 const INDUCTION_INTERVAL_TICKS = 30;
 /** First induction fires at tick 1 (deterministic, fixed offset; off by default). */
 const INDUCTION_START_TICK = 1;
+
+// --- Phase-24 OODA step-agents (OODA-01/02) ---------------------------------
+
+/**
+ * OODA-01/02: ticks between successive `stepAgents` passes — a fixed modular
+ * constant like {@link PACKAGE_INTERVAL_TICKS}/{@link INDUCTION_INTERVAL_TICKS}
+ * (pure tick arithmetic, no wall-clock). Chosen 5 (Claude's discretion per
+ * ARCHITECTURE §3: "1 or 5"): a per-5-tick cadence is cheaper than every tick yet
+ * fine-grained enough for the demo. The cadence is PART of the OODA model, so it is
+ * baked into the new OODA-on golden (captured in 24-04). OFF by default ⇒ no pass
+ * is ever scheduled, so this constant never affects the flags-off golden.
+ */
+const OODA_INTERVAL_TICKS = 5;
+/** First `stepAgents` pass fires at tick 1 (deterministic, fixed offset; off by default). */
+const OODA_START_TICK = 1;
 /** SLA classes in a fixed order (the induction RNG picks an index). */
 const SLA_CLASSES: readonly SlaClass[] = [
   "express",
@@ -607,6 +656,15 @@ export function runToHorizon(
   // `=== true` — never `??`/`||` (an absent flag must stay falsy).
   const outboundOn = opts.outboundDeliveryEnabled === true;
 
+  // Phase-24 OODA-01/02: the decentralized agent decision core is OPT-IN and
+  // DEFAULT OFF. Absent/false ⇒ the engine schedules NO `stepAgents` task,
+  // constructs ZERO per-agent OODA substreams, and runs the existing centralized
+  // decision code UNCHANGED, so all existing goldens are byte-identical (the
+  // determinism keystone). STRICT `=== true` — never `??`/`||` (an absent flag
+  // must stay falsy). When ON, agents OWN dispatch/hold/refuel/rest/consolidate and
+  // the centralized code for those points is bypassed (no double-decision).
+  const oodaAgentsEnabled = opts.oodaAgentsEnabled === true;
+
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
   const rfidEnabled = rfid !== undefined;
@@ -699,6 +757,33 @@ export function runToHorizon(
   const odometerByTrailer = new Map<string, number>(
     resuming ? start.world.odometerByTrailer.map(([k, v]) => [k, v]) : [],
   );
+
+  /**
+   * Phase-24 OODA-01: per-trailer ACTIVE trip context the `stepAgents` truck
+   * observation reads — the trip id + the directed leg the trailer is currently
+   * driving (`fromHubId -> toHubId`). Populated at `departTrailer` ONLY when
+   * `oodaAgentsEnabled` (a single map write, no event), so a flag-off run leaves it
+   * empty and adds ZERO behaviour to the centralized stream. In-process for 24-02;
+   * OODA-05 serializes it into the continuation for chunked-run equivalence.
+   */
+  const activeTripByTrailer = new Map<
+    string,
+    { readonly tripId: string; readonly fromHubId: string; readonly toHubId: string }
+  >();
+  // OODA-05: restore the captured active-trip context on resume so a chunked OODA-on
+  // run picks up each in-flight leg exactly where the previous chunk left it (the
+  // continuation-equivalence keystone). Empty on a fresh run and on the off path
+  // (the captured array is `[]` whenever `oodaAgentsEnabled` is off), so this adds
+  // ZERO behaviour to the flag-off stream.
+  if (resuming) {
+    for (const [trailerId, trip] of start.world.activeTripByTrailer) {
+      activeTripByTrailer.set(trailerId, {
+        tripId: trip.tripId,
+        fromHubId: trip.fromHubId,
+        toHubId: trip.toHubId,
+      });
+    }
+  }
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
 
   // NET-01 (Phase 23): resolve the network topology. The flag is read with a
@@ -876,7 +961,13 @@ export function runToHorizon(
         });
         // SP2: seed the per-trailer odometer at 0 (only when fuel is on, so an
         // off run leaves `odometerByTrailer` empty — no state, no deltas).
-        if (fuelOn) odometerByTrailer.set(`T${id}`, 0);
+        // OODA-05 fix (T-24-12): seed to 0 ONLY on a FRESH run — on a RESUME the
+        // odometer was already restored from `start.world.odometerByTrailer` above,
+        // so this seeding MUST NOT overwrite the restored mid-leg miles back to 0
+        // (a latent continuation gap the OODA-on refuel decision — which reads the
+        // accrued odometer — makes observable: a chunk boundary would lose the
+        // accrued miles and the agent would never cross the refuel threshold).
+        if (fuelOn && !resuming) odometerByTrailer.set(`T${id}`, 0);
       }
     }
   }
@@ -1373,6 +1464,304 @@ export function runToHorizon(
   };
 
   /**
+   * Phase-24 OODA-02: the HUB AGENT's consolidate/dispatch Act. Drains the spoke's
+   * staged consolidation manifest (`pendingAtSpoke`) onto its home trailer and emits
+   * the SAME spoke→center consolidation `TrailerDeparted` + `arriveConsolidationAtCenter`
+   * the centralized cadence emits (REUSE existing events, CONTEXT decision) — just
+   * DECIDED locally by the hub agent. Mirrors the inline block in `arriveTrailer`,
+   * but the departure fires at the CURRENT tick (the agent's pass), not on a
+   * trailer's scheduled turnaround. Only reached on the OODA-on path (the
+   * centralized cadence is bypassed under the flag), so the off stream is unaffected.
+   *
+   * Determinism: the home trailer is the FIRST trailer rostered to this spoke
+   * (stable roster order, no RNG); the manifest is drained by an ATOMIC splice after
+   * a stable id sort (the double-drain guard); the center-arrival transit is a
+   * seeded `timingRng` draw in deterministic queue order.
+   */
+  const dispatchHubConsolidation = (spoke: Hub): void => {
+    const atSpoke = pendingAtSpoke.get(spoke.hubId);
+    if (atSpoke === undefined || atSpoke.length === 0) return; // nothing staged
+    // The hub's home trailer: the first trailer rostered to this spoke (stable).
+    const home = trailerRoster.find((e) => e.spoke.hubId === spoke.hubId);
+    if (home === undefined) return;
+    const trailerId = home.trailerId;
+    const spokeCenter = centerOf(spoke.hubId);
+
+    // Stable id sort + ATOMIC splice (the double-drain guard, no RNG).
+    atSpoke.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const consolidated = atSpoke.splice(0, atSpoke.length);
+
+    tripCounter += 1;
+    const consolidationTripId = `TRIP${String(tripCounter).padStart(5, "0")}`;
+
+    for (const packageId of consolidated) {
+      const loadScan: PackageScanned = {
+        type: "PackageScanned",
+        schemaVersion: 1,
+        payload: { packageId, hubId: spoke.hubId, scanType: "load" },
+      };
+      emit(`package-${packageId}`, loadScan);
+    }
+
+    const consolidationDeparted: TrailerDeparted = {
+      type: "TrailerDeparted",
+      schemaVersion: 1,
+      payload: {
+        trailerId,
+        fromHubId: spoke.hubId,
+        toHubId: spokeCenter.hubId,
+        tripId: consolidationTripId,
+        packageIds: consolidated,
+      },
+    };
+    emit(`trailer-${trailerId}`, consolidationDeparted);
+
+    if (rfidEnabled && consolidated.length > 0) {
+      emitRfid("portal", trailerId, spoke.hubId, consolidated);
+    }
+
+    const consolidationArriveTick =
+      isoToEpochMinutes(clock.nowIso()) + drawTransitTicks(spoke.hubId, spokeCenter.hubId);
+    schedule(consolidationArriveTick, {
+      kind: "arriveConsolidationAtCenter",
+      trailerId,
+      packageIds: consolidated,
+      tripId: consolidationTripId,
+      ...(continentalOn ? { centerHubId: spokeCenter.hubId } : {}),
+    });
+  };
+
+  /**
+   * Phase-24 OODA-01/02: the per-tick agent step pass — the decentralized decision
+   * core. A self-rescheduling EventQueue task (like {@link inductPackage}) so the
+   * order stays single-threaded + deterministic. Guards on `oodaAgentsEnabled` so
+   * the off path NEVER runs (the determinism keystone): zero passes, zero events,
+   * zero per-agent substream construction — the flags-off golden is byte-identical.
+   *
+   * On the ON path it builds a FROZEN observation per agent at pass ENTRY, iterates
+   * agents in sorted-by-stable-id order (the order-independence witness), applies
+   * the "anything-to-decide?" guard, runs the pure 24-01 `decideTruck` / 24-02
+   * `decideHub` over each frozen observation, and routes each decision's Act through
+   * the EXISTING emit helpers (plus the new `TrailerDiverted`). The pass body lands
+   * in Task 3; this skeleton is the empty-but-self-rescheduling foundation so the
+   * OFF path is provably inert (byte-identical) before any agent logic is wired.
+   */
+  const stepAgents = (tick: number): void => {
+    if (!oodaAgentsEnabled) return; // never runs when off (the determinism keystone)
+
+    // === OBSERVE: build the FROZEN observation surface at pass ENTRY ===========
+    // PITFALLS Pitfall 4 (T-24-05): read the in-engine fold maps ONCE here, into a
+    // plain-data snapshot per agent. The Decide/Act loop below NEVER re-reads the
+    // fold maps — so a peer's same-tick Act can't couple another agent's decision
+    // to iteration order (the agent-order-shuffle test is the witness).
+
+    // Frozen per-hub inbound queue depth (center→spoke distribution manifest).
+    const queueDepthByHub = new Map<string, number>();
+    for (const [hubId, ids] of pendingBySpoke) queueDepthByHub.set(hubId, ids.length);
+    // Frozen per-hub pending-consolidation manifest size (spoke→center staging).
+    const consolidationDepthByHub = new Map<string, number>();
+    for (const [hubId, ids] of pendingAtSpoke) consolidationDepthByHub.set(hubId, ids.length);
+    // A hub's single dock is "busy" once its inbound queue reaches this depth — a
+    // deterministic integer proxy for dock occupancy (no live dock fold map). Tuned
+    // so a lightly-loaded hub proceeds and a congested one blocks (drives divert).
+    const DOCK_BUSY_QUEUE = 8;
+    const dockAvailableForHub = (hubId: string): boolean =>
+      (queueDepthByHub.get(hubId) ?? 0) < DOCK_BUSY_QUEUE;
+
+    /** Build a FROZEN truck observation from the fold maps (integers/strings only). */
+    const observeTruck = (entry: TrailerRosterEntry): AgentObservation => {
+      const trailerId = entry.trailerId;
+      const trip = activeTripByTrailer.get(trailerId);
+      const nextHubId = trip?.toHubId ?? null;
+      // HOS remaining (when HOS on): forward-labeled remaining legal drive minutes,
+      // rounded to a whole integer (Pitfall 2). When HOS is off there is no driver
+      // clock — a benign full-budget default so a non-HOS truck never falsely rests.
+      const driverId = driverByTrailer.get(trailerId);
+      const hosClock = driverId !== undefined ? clockByDriver.get(driverId) : undefined;
+      const nowMin = isoToEpochMinutes(clock.nowIso());
+      const remaining =
+        hosClock !== undefined
+          ? Math.max(
+              0,
+              Math.round(
+                mayDriveNow(hosClock, hosLimits, nowMin)
+                  ? remainingLegalDriveMinutes(hosClock, hosLimits, nowMin)
+                  : 0,
+              ),
+            )
+          : Number.MAX_SAFE_INTEGER;
+      const sinceBreak =
+        hosClock !== undefined ? Math.max(0, Math.round(hosClock.sinceLastBreakMin)) : 0;
+      const observedClock: AgentObservation["hosClock"] =
+        hosClock !== undefined
+          ? canonicalHosClock(hosClock)
+          : {
+              driveTodayMin: 0,
+              dutyWindowStartAt: clock.nowIso(),
+              sinceLastBreakMin: 0,
+              weeklyOnDutyMin: 0,
+              comeOnDutyAt: clock.nowIso(),
+              sleeperBerthLongMin: 0,
+              sleeperBerthShortMin: 0,
+            };
+      return {
+        kind: "truck",
+        stableId: trailerId,
+        tick,
+        tripId: trip?.tripId ?? null,
+        assignedCenterId: centerOf(entry.spoke.hubId).hubId,
+        currentLegKey:
+          trip !== undefined ? `${trip.fromHubId}->${trip.toHubId}` : null,
+        // Round the odometer to a whole integer at THIS boundary (Pitfall 2) — the
+        // miles are geometry-derived, so they never enter a hashed decision as a float.
+        odometerMiles: Math.round(odometerByTrailer.get(trailerId) ?? 0),
+        remainingLegalDriveMinutes: remaining,
+        minutesSinceLastBreak: sinceBreak,
+        hosClock: observedClock,
+        nextHubId,
+        nextHubQueueDepth: nextHubId !== null ? queueDepthByHub.get(nextHubId) ?? 0 : 0,
+        nextHubDockAvailable: nextHubId !== null ? dockAvailableForHub(nextHubId) : true,
+      };
+    };
+
+    /** Build a FROZEN hub observation from the fold maps (integers/strings only). */
+    const observeHub = (hub: Hub): HubObservation => {
+      const hubId = hub.hubId;
+      return {
+        kind: "hub",
+        stableId: hubId,
+        tick,
+        assignedCenterId: centerOf(hubId).hubId,
+        inboundQueueDepth: queueDepthByHub.get(hubId) ?? 0,
+        outboundQueueDepth: consolidationDepthByHub.get(hubId) ?? 0,
+        dockDoorsAvailable: dockAvailableForHub(hubId) ? 1 : 0,
+        trailerFillCount: consolidationDepthByHub.get(hubId) ?? 0,
+        pendingConsolidationCount: consolidationDepthByHub.get(hubId) ?? 0,
+      };
+    };
+
+    // Build the combined agent list. Trucks carry their roster entry (for the Act),
+    // hubs carry their Hub. The unified total order is sorted-by-stable-id across
+    // BOTH kinds (ARCHITECTURE §3): trailer ids (`T…`) and hub ids share one
+    // codepoint-ordered sort, so the per-pass emit `seq` order is a pure function of
+    // the stable ids — never Map/Set/array insertion order (T-24-07).
+    type TruckAgent = { readonly stableId: string; readonly entry: TrailerRosterEntry };
+    type HubAgent = { readonly stableId: string; readonly hub: Hub };
+    const truckAgents: TruckAgent[] = trailerRoster.map((entry) => ({
+      stableId: entry.trailerId,
+      entry,
+    }));
+    const hubAgents: HubAgent[] = spokes.map((hub) => ({ stableId: hub.hubId, hub }));
+    const agents = sortAgentsByStableId<
+      ({ readonly kind: "truck" } & TruckAgent) | ({ readonly kind: "hub" } & HubAgent)
+    >([
+      ...truckAgents.map((a) => ({ kind: "truck" as const, ...a })),
+      ...hubAgents.map((a) => ({ kind: "hub" as const, ...a })),
+    ]);
+
+    // === DECIDE + ACT (sorted iteration; anything-to-decide guard) =============
+    for (const agent of agents) {
+      if (agent.kind === "truck") {
+        const obs = observeTruck(agent.entry);
+        const trip = activeTripByTrailer.get(agent.stableId);
+        // "anything-to-decide?" guard (T-24-05): a truck only runs Decide/Act when
+        // its FROZEN observation shows a pending decision — a binding HOS/fuel
+        // trigger or a congested next hub. A mid-leg truck with nothing to choose
+        // (or no active trip) is SKIPPED (never a blanket per-tick sweep).
+        const hosTrigger =
+          obs.remainingLegalDriveMinutes <= 0 || obs.minutesSinceLastBreak >= 8 * 60;
+        const fuelTrigger = fuelOn && obs.odometerMiles >= fuelConfig.refuelThresholdMiles;
+        const divertTrigger = obs.nextHubId !== null && obs.nextHubQueueDepth > 50;
+        if (trip === undefined || (!hosTrigger && !fuelTrigger && !divertTrigger)) {
+          continue; // nothing to decide — skip (the guard short-circuit)
+        }
+        // Lazy per-agent substream — constructed ONLY here, on the on path, for an
+        // agent that actually decides (flag-off allocates nothing).
+        const rng = deriveAgentRng(seed, agent.stableId);
+        // BINDING LOCAL FEASIBILITY (OODA-03): hand the SHARED HOS limits + fuel
+        // threshold + the virtual-clock epoch-minute to the Decide so its first
+        // ladder step delegates to the domain HOS engine (`mayDriveNow`/
+        // `applyDrivingLeg`) — an infeasible proceed/divert is structurally
+        // unreachable. `now` is the frozen observation's virtual clock (DET-03:
+        // never `Date.now()`).
+        const decision = decideTruck(obs, rng, {
+          hosConfig: hosLimits,
+          // When fuel is OFF the refuel rule must never fire (no fuel events in a
+          // fuel-off run) — pass an unreachable threshold so `mustRefuel` stays
+          // false; when ON, pass the SAME `refuelThresholdMiles` the engine uses.
+          fuelConfig: {
+            refuelThresholdMiles: fuelOn
+              ? fuelConfig.refuelThresholdMiles
+              : Number.MAX_SAFE_INTEGER,
+          },
+          now: isoToEpochMinutes(clock.nowIso()),
+        });
+        // ACT: route each outcome through the EXISTING emit helpers (+ the new
+        // TrailerDiverted). proceed/hold are no-ops (no event).
+        switch (decision.kind) {
+          case "rest":
+            emitTruckRested(agent.stableId, trip.tripId, decision.reason, decision.durationMin);
+            break;
+          case "refuel":
+            // The agent owns the refuel under the flag: emit + reset the odometer
+            // (the centralized refuel in departTrailer is bypassed when on).
+            emitTruckRefueled(agent.stableId, trip.tripId, decision.odometerMiles);
+            odometerByTrailer.set(agent.stableId, 0);
+            break;
+          case "divert": {
+            const diverted: TrailerDiverted = {
+              type: "TrailerDiverted",
+              schemaVersion: 1,
+              // DET-03 (Pitfall 7): route the agent-decided payload through the ONE
+              // canonicalizer so its hashed key order is byte-stable regardless of
+              // how the literal is built or later refactored.
+              payload: canonicalizeOodaPayload({
+                trailerId: agent.stableId,
+                tripId: trip.tripId,
+                fromHubId: trip.fromHubId,
+                toHubId: decision.toHubId,
+                reason: decision.reason,
+                occurredAt: clock.nowIso(),
+              }),
+            };
+            emit(`trailer-${agent.stableId}`, diverted);
+            break;
+          }
+          case "proceed":
+          case "hold":
+            break; // no-op (no event)
+        }
+      } else {
+        const obs = observeHub(agent.hub);
+        // "anything-to-decide?" guard for hubs: skip a hub with empty inbound +
+        // outbound queues AND no pending consolidation (nothing to dispatch/hold/
+        // consolidate beyond the no-op default).
+        if (
+          obs.inboundQueueDepth === 0 &&
+          obs.outboundQueueDepth === 0 &&
+          obs.pendingConsolidationCount === 0
+        ) {
+          continue;
+        }
+        const rng = deriveAgentRng(seed, agent.stableId);
+        const decision = decideHub(obs, rng);
+        // ACT: dispatch/consolidate map to the existing consolidation departure; a
+        // hold is a no-op. For 24-02 the hub's binding Act is the consolidation
+        // dispatch it now owns (the centralized cadence is bypassed under the flag).
+        if (decision.kind === "consolidate" || decision.kind === "dispatch") {
+          dispatchHubConsolidation(agent.hub);
+        }
+      }
+    }
+
+    // Self-reschedule the NEXT pass at an ABSOLUTE tick (same discipline as
+    // inductPackage). `scheduleNext` RETAINS the task on the resumable path
+    // (captured into the continuation) or DROPS it past the horizon (finite path).
+    const nextTick = tick + OODA_INTERVAL_TICKS;
+    scheduleNext(nextTick, { kind: "stepAgents", tick: nextTick });
+  };
+
+  /**
    * OUT-01: the ONE-SHOT terminal delivery. Fired by a `deliverPackage` queue
    * task (scheduled at a DESTINATION-hub arrival after a seeded dwell >= 1 tick).
    * Emits `PackageDelivered` carrying the whole-minute-canonical `deliveredAt`
@@ -1615,6 +2004,18 @@ export function runToHorizon(
     };
     emit(`trailer-${trailerId}`, departed);
 
+    // Phase-24 OODA-01: record this trailer's ACTIVE trip context for the agent
+    // observation (the directed leg it is now driving). A single map write, ONLY
+    // when OODA is on, so the flag-off stream is byte-identical (no event, no
+    // ordering change). The `stepAgents` truck Observe reads this at pass entry.
+    if (oodaAgentsEnabled) {
+      activeTripByTrailer.set(trailerId, {
+        tripId,
+        fromHubId: spokeCenter.hubId,
+        toHubId: spoke.hubId,
+      });
+    }
+
     // Per-departure seeded log-normal transit (right-skewed; same seed ⇒ same).
     // TIME-01: the outbound leg is center→spoke, so transit is drawn from THAT
     // leg's geography-derived per-leg params (a long coast leg dwarfs a short one).
@@ -1670,17 +2071,27 @@ export function runToHorizon(
     // whether the trailer refuels on this leg (odometer crosses the threshold).
     // The leg miles are outbound center→spoke (matching `transitTicks`'s directed
     // leg). ZERO state when fuel is off (the odometer map is empty) ⇒ byte-identical.
+    //
+    // Phase-24 OODA BYPASS (T-24-06): under `oodaAgentsEnabled` the TRUCK AGENT owns
+    // the refuel decision in the `stepAgents` pass, so the centralized refuel here
+    // is bypassed (`!oodaAgentsEnabled`) to avoid double-deciding. The odometer is
+    // still accrued (the agent reads it as its binding-feasibility input, OODA-03),
+    // but the centralized refuel-on-this-leg + reset is the agent's job when on.
     let refuelTicks = 0;
     let refuelOdometer = 0;
     let didRefuel = false;
     if (fuelOn) {
       const accrued = (odometerByTrailer.get(trailerId) ?? 0) + legMilesFor(spokeCenter.hubId, spoke.hubId);
-      if (accrued >= fuelConfig.refuelThresholdMiles) {
+      if (!oodaAgentsEnabled && accrued >= fuelConfig.refuelThresholdMiles) {
+        // CENTRALIZED refuel decision (bypassed under OODA — the agent decides).
         didRefuel = true;
         refuelOdometer = accrued;
         odometerByTrailer.set(trailerId, 0);
         refuelTicks = Math.round(fuelConfig.refuelTimeMinutes);
       } else {
+        // Always accrue the odometer (the agent's binding-feasibility input under
+        // the flag; the no-refuel carry-forward otherwise). Under OODA the agent
+        // pass owns the threshold-crossing refuel + reset, so we never reset here.
         odometerByTrailer.set(trailerId, accrued);
       }
     }
@@ -1886,7 +2297,12 @@ export function runToHorizon(
     // trailers can NEVER take the same packages (the double-drain guard); a second
     // trailer at the same spoke sees an empty manifest and departs EMPTY (FLOW-03,
     // a valid, deterministic empty return — no silent/random empties).
-    if (consolidationOn) {
+    //
+    // Phase-24 OODA BYPASS (T-24-06): under `oodaAgentsEnabled` the HUB AGENT owns
+    // the consolidate decision in the `stepAgents` pass, so the centralized
+    // consolidation-cadence dispatch here is bypassed (`!oodaAgentsEnabled`) to
+    // avoid double-deciding.
+    if (consolidationOn && !oodaAgentsEnabled) {
       const atSpoke = pendingAtSpoke.get(spoke.hubId)!;
       // Deterministic sort key (priority + tick + freightId): the manifest is
       // filled in induction order; sorting by the unique, monotonic freightId
@@ -2147,6 +2563,11 @@ export function runToHorizon(
       case "inductPackage":
         inductPackage(task.tick);
         return;
+      case "stepAgents":
+        // Phase-24 OODA-01/02: the decentralized agent step pass. Self-reschedules
+        // its successor (off path returns immediately, scheduling nothing).
+        stepAgents(task.tick);
+        return;
       case "departTrailer":
         departTrailer(task.trailerId, hubById.get(task.spokeHubId)!, task.departTick);
         return;
@@ -2213,6 +2634,15 @@ export function runToHorizon(
       schedule(INDUCTION_START_TICK, {
         kind: "inductPackage",
         tick: INDUCTION_START_TICK,
+      });
+    }
+    // Phase-24 OODA-01/02: seed the first agent step pass (off by default). On a
+    // RESUME the pending stepAgents task is restored from the captured queue, so
+    // this is skipped — the self-rescheduling chain continues uninterrupted.
+    if (oodaAgentsEnabled) {
+      schedule(OODA_START_TICK, {
+        kind: "stepAgents",
+        tick: OODA_START_TICK,
       });
     }
   }
@@ -2284,6 +2714,18 @@ export function runToHorizon(
       deliveredCounter,
       slaDeadlineByPackage: [...slaDeadlineByPackage.entries()].map(
         ([k, v]) => [k, v] as const,
+      ),
+      // Phase-24 OODA-05 (continuation-equivalence): capture the per-trailer active
+      // trip context so a chunked/continued OODA-on run that crosses a boundary
+      // mid-leg restores the SAME trip the next `stepAgents` pass observes — the
+      // chunked OODA-on stream is then byte-identical to all-at-once (T-24-12). The
+      // map is EMPTY on the off path (only `departTrailer` under `oodaAgentsEnabled`
+      // writes it), so this is byte-identical to pre-Phase-24 when off. Each value
+      // is re-built with a FIXED key order (`tripId, fromHubId, toHubId`) so the
+      // serialized bytes are deterministic regardless of source insertion order.
+      activeTripByTrailer: [...activeTripByTrailer.entries()].map(
+        ([k, v]) =>
+          [k, { tripId: v.tripId, fromHubId: v.fromHubId, toHubId: v.toHubId }] as const,
       ),
     };
     return {

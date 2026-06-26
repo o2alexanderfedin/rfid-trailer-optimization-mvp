@@ -19,6 +19,7 @@ interface FakeSocket {
   bufferedAmount: number;
   sent: string[];
   send(data: string): void;
+  close(): void;
   on(event: string, cb: (...args: unknown[]) => void): void;
 }
 
@@ -29,6 +30,13 @@ function makeFakeSocket(): FakeSocket {
     sent: [],
     send(data: string) {
       this.sent.push(data);
+    },
+    close() {
+      // The snapshot channel calls socket.close() only on an initial-snapshot
+      // failure (the .catch path). A real ws/WebSocket has this; the fake must
+      // too, or a stray error surfaces as an unhandled "socket.close is not a
+      // function" rejection instead of the real cause.
+      this.readyState = 3; // CLOSED
     },
     on() {
       /* no-op: we never fire close/error/message in this test */
@@ -65,6 +73,12 @@ const EMPTY_SNAPSHOT: SnapshotPayload = {
 const FAKE_SPEED: SpeedController = {
   snapshot: () => ({ multiplier: 1, paused: false }),
   noteSimMs: () => undefined,
+  // VIZ-RESUME (9318ccc): the initial-snapshot/resync send path anchors the
+  // envelope at the live sim clock via `getLastSimMs()`. Before the first tick
+  // this is 0 (the legacy "snapshot at sim-start" behaviour). The mock MUST
+  // provide it or the .then() throws, the snapshot is never sent, and the
+  // Pitfall-7 precondition (`socket.sent.length > 0`) fails.
+  getLastSimMs: () => 0,
 } as unknown as SpeedController;
 
 const INDUCTION: InductionEvent = {

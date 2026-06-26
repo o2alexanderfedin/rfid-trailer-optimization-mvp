@@ -80,6 +80,7 @@ export type {
   PackageInducted,
   PlanSuperseded,
   PackageDelivered,
+  TrailerDiverted,
 } from "./events/index.js";
 export {
   assertNever,
@@ -111,6 +112,7 @@ export {
   packageInductedSchema,
   planSupersededSchema,
   packageDeliveredSchema,
+  trailerDivertedSchema,
 } from "./events/index.js";
 
 // --- Shared FUEL contract (SP2 §4 — sim odometer + optimizer fuel-awareness) --

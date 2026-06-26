@@ -64,3 +64,25 @@ export { emitRfidReads, resolveRfidConfig, DEFAULT_RFID_CONFIG } from "./rfid.js
 // --- SIM-04: deterministic scenario-injection model -------------------------
 export type { ScenarioKnobs } from "./scenario.js";
 export { applyScenario } from "./scenario.js";
+
+// --- Phase-24 OODA decision core (OODA-01/04, DET-03) -----------------------
+// The PURE, synchronous OODA primitives the engine wiring (plan 24-02) builds
+// against: per-agent seeded substreams, sorted-by-stable-id iteration, the frozen
+// truck observation, and the pure truck Decide. No engine state / async / clock.
+export {
+  deriveAgentRng,
+  OODA_RNG_SALT,
+  stableAgentHash,
+  sortAgentsByStableId,
+  decideTruck,
+} from "./ooda/index.js";
+export type {
+  Agent,
+  AgentKind,
+  AgentObservation,
+  ObservedHosClock,
+  TruckDecision,
+  DivertReason,
+  HoldReason,
+  RestReason,
+} from "./ooda/index.js";
