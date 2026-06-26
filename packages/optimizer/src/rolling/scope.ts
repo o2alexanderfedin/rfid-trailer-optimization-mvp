@@ -75,6 +75,15 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "TruckRefueled":
     case "PackageDelivered":
     case "TrailerDiverted":
+    // Phase-25 COORD-02/Pitfall-11: the three advisory coordination events are
+    // SCOPE-NEUTRAL — they must NOT re-trigger the suggesting coordinator (nor
+    // the rolling optimizer), exactly mirroring PlanGenerated/PlanAccepted/
+    // PlanSuperseded. Returning [] means a suggestion/accept/reject never adds a
+    // hub to the affected scope, so an unchanged scope re-emits nothing — the
+    // anti-feedback-storm guarantee the whole phase depends on.
+    case "ActionSuggested":
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       // SP2 stop events (TruckRested/TruckRefueled) are SCOPE-NEUTRAL — a
       // rest/refuel never re-scopes the optimizer, so an absent-fuelConfig epoch
       // stays byte-identical to the pre-SP2 result.

@@ -115,6 +115,10 @@ export function driverAssignmentReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery is package-only, not a driver concern
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route does not change driver assignment
+    // Phase-25 COORD-02: advisory suggestion events do not change driver assignment.
+    case "ActionSuggested":
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return state;
     default:
       return assertNeverEvent(event);

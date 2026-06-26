@@ -447,6 +447,10 @@ function affectedHubInventory(
     case "TruckRested":
     case "TruckRefueled":
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route leaves hub inventory untouched here
+    // Phase-25 COORD-02: advisory suggestion events touch no hub_inventory row.
+    case "ActionSuggested":
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return { hubIds: [], packageIds: [] };
     default: {
       const _never: never = event;

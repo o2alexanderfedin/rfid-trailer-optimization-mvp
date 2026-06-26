@@ -246,6 +246,10 @@ export function hubInventoryReducer(
     case "TruckRested":
     case "TruckRefueled":
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route does not move staged inventory (no-op until 24-02 wires it)
+    // Phase-25 COORD-02: advisory suggestion events do not move staged inventory.
+    case "ActionSuggested":
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return state;
     default:
       return assertNeverEvent(event);

@@ -50,6 +50,10 @@ function assertExhaustive(event: DomainEvent): void {
     case "PlanSuperseded":
     case "PackageDelivered":
     case "TrailerDiverted":
+    // Phase-25 advisory coordination events (COORD-02).
+    case "ActionSuggested":
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return;
     default:
       assertNever(event);

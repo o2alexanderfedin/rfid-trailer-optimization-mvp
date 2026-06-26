@@ -220,6 +220,11 @@ export function auditTimelineReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery is not an audit-timeline entry
     case "TrailerDiverted": // Phase-24 OODA-01: no timeline row in this plan (24-02 may surface diverts)
+    // Phase-25 COORD-02: advisory suggestion events add no timeline row here
+    // (the visible reject-with-reason surfacing lands in Plan 03 / COORD-03).
+    case "ActionSuggested":
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return null;
     default:
       return assertNeverAudit(event);
