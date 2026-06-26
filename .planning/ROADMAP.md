@@ -107,7 +107,12 @@ Plans:
   3. **Agent-order independence:** each per-tick agent pass iterates a sorted-by-stable-id array drawing from a stable-id-derived seeded substream over a frozen per-tick observation surface (no mid-tick read-your-writes) — shuffling the per-tick agent set produces a byte-identical event batch, and N agents yield N decorrelated streams (no two share their first K draws; renaming/reordering agents does not change the golden)
   4. **Continuation-equivalence:** agent state serializes into `SerializedWorldState` so a chunked/continued run is byte-identical to an uninterrupted run
   5. **Determinism gate (DET-03):** no `Date.now()` / `Math.random()` / `async-queue` appears in the OODA decision core (a CI/ESLint static guard fails on a violation); all hashed payloads go through `canonicalize`; with `oodaAgentsEnabled` absent (and `:false`) the seed-42 10k golden stays byte-identical to `3920accc…`, and the OODA-on model captures its own new golden
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 24-01-PLAN.md — OODA scaffolding (per-agent substream, sorted-id, frozen observation) + pure truck Decide + new TrailerDiverted event (OODA-01, OODA-04, DET-03)
+- [ ] 24-02-PLAN.md — stepAgents SimTask wiring (dispatch case, bootstrap self-reschedule, oodaAgentsEnabled flag, decision bypass) + hub Decide (OODA-01, OODA-02, OODA-04)
+- [ ] 24-03-PLAN.md — Agent-owned binding local feasibility reusing the HOS/fuel/dock logic; infeasible outcomes unreachable (OODA-03)
+- [ ] 24-04-PLAN.md — Agent state in SerializedWorldState + order-shuffle/decorrelation goldens + DET-03 ESLint guard + two-part flags-off gate + new OODA-on golden (OODA-04, OODA-05, DET-03)
 **UI hint**: yes
 
 ### Phase 25: Coordination Centers
