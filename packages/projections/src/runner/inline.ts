@@ -390,7 +390,12 @@ async function applyDriverAssignment(
   }
 }
 
-async function applyHubInventory(
+/**
+ * Exported for the PERF-01 cost test (`hub-inventory-cost.unit.test.ts`), which
+ * folds this applier against a counting in-memory db to witness that per-event
+ * row reads are independent of hub count. Not part of the public twin API.
+ */
+export async function applyHubInventory(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
