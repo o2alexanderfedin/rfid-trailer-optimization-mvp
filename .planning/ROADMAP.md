@@ -91,7 +91,7 @@
 **Plans**: 5 plans
 Plans:
 - [x] 23-01-PLAN.md — Big-city hub dataset generator + committed checksummed us-big-cities.generated.json (HUB-01/02/03)
-- [ ] 23-02-PLAN.md — Key-scope applyHubInventory + per-event projection-cost test (PERF-01, P1-BLOCKING)
+- [x] 23-02-PLAN.md — Key-scope applyHubInventory + per-event projection-cost test (PERF-01, P1-BLOCKING)
 - [ ] 23-03-PLAN.md — Pure multi-center topology fns (centers, nearest-assign, backbone, anti-SPOF) + GeoNames attribution (HUB-04, NET-02/03/04)
 - [ ] 23-04-PLAN.md — Multi-center buildRoutes + centerOf engine flow + per-center scope partition behind continentalTopology flag (NET-01, NET-05)
 - [ ] 23-05-PLAN.md — Empirical center-count decision + flags-off two-part gate + new continental golden + drift guard (HUB-01, NET-02, DET-01)
@@ -160,7 +160,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 23. Multi-Center Topology | 1/5 | In Progress|  |
+| 23. Multi-Center Topology | 2/5 | In Progress|  |
 | 24. OODA Step-Agents | 0/TBD | Not started | - |
 | 25. Coordination Centers | 0/TBD | Not started | - |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
