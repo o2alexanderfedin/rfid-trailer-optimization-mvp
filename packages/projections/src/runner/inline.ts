@@ -942,20 +942,57 @@ export async function applyTrailerFuel(
     .where("trailer_id", "=", trailerId)
     .execute();
 
-  // Load ALL route geometry + inflight entries (small, bounded by entity count)
-  const [routeRows, inflightRows] = await Promise.all([
-    db.selectFrom("geo_route").selectAll().execute(),
-    db.selectFrom("geo_inflight_trip").selectAll().execute(),
-  ]);
+  // WR-01: key-scoped route + inflight loads — O(1) per event, independent of
+  // network size. The reducer only needs:
+  //   TrailerDeparted   : no route geometry (just records inflight entry); load
+  //                       ONLY this trip's geo_inflight_trip row (0 rows expected
+  //                       on depart — idempotent; we still need to build the
+  //                       inflight map for the reducer fold).
+  //   TrailerArrivedAtHub: the inflight row for THIS trip → its leg key → THAT
+  //                       one geo_route row. Loading all routes was O(network
+  //                       edges) per event; now it is O(1).
+  // Build the inflight map from the specific trip's row only (for depart: 0 rows
+  // before write; for arrive: the 1 row written at depart time).
+  const event = replay.event;
+  const tripId =
+    event.type === "TrailerDeparted"
+      ? event.payload.tripId
+      : event.type === "TrailerArrivedAtHub"
+        ? event.payload.tripId
+        : undefined;
 
-  // Rebuild the reducer's internal state from persisted tables
-  const routes = new Map<string, readonly [number, number][]>();
-  for (const r of routeRows) {
-    routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
-  }
+  const inflightRows =
+    tripId !== undefined
+      ? await db
+          .selectFrom("geo_inflight_trip")
+          .selectAll()
+          .where("trip_id", "=", tripId)
+          .execute()
+      : [];
+
   const inflight = new Map<string, string>();
   for (const r of inflightRows) {
     inflight.set(r.trip_id, legKey(r.from_hub_id, r.to_hub_id));
+  }
+
+  // For TrailerArrivedAtHub, resolve ONLY the single route row for this trip's leg.
+  // The inflight row already carries from_hub_id + to_hub_id — use them directly
+  // (no string-split; avoids any dependency on legKey's separator convention).
+  // For TrailerDeparted, no route geometry is needed (reducer just sets inflight).
+  const routes = new Map<string, readonly [number, number][]>();
+  if (event.type === "TrailerArrivedAtHub" && tripId !== undefined) {
+    const inflightRow = inflightRows[0]; // at most one row per trip_id (PK)
+    if (inflightRow !== undefined) {
+      const routeRows = await db
+        .selectFrom("geo_route")
+        .selectAll()
+        .where("from_hub_id", "=", inflightRow.from_hub_id)
+        .where("to_hub_id", "=", inflightRow.to_hub_id)
+        .execute();
+      for (const r of routeRows) {
+        routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
+      }
+    }
   }
 
   // Build the per-trailer partial state (just this trailer's fuel row)

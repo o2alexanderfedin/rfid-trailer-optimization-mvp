@@ -163,9 +163,17 @@ export function makeWorkerOptimizer(): WorkerOptimizer {
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
+      // CR-02: close the queue FIRST (wakes any blocked enqueue callers; they
+      // check `closed` and throw, then their `.catch()` removes the entry from
+      // `pending` and rejects the caller's Promise). THEN await termination so
+      // any in-flight replies drain. THEN rejectAll for entries that survived
+      // (i.e. requests already dequeued + postMessage'd but not yet replied).
+      // This ordering is unambiguous: a given `pending` entry is rejected by
+      // exactly ONE path — either the enqueue `.catch()` (queue-full/close path)
+      // OR rejectAll (post-send/no-reply path) — never both.
       requestQueue.close(); // stop accepting new requests; wake blocked enqueuers
-      rejectAll(new Error("optimizer worker is closing"));
       await worker.terminate();
+      rejectAll(new Error("optimizer worker is closing"));
     },
   };
 }

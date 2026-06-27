@@ -224,4 +224,89 @@ describe("GOLDEN REPLAY: live twin == rebuilt-from-log twin, byte-identical (FND
     const b = serializeTwin(await readOperationalTwin(proj));
     expect(b).toBe(a);
   });
+
+  /**
+   * CR-01 regression guard: rebuild over a DB that already has STALE rows in
+   * geo_route + geo_inflight_trip (rows from a prior live run that were NOT
+   * truncated by the old `rebuildProjections`). The fix adds both tables to the
+   * TRUNCATE statement. This test pre-seeds the stale rows, then rebuilds, then
+   * asserts the rebuilt twin is BYTE-IDENTICAL to the clean fold — which would
+   * fail if stale geo rows survived the rebuild (wrong-leg mileage / phantom
+   * inflight entries corrupt the fuel reducer).
+   */
+  it("CR-01: rebuild truncates geo_route + geo_inflight_trip (stale-rows regression)", async () => {
+    const proj = projectionView(fx.db);
+
+    // Capture the reference twin from a clean rebuild (the prior tests left a
+    // known-good DB state).
+    await rebuildProjections(proj, replayReadAll);
+    const reference = serializeTwin(await readOperationalTwin(proj));
+
+    // Inject STALE rows into geo_route and geo_inflight_trip — rows that would
+    // NOT exist if this DB had only been rebuilt from the current log.
+    await proj
+      .insertInto("geo_route")
+      .values({
+        from_hub_id: "STALE-HUB-X",
+        to_hub_id: "STALE-HUB-Y",
+        geometry: JSON.stringify([[0, 0], [1, 1]]),
+      })
+      .onConflict((oc) =>
+        oc.columns(["from_hub_id", "to_hub_id"]).doUpdateSet({
+          geometry: JSON.stringify([[0, 0], [1, 1]]),
+        }),
+      )
+      .execute();
+    await proj
+      .insertInto("geo_inflight_trip")
+      .values({
+        trip_id: "STALE-TRIP-999",
+        from_hub_id: "STALE-HUB-X",
+        to_hub_id: "STALE-HUB-Y",
+        depart_at: "2020-01-01T00:00:00.000Z",
+      })
+      .onConflict((oc) =>
+        oc.column("trip_id").doUpdateSet({
+          from_hub_id: "STALE-HUB-X",
+          to_hub_id: "STALE-HUB-Y",
+          depart_at: "2020-01-01T00:00:00.000Z",
+        }),
+      )
+      .execute();
+
+    // Verify the stale rows are present before the rebuild.
+    const staleGeoRoute = await proj
+      .selectFrom("geo_route")
+      .selectAll()
+      .where("from_hub_id", "=", "STALE-HUB-X")
+      .execute();
+    expect(staleGeoRoute).toHaveLength(1);
+    const staleInflight = await proj
+      .selectFrom("geo_inflight_trip")
+      .selectAll()
+      .where("trip_id", "=", "STALE-TRIP-999")
+      .execute();
+    expect(staleInflight).toHaveLength(1);
+
+    // Rebuild — must TRUNCATE geo_route + geo_inflight_trip before replay.
+    await rebuildProjections(proj, replayReadAll);
+
+    // Stale geo rows must be gone.
+    const afterGeoRoute = await proj
+      .selectFrom("geo_route")
+      .selectAll()
+      .where("from_hub_id", "=", "STALE-HUB-X")
+      .execute();
+    expect(afterGeoRoute).toHaveLength(0);
+    const afterInflight = await proj
+      .selectFrom("geo_inflight_trip")
+      .selectAll()
+      .where("trip_id", "=", "STALE-TRIP-999")
+      .execute();
+    expect(afterInflight).toHaveLength(0);
+
+    // The rebuilt twin must be byte-identical to the clean reference.
+    const afterTwin = serializeTwin(await readOperationalTwin(proj));
+    expect(afterTwin).toBe(reference);
+  });
 });
