@@ -189,19 +189,21 @@ import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
 // Helpers / fixtures
 // ---------------------------------------------------------------------------
 
-function hub(hubId: string, lon: number, lat: number, name = hubId): HubDto {
-  return { hubId, name, lon, lat };
+function hub(hubId: string, lon: number, lat: number, name = hubId, kind: HubDto["kind"] = "spoke"): HubDto {
+  return { hubId, name, lon, lat, kind, tier: kind === "center" ? 1 : 2 };
 }
 
 function route(
   routeId: string,
   geometry: ReadonlyArray<readonly [number, number]>,
+  isBackbone = false,
 ): RouteDto {
   return {
     routeId,
     fromHubId: "A",
     toHubId: "B",
     geometry: geometry as RouteDto["geometry"],
+    isBackbone,
   };
 }
 

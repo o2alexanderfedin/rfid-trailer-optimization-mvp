@@ -11,7 +11,14 @@
  */
 
 // --- SIM-01: network --------------------------------------------------------
-export { USA_HUBS, MEMPHIS, hubRegisteredEvent } from "./network/hubs.js";
+export { USA_HUBS, MEMPHIS, hubRegisteredEvent, generateBigCityHubs } from "./network/hubs.js";
+export {
+  pickRegionalCenters,
+  buildBackbone,
+  deriveCenterPartition,
+  DEFAULT_CENTER_COUNT,
+} from "./network/centers.js";
+export type { CenterPartition, BackboneLeg } from "./network/centers.js";
 export {
   buildRoutes,
   greatCircle,
