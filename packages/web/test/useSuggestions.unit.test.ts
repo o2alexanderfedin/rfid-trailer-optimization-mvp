@@ -35,14 +35,14 @@ function makeSuggestion(
 function makeEntry(
   overrides: Partial<SuggestionFeedEntry> & { suggestionId: string; simMs: number },
 ): SuggestionFeedEntry {
-  return {
+  const base: SuggestionFeedEntry = {
     kind: "reroute",
     outcome: "accepted",
     entityId: "trailer-42",
     toHubId: "hub-bos",
-    reasonCode: undefined,
     ...overrides,
   };
+  return base;
 }
 
 // ---------------------------------------------------------------------------

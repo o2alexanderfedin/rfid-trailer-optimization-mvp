@@ -27,7 +27,15 @@ function inducted(packageId: string, slaDeadlineIso: string): OccurredEvent {
     event: {
       type: "PackageInducted",
       schemaVersion: 1,
-      payload: { packageId, inductionHubId: "HUB-MEM", slaDeadlineIso },
+      payload: {
+        packageId,
+        inductionHubId: "HUB-MEM",
+        destHubId: "HUB-LAX",
+        slaClass: "standard",
+        slaDeadlineIso,
+        externalOriginRef: `EXT-${packageId}`,
+        occurredAt: at(0),
+      },
     },
     occurredAt: at(0),
   };

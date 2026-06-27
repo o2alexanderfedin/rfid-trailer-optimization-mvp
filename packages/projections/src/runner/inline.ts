@@ -885,7 +885,7 @@ function affectedTrailerFuelId(event: DomainEvent): string | null {
     case "TrailerDeparted":
       return event.payload.trailerId; // no fuel row written, but inflight updated
     case "RouteRegistered":
-      return null; // geo_route is already persisted by catch-up; no-op here
+      return null; // geo_route is written directly in applyTrailerFuel below
     default:
       return null;
   }
@@ -910,6 +910,28 @@ export async function applyTrailerFuel(
   db: Kysely<ProjectionDb>,
   replay: ReplayEvent,
 ): Promise<void> {
+  // RouteRegistered: persist the route geometry into geo_route so that a
+  // subsequent TrailerArrivedAtHub can compute leg miles without depending on
+  // the catch-up runner. This mirrors what runGeoTrack (catchup.ts) does and
+  // makes the inline path self-contained for the golden-replay test (FND-04).
+  if (replay.event.type === "RouteRegistered") {
+    const p = replay.event.payload;
+    await db
+      .insertInto("geo_route")
+      .values({
+        from_hub_id: p.fromHubId,
+        to_hub_id: p.toHubId,
+        geometry: JSON.stringify(p.geometry),
+      })
+      .onConflict((oc) =>
+        oc
+          .columns(["from_hub_id", "to_hub_id"])
+          .doUpdateSet({ geometry: JSON.stringify(p.geometry) }),
+      )
+      .execute();
+    return;
+  }
+
   const trailerId = affectedTrailerFuelId(replay.event);
   if (trailerId === null) return; // no-op event
 

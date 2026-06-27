@@ -112,7 +112,7 @@ export function MapView({
   // VIZ-17: the transient advisory-suggestion flash layer source + layer ref for
   // toggle visibility without recreating the map.
   const suggestionSourceRef = useRef<VectorSource | null>(null);
-  const suggestionLayerRef = useRef<import("ol/layer/Vector.js").default | null>(null);
+  const suggestionLayerRef = useRef<VectorLayer | null>(null);
 
   /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
   const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
@@ -321,7 +321,7 @@ export function MapView({
         // Centers (tier 1) are inserted ABOVE the spoke cluster so they are always
         // visible and never obscured by cluster bubbles.
         map.getLayers().insertAt(1, routeLayer.layer);
-        map.getLayers().insertAt(2, hubLayers.spokeLayer as unknown as VectorLayer);
+        map.getLayers().insertAt(2, hubLayers.spokeLayer);
         map.getLayers().insertAt(3, hubLayers.centerLayer);
         setAttr("data-hub-count", hubLayers.source.getFeatures().length);
         setAttr("data-route-count", routeLayer.source.getFeatures().length);

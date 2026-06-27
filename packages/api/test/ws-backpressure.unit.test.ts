@@ -16,7 +16,7 @@
  * injected `send(frame)` callback (the socket.send stand-in).
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 // Dynamic import so the test compiles before the export exists (RED phase).
 // The real module export is verified in the beforeAll.
@@ -51,8 +51,9 @@ describe("ws backpressure — per-client bounded AsyncQueue<string> (PERF-03)", 
     const received: string[] = [];
 
     // send is fast (no artificial delay) — we only care about order.
-    const handle = createClientQueue(async (frame) => {
+    const handle = createClientQueue((frame) => {
       received.push(frame);
+      return Promise.resolve();
     }, /* maxSize */ 4);
 
     const N = 50;
@@ -111,8 +112,9 @@ describe("ws backpressure — per-client bounded AsyncQueue<string> (PERF-03)", 
     }, /* maxSize */ 10);
 
     // Fast client: instant sends.
-    const fastHandle = createClientQueue(async (frame) => {
+    const fastHandle = createClientQueue((frame) => {
       fastReceived.push(frame);
+      return Promise.resolve();
     }, /* maxSize */ 10);
 
     const N = 6;

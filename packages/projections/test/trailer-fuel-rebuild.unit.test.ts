@@ -114,7 +114,7 @@ function makeFakeDb(options: {
     let whereId: string | null = null;
     const builder: Record<string, unknown> = {
       selectAll() { return builder; },
-      where(col: string, _op: string, val: unknown) {
+      where(_col: string, _op: string, val: unknown) {
         if (typeof val === "string") whereId = val;
         return builder;
       },
@@ -218,7 +218,7 @@ function fullFold(
   let state: TrailerFuelState = {
     ...emptyTrailerFuelState,
     routes: new Map(
-      initialGeoRouteRows.map((r) => [legKey(r.from_hub_id, r.to_hub_id), r.geometry as [number, number][]]),
+      initialGeoRouteRows.map((r) => [legKey(r.from_hub_id, r.to_hub_id), r.geometry]),
     ),
     inflight: new Map(),
   };

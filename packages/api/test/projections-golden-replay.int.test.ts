@@ -112,7 +112,15 @@ function pkgInducted(packageId: string, inductionHubId: string, slaDeadlineIso: 
   return {
     type: "PackageInducted",
     schemaVersion: 1,
-    payload: { packageId, inductionHubId, slaDeadlineIso },
+    payload: {
+      packageId,
+      inductionHubId,
+      destHubId: "HUB-LAX",
+      slaClass: "standard",
+      slaDeadlineIso,
+      externalOriginRef: `EXT-${packageId}`,
+      occurredAt: "2026-08-01T00:00:00.000Z",
+    },
   };
 }
 

@@ -7,7 +7,6 @@ import { simulate, type SimulatedEvent } from "@mm/simulation";
 import { type DomainEvent, type FuelConfig } from "@mm/domain";
 import {
   buildTwinSnapshot,
-  type SnapshotDb,
 } from "../src/optimizer/twin-snapshot.js";
 import {
   eventStoreView,
@@ -173,7 +172,7 @@ function sanitizeEvent(ev: DomainEvent): DomainEvent {
     const { hubId, name, lat, lon } = ev.payload;
     return {
       ...ev,
-      payload: { hubId, name, lat, lon } as typeof ev.payload,
+      payload: { hubId, name, lat, lon },
     };
   }
   return ev;
@@ -280,7 +279,7 @@ describe("PERF-04 sustained continental run: flat per-epoch cost + no throughput
         await appendTick(fx.db, tick);
         await foldNewEvents(fx.db, cursor);
         const snapshotT0 = performance.now();
-        await buildTwinSnapshot(fx.db as unknown as SnapshotDb);
+        await buildTwinSnapshot(fx.db);
         earlySnapshotMs.push(performance.now() - snapshotT0);
         earlyTickMs.push(performance.now() - t0);
       }
@@ -307,7 +306,7 @@ describe("PERF-04 sustained continental run: flat per-epoch cost + no throughput
         await appendTick(fx.db, tick);
         await foldNewEvents(fx.db, cursor);
         const snapshotT0 = performance.now();
-        await buildTwinSnapshot(fx.db as unknown as SnapshotDb);
+        await buildTwinSnapshot(fx.db);
         lateSnapshotMs.push(performance.now() - snapshotT0);
         lateTickMs.push(performance.now() - t0);
       }
