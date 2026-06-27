@@ -9,6 +9,7 @@ import {
   type BackboneLeg,
   type RouteTopology,
 } from "../src/network/routes.js";
+import { FLAGS_OFF_GOLDEN_SHA256, CONTINENTAL_GOLDEN_SHA256 } from "./goldens.js";
 
 /**
  * DET-01 (continental, plan 23-05) — THE NEW CONTINENTAL GOLDEN.
@@ -70,12 +71,9 @@ function hashArtifact(): string {
   return createHash("sha256").update(JSON.stringify(continentalArtifact())).digest("hex");
 }
 
-// Captured from continentalArtifact() over the fixed 14-hub fixture (centerCount=4)
-// on x86_64 (darwin), node v23 — the TRUE hash of the continental model's small-
-// fixture topology. Same-seed reproducibility is asserted BELOW before this golden
-// is checked, so a non-reproducible hash can never have been baked in (T-23-12).
-const CONTINENTAL_GOLDEN_SHA256 =
-  "8f91b13f06e8481b5d80f0beb3c36b9307abad21242bdc1696b8769175db6644";
+// See goldens.ts for CONTINENTAL_GOLDEN_SHA256 — captured from continentalArtifact()
+// over the fixed 14-hub fixture (centerCount=4) on x86_64 darwin, node v23.
+// Same-seed reproducibility is asserted BELOW before the golden is checked (T-23-12).
 
 describe("continental model golden (DET-01, small fixture)", () => {
   it("the fixture is inside the 12-20-hub fast-hash envelope", () => {
@@ -94,9 +92,7 @@ describe("continental model golden (DET-01, small fixture)", () => {
   });
 
   it("the continental model genuinely differs from the legacy single-center golden", () => {
-    expect(CONTINENTAL_GOLDEN_SHA256).not.toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
-    );
+    expect(CONTINENTAL_GOLDEN_SHA256).not.toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   it("the fixture topology never collapses to a single primary (centerCount >= 2, anti-SPOF)", () => {

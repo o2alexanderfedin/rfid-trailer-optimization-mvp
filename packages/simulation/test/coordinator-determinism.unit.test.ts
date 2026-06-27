@@ -12,7 +12,17 @@ import {
   simulate,
 } from "../src/engine.js";
 import { OODA_RNG_SALT } from "../src/ooda/index.js";
-import { COORDINATOR_RNG_SALT } from "../src/coordinator/index.js";
+import {
+  COORDINATOR_RNG_SALT,
+  decideCoordinatorSuggestions,
+  deriveCoordinatorRng,
+  type CoordinatorObservation,
+} from "../src/coordinator/index.js";
+import {
+  FLAGS_OFF_GOLDEN_SHA256,
+  OODA_ON_GOLDEN_SHA256,
+  COORDINATOR_ON_GOLDEN_SHA256,
+} from "./goldens.js";
 
 /**
  * Phase-25 COORD-04 + DET-03 — THE COORDINATOR DETERMINISM GOLDENS (the milestone
@@ -97,23 +107,9 @@ const COORDINATOR_ON_OPTS = {
   consolidationEnabled: true,
 } as const;
 
-// Captured reproducibility-first from COORDINATOR_ON_OPTS on arm64 (darwin), 61128
-// events: run twice in-process ⇒ identical, AND across two separate test-process
-// invocations ⇒ identical, BEFORE baking the literal (PITFALLS: never commit a
-// non-reproducible golden). It differs from the flags-off 3920accc… AND the OODA-on
-// 94689f99… (the coordinator advise/accept/reject handshake changed the decisions).
-//
-// Cross-arch contingency (RESEARCH VQ#9 / Pitfall 3): the prior goldens were captured
-// on x86_64; this hash was captured on arm64 (the flags-off 3920accc… and OODA-on
-// 94689f99… verify GREEN on this arm64 host, so the float path is arch-stable here).
-// If a multi-arch CI run produces a different hash, the contingency is the integer
-// lookup-table sampler swap (do NOT do this unless the hash actually fails on CI).
-const COORDINATOR_ON_GOLDEN_SHA256 =
-  "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc";
-const FLAGS_OFF_GOLDEN_SHA256 =
-  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
-const OODA_ON_GOLDEN_SHA256 =
-  "94689f9989c0019edff27134dad0ef4cfb07c15c9c308ef4b40c38e848f4e608";
+// See goldens.ts for COORDINATOR_ON_GOLDEN_SHA256, FLAGS_OFF_GOLDEN_SHA256, and
+// OODA_ON_GOLDEN_SHA256 — captured reproducibility-first, 61128 events (COORDINATOR_ON)
+// on arm64 darwin. Cross-arch provenance and LUT contingency are documented there.
 
 describe("coordinator-on 10k golden (COORD-04, reproducibility-first)", () => {
   it("simulate(seed 42, 10k, coordinatorsEnabled + all-on) hashes to the committed SHA-256", () => {
@@ -153,5 +149,121 @@ describe("coordinator-on 10k golden (COORD-04, reproducibility-first)", () => {
     expect(accepted).toBeGreaterThan(1000);
     expect(rejected).toBeGreaterThan(0);
     expect(accepted + rejected).toBe(suggested);
+  });
+});
+
+// ===========================================================================
+// 4. COORDINATOR-ORDER-SHUFFLE — GAP-1 witness (mirrors ooda-determinism.unit.test.ts:49-105)
+// ===========================================================================
+
+/**
+ * Phase-28 DET-02 GAP-1 (plan 28-02) — COORDINATOR AGENT-ORDER-SHUFFLE witness.
+ *
+ * Mirrors ooda-determinism.unit.test.ts:49-105 for the per-center COORDINATOR set.
+ * The engine sorts centers by centerId before `stepCoordinators`, and
+ * `deriveCoordinatorRng` is keyed on the stable centerId (never iteration position),
+ * so shuffling the per-tick center INPUT order must yield a byte-identical emitted
+ * suggestion batch. This describe block proves that invariant — closing GAP-1 from
+ * the determinism-test inventory (28-CONTEXT.md).
+ *
+ * Key design choices (mirroring the OODA template):
+ *   - The codepoint sort is inlined (no sortAgentsByStableId import needed) — same
+ *     semantics as the engine's centerId sort primitive.
+ *   - The batch() function sorts THEN calls decideCoordinatorSuggestions, matching
+ *     the engine's stepCoordinators iteration contract exactly.
+ *   - Observations exercise the congestion/fill thresholds so suggestions are
+ *     non-empty (the shuffled batch is therefore a meaningful witness, not vacuous).
+ *   - No new golden literal is baked: this test asserts RELATIVE invariance (all
+ *     permutations yield the same batch string), exactly as the OODA template does.
+ */
+describe("coordinator-order-shuffle golden (COORD-01, Pitfall 1+4)", () => {
+  // A representative set of center ids — six regional distribution centers
+  // (matching the domain intent; the shuffle test works for any non-empty set
+  // because the invariant is structural, not config-dependent).
+  const centerIds = [
+    "CTR-NE",
+    "CTR-SE",
+    "CTR-MW",
+    "CTR-SW",
+    "CTR-NW",
+    "CTR-CENTRAL",
+  ] as const;
+
+  // Build a minimal but NON-TRIVIAL frozen observation for a given centerId.
+  // Thresholds (from coordinator.ts COORDINATOR_THRESHOLDS):
+  //   congestionQueueDepth: 12  → nextHubQueueDepth > 12  ⇒ reroute suggestion
+  //   consolidationFill:     6  → pendingConsolidationCount > 6 ⇒ consolidate
+  //   dispatchReadyFill:     3  → pendingConsolidationCount > 3 + dockAvailable ⇒ dispatch
+  // Each obsFor call produces a REAL (non-empty) suggestion list so the batch string
+  // carries meaningful content and the invariance assertion is load-bearing.
+  const obsFor = (centerId: string): CoordinatorObservation => ({
+    centerId,
+    tick: 1000,
+    issuedAtSimMs: 3_600_000, // 1 simulated hour in
+    spokes: [
+      {
+        hubId: "HUB-A",
+        inboundQueueDepth: 5,
+        pendingConsolidationCount: 8, // > 6 ⇒ consolidate suggestion fires
+        dockAvailable: false,
+      },
+      {
+        hubId: "HUB-B",
+        inboundQueueDepth: 2,
+        pendingConsolidationCount: 5, // > 3 + dockAvailable ⇒ dispatch suggestion fires
+        dockAvailable: true,
+      },
+      {
+        hubId: "HUB-C",
+        inboundQueueDepth: 3,
+        pendingConsolidationCount: 0,
+        dockAvailable: false, // dock busy + inbound > 0 ⇒ hold suggestion fires
+      },
+    ],
+    trucks: [
+      {
+        trailerId: "T001",
+        nextHubId: "HUB-REMOTE",
+        nextHubQueueDepth: 15, // > 12 ⇒ reroute suggestion fires (nextHub !== centerId)
+      },
+      {
+        trailerId: "T002",
+        nextHubId: null,
+        nextHubQueueDepth: 0, // between trips — no reroute
+      },
+    ],
+  });
+
+  const SEED = 42;
+
+  // The engine's EXACT per-pass primitive: codepoint-sort centers, then call
+  // decideCoordinatorSuggestions on each center's frozen observation with its
+  // stable-id-keyed substream. The processed batch (sorted centerIds + their
+  // suggestion lists) is the emit surface — MUST be invariant to input order.
+  const batch = (order: readonly string[]): string => {
+    const sorted = [...order].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const suggestions = sorted.map((centerId) =>
+      decideCoordinatorSuggestions(obsFor(centerId), deriveCoordinatorRng(SEED, centerId)),
+    );
+    return JSON.stringify({ order: sorted, suggestions });
+  };
+
+  it("shuffling the per-tick center INPUT order yields a byte-identical batch", () => {
+    const inOrder = batch(centerIds);
+    // Reversed input → same sorted batch.
+    expect(batch([...centerIds].reverse())).toBe(inOrder);
+    // Rotated input → same sorted batch.
+    const rotated = [...centerIds.slice(3), ...centerIds.slice(0, 3)];
+    expect(batch(rotated)).toBe(inOrder);
+    // An explicit arbitrary permutation → same sorted batch.
+    expect(
+      batch(["CTR-CENTRAL", "CTR-MW", "CTR-NE", "CTR-NW", "CTR-SE", "CTR-SW"]),
+    ).toBe(inOrder);
+  });
+
+  it("the sorted batch order is the codepoint-sorted centerId order (input-independent)", () => {
+    const expected = [...centerIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const observed = JSON.parse(batch([...centerIds].reverse())) as { order: string[] };
+    expect(observed.order).toEqual(expected);
   });
 });

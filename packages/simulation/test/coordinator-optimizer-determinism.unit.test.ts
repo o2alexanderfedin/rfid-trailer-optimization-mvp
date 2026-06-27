@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateEvent, type FuelConfig } from "@mm/domain";
 import { simulate } from "../src/engine.js";
+import {
+  FLAGS_OFF_GOLDEN_SHA256,
+  OODA_ON_GOLDEN_SHA256,
+  COORDINATOR_ON_GOLDEN_SHA256,
+  OPTIMIZER_ON_GOLDEN_SHA256,
+} from "./goldens.js";
 
 /**
  * Phase-26 COORD-06 (Plan 03) — THE OPTIMIZER-BACKED COORDINATOR DETERMINISM
@@ -89,14 +95,14 @@ const COORDINATOR_OPTIMIZER_ON_OPTS = {
   consolidationEnabled: true,
 } as const;
 
-// Captured REPRODUCIBILITY-FIRST from COORDINATOR_OPTIMIZER_ON_OPTS on arm64
-// (darwin), P27-A (plan 27-04): run twice in-process ⇒ identical, AND across two
-// separate `node` process invocations ⇒ identical, BEFORE baking the literal
-// (PITFALLS: never commit a non-reproducible golden).
+// See goldens.ts for OPTIMIZER_ON_GOLDEN_SHA256 (= COORDINATOR_OPTIMIZER_ON) and the
+// three prior goldens (COORDINATOR_ON, FLAGS_OFF, OODA_ON) — captured
+// reproducibility-first on arm64 darwin (P27-A, plan 27-04). Full provenance, cross-arch
+// contingency, and the documented divergence from edfa5a6d… are documented there.
 //
-// DOCUMENTED DIVERGENCE (P27-A — COORD-06 criterion-1): this hash DIFFERS from the
-// Phase-25 rule-based coordinator golden `edfa5a6d…`. The three structural pins in
-// `optimizerRerouteFor` have been removed (Plan 27-04 Task 1):
+// DOCUMENTED DIVERGENCE (P27-A — COORD-06 criterion-1): OPTIMIZER_ON_GOLDEN_SHA256
+// DIFFERS from the Phase-25 rule-based coordinator golden edfa5a6d…. The three
+// structural pins in `optimizerRerouteFor` have been removed (Plan 27-04 Task 1):
 //   PIN 1: route head is now the LEAST-CONGESTED relief spoke (not always obs.centerId)
 //   PIN 2: departureOffsetMin derived from real transit median + dwell (not FREEZE+1)
 //   PIN 3: real block volume from inboundDepthByHub (not empty blocks) + real per-leg
@@ -104,30 +110,11 @@ const COORDINATOR_OPTIMIZER_ON_OPTS = {
 // As a result the optimizer can now DECLINE over-capacity reroutes and CHOOSE genuinely
 // different destinations — producing a divergent event stream (reroute 7378 vs 9553).
 // The three prior goldens (3920accc/edfa5a6d/94689f99) are byte-identical (asserted below).
-//
-// Cross-arch contingency (RESEARCH VQ#9 / Pitfall 2): the prior goldens were captured
-// on x86_64; this hash was captured on arm64 (the flags-off `3920accc…`, OODA-on
-// `94689f99…`, and coordinator-on `edfa5a6d…` all verify GREEN on this arm64 host, so
-// the `Math.exp`/`Math.log` float path is arch-stable here). If a multi-arch CI run
-// produces a different hash, the contingency is the integer lookup-table sampler swap
-// (do NOT do this unless the hash actually fails on CI).
-const COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256 =
-  "162efbd8c02f64c7fed96e142ec9d26c3b26c283c44bf80979a67dc9d6d3f233";
-
-// The three prior goldens (asserted INTACT — the optimizer arm pins against all of
-// them). The optimizer-on golden EQUALS the coordinator-on golden (documented above)
-// but DIFFERS from the flags-off and OODA-on goldens.
-const COORDINATOR_ON_GOLDEN_SHA256 =
-  "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc";
-const FLAGS_OFF_GOLDEN_SHA256 =
-  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
-const OODA_ON_GOLDEN_SHA256 =
-  "94689f9989c0019edff27134dad0ef4cfb07c15c9c308ef4b40c38e848f4e608";
 
 describe("optimizer-backed coordinator 10k golden (COORD-06, reproducibility-first)", () => {
   it("simulate(seed 42, 10k, coordinatorUsesOptimizer + all-on) hashes to the committed SHA-256", () => {
     expect(sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS))).toBe(
-      COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256,
+      OPTIMIZER_ON_GOLDEN_SHA256,
     );
   });
 
@@ -135,7 +122,7 @@ describe("optimizer-backed coordinator 10k golden (COORD-06, reproducibility-fir
     const a = sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS));
     const b = sha(simulate({ ...COORDINATOR_OPTIMIZER_ON_OPTS }));
     expect(b).toBe(a);
-    expect(a).toBe(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256);
+    expect(a).toBe(OPTIMIZER_ON_GOLDEN_SHA256);
   });
 
   // DOCUMENTED DIVERGENCE (P27-A — COORD-06 criterion-1): the optimizer-on golden
@@ -144,14 +131,14 @@ describe("optimizer-backed coordinator 10k golden (COORD-06, reproducibility-fir
   // a genuinely different destination (least-congested relief spoke) and DECLINE
   // over-capacity reroutes. This is the route-aware divergence the plan requires.
   it("the optimizer-on golden DIFFERS from the Phase-25 coordinator-on golden edfa5a6d… (route-aware divergence)", () => {
-    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
+    expect(OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
     expect(sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS))).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
   });
 
   it("the optimizer-on golden DIFFERS from the flags-off 3920accc…, OODA-on 94689f99…, AND coordinator-on edfa5a6d…", () => {
-    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(FLAGS_OFF_GOLDEN_SHA256);
-    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(OODA_ON_GOLDEN_SHA256);
-    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
+    expect(OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(FLAGS_OFF_GOLDEN_SHA256);
+    expect(OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(OODA_ON_GOLDEN_SHA256);
+    expect(OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
     const h = sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS));
     expect(h).not.toBe(FLAGS_OFF_GOLDEN_SHA256);
     expect(h).not.toBe(OODA_ON_GOLDEN_SHA256);
