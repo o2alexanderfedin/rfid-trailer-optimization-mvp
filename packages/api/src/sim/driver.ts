@@ -75,6 +75,16 @@ export interface LoopLike {
 export interface SimRunnerOptions {
   /** The rolling optimizer loop to call per tick. `undefined` disables the optimizer. */
   readonly loop: LoopLike | undefined;
+  /**
+   * COORD-06 (Phase 26, T-26-05): when `true`, the GLOBAL rolling optimizer loop is
+   * DISABLED — the per-center coordinators are the (only) plan source, so the global
+   * loop and the coordinators never DOUBLE-PLAN. `makeSimRunner` returns the no-op
+   * runner (the global `loop.tick` is NEVER invoked) regardless of whether a `loop`
+   * is wired. **Default falsy** ⇒ the loop runs exactly as today (backward-compatible
+   * — every existing live-loop / driver test stays green). Checked with a STRICT
+   * `=== true` comparison; an absent flag leaves the global loop enabled.
+   */
+  readonly coordinatorUsesOptimizer?: boolean;
 }
 
 /**
@@ -95,7 +105,13 @@ export type SimTickRunner = (
  * isolation. The server composition root wires a `RollingLoop` instance.
  */
 export function makeSimRunner(opts: SimRunnerOptions): SimTickRunner {
-  if (opts.loop === undefined) {
+  // COORD-06 (T-26-05): when the per-center coordinators own planning, the global
+  // RollingLoop is DISABLED — return the no-op runner so `loop.tick` is never called
+  // (the two plan sources never double-plan). The decision: under the coordinator
+  // flag the coordinators are the primary/only plan source; the global loop is the
+  // non-continental / flags-off path. Strict `=== true` ⇒ an absent flag keeps the
+  // loop enabled (backward-compatible).
+  if (opts.coordinatorUsesOptimizer === true || opts.loop === undefined) {
     return (): Promise<EpochResult | undefined> => Promise.resolve(undefined);
   }
   const { loop } = opts;
@@ -170,6 +186,13 @@ export interface DriveSimulationOptions {
    * `undefined` disables the live loop — backward-compatible with existing tests.
    */
   readonly loop?: LoopLike;
+  /**
+   * COORD-06 (Phase 26, T-26-05): when `true`, the global RollingLoop is DISABLED
+   * for this run — the per-center coordinators are the (only) plan source, so the
+   * global loop + the coordinators never double-plan. Threaded into `makeSimRunner`
+   * so `loop.tick` is never called. **Default falsy** ⇒ the loop runs as today.
+   */
+  readonly coordinatorUsesOptimizer?: boolean;
   /**
    * SIM-HOS-01/02/03/05 (Phase 18 live wiring): OPT-IN driver Hours-of-Service
    * modeling. When `true` the engine seeds drivers, assigns them per trip,
@@ -413,11 +436,20 @@ function destHubIndex(stream: readonly SimulatedEvent[]): Map<string, string> {
 async function driveTickStream(
   db: ApiDb,
   ticks: SimulatedEvent[][],
-  opts: Pick<DriveSimulationOptions, "rfid" | "detection" | "broadcast" | "loop">,
+  opts: Pick<
+    DriveSimulationOptions,
+    "rfid" | "detection" | "broadcast" | "loop" | "coordinatorUsesOptimizer"
+  >,
   fullStream: readonly SimulatedEvent[],
 ): Promise<{ ticks: number }> {
   const es = eventStoreView(db);
-  const runner = makeSimRunner({ loop: opts.loop });
+  // COORD-06: disable the global loop when the per-center coordinators own planning.
+  const runner = makeSimRunner({
+    loop: opts.loop,
+    ...(opts.coordinatorUsesOptimizer !== undefined
+      ? { coordinatorUsesOptimizer: opts.coordinatorUsesOptimizer }
+      : {}),
+  });
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
@@ -612,7 +644,15 @@ export async function driveSimulationPaced(
   //   cursor (event-log position) + departedHubs (SNS-05 gate). The optimizer is
   //   fired non-blocking via the coalescer over the per-tick runner.
   const es = eventStoreView(opts.db);
-  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+  // COORD-06: disable the global loop when the per-center coordinators own planning.
+  const coalescer = makeCoalescedRunner(
+    makeSimRunner({
+      loop: opts.loop,
+      ...(opts.coordinatorUsesOptimizer !== undefined
+        ? { coordinatorUsesOptimizer: opts.coordinatorUsesOptimizer }
+        : {}),
+    }),
+  );
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
@@ -946,7 +986,15 @@ export async function driveSimulationOpenEnded(
   }
 
   const es = eventStoreView(opts.db);
-  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+  // COORD-06: disable the global loop when the per-center coordinators own planning.
+  const coalescer = makeCoalescedRunner(
+    makeSimRunner({
+      loop: opts.loop,
+      ...(opts.coordinatorUsesOptimizer !== undefined
+        ? { coordinatorUsesOptimizer: opts.coordinatorUsesOptimizer }
+        : {}),
+    }),
+  );
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
