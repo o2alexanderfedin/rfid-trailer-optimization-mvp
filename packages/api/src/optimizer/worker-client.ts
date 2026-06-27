@@ -28,6 +28,7 @@ import type {
   ObjectiveWeights,
 } from "@mm/optimizer";
 import type { RunEpochFn } from "./rolling-service.js";
+import { AsyncQueue } from "@alexanderfedin/async-queue";
 
 /** The long-lived worker handle: a `RunEpochFn` plus a clean shutdown. */
 export interface WorkerOptimizer {
@@ -41,6 +42,24 @@ export interface WorkerOptimizer {
 type WorkerReply =
   | { readonly id: number; readonly ok: true; readonly result: EpochResult }
   | { readonly id: number; readonly ok: false; readonly error: string };
+
+/**
+ * A queued optimizer request — the message shape posted to the worker.
+ * Typed concretely (never `any`) per PERF-03 constraint.
+ */
+interface WorkerRequest {
+  readonly id: number;
+  readonly epoch: Epoch;
+  readonly input: EpochInput;
+  readonly weights: ObjectiveWeights;
+}
+
+/**
+ * Max number of optimizer requests that can be in-flight concurrently.
+ * The live-loop only ever needs 1–2 outstanding epochs; 4 gives a small burst
+ * budget while keeping memory bounded (PERF-03 / T-27-13).
+ */
+const WORKER_QUEUE_MAX_SIZE = 4;
 
 /** Resolve the runnable worker entry: built sibling first, else package `dist`. */
 function resolveWorkerEntry(): string {
@@ -60,6 +79,16 @@ function resolveWorkerEntry(): string {
  * Spawn ONE optimizer worker and return a {@link WorkerOptimizer}. The client
  * correlates replies by an incrementing id; a worker `error`/`exit` rejects all
  * pending requests so a caller never hangs.
+ *
+ * PERF-03 (seam a): the previously-unbounded `pending` Map / direct `postMessage`
+ * is replaced by a bounded `AsyncQueue<WorkerRequest>`. The `run` function enqueues
+ * the request (blocking the caller when `WORKER_QUEUE_MAX_SIZE` requests are
+ * already in-flight) and a single consumer pump dequeues + `postMessage`s them in
+ * FIFO order. This bounds the number of in-flight epochs to `WORKER_QUEUE_MAX_SIZE`
+ * without reordering requests (T-27-13).
+ *
+ * The `pending` Map is still used for reply-correlation (resolving by `reply.id`),
+ * and `rejectAll` still drains it on error/exit so callers never hang.
  */
 export function makeWorkerOptimizer(): WorkerOptimizer {
   const worker = new Worker(resolveWorkerEntry());
@@ -69,6 +98,10 @@ export function makeWorkerOptimizer(): WorkerOptimizer {
   }>();
   let nextId = 0;
   let closed = false;
+
+  // Bounded FIFO queue: backpressures the live-loop when WORKER_QUEUE_MAX_SIZE
+  // requests are already queued / in-flight (T-27-13).
+  const requestQueue = new AsyncQueue<WorkerRequest>(WORKER_QUEUE_MAX_SIZE);
 
   function rejectAll(err: Error): void {
     for (const [, p] of pending) p.reject(err);
@@ -83,13 +116,28 @@ export function makeWorkerOptimizer(): WorkerOptimizer {
     else entry.reject(new Error(reply.error));
   });
   worker.on("error", (err: Error) => {
+    requestQueue.close(); // wake any blocked enqueue callers
     rejectAll(err);
   });
   worker.on("exit", (code: number) => {
+    requestQueue.close(); // wake any blocked enqueue callers
     // A non-zero/early exit must not leave callers hanging.
     if (pending.size > 0) {
       rejectAll(new Error(`optimizer worker exited (code ${code}) with pending runs`));
     }
+  });
+
+  // Consumer pump: dequeues requests from the bounded queue and postMessages them
+  // to the worker in FIFO order. Exits cleanly when the queue is closed + drained.
+  (async () => {
+    for await (const req of requestQueue) {
+      // After close() the worker is being terminated; skip posting stale requests.
+      if (closed) break;
+      worker.postMessage(req);
+    }
+  })().catch(() => {
+    // Pump error (e.g. close while iterating) — rejectAll is handled by the
+    // error/exit handlers above; nothing extra needed here.
   });
 
   const run: RunEpochFn = (epoch: Epoch, input: EpochInput, weights: ObjectiveWeights) => {
@@ -100,7 +148,13 @@ export function makeWorkerOptimizer(): WorkerOptimizer {
     nextId += 1;
     return new Promise<EpochResult>((resolve, reject) => {
       pending.set(id, { resolve, reject });
-      worker.postMessage({ id, epoch, input, weights });
+      // Enqueue the request (may block/backpressure when queue is full).
+      requestQueue.enqueue({ id, epoch, input, weights }).catch((err: unknown) => {
+        // If the queue was closed before we could enqueue (e.g. rapid close()),
+        // reject the pending entry so the caller doesn't hang.
+        pending.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
     });
   };
 
@@ -109,6 +163,7 @@ export function makeWorkerOptimizer(): WorkerOptimizer {
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
+      requestQueue.close(); // stop accepting new requests; wake blocked enqueuers
       rejectAll(new Error("optimizer worker is closing"));
       await worker.terminate();
     },
