@@ -71,3 +71,16 @@ export {
   updateHysteresisMarker,
 } from "./guards.js";
 export type { CoordinatorLease } from "./guards.js";
+
+// COORD-06 (Phase 26, Plan 01) — the PURE in-fold optimizer adapter: build a
+// per-center @mm/optimizer twin from a fold slice + translate an EpochResult into
+// reroute-only suggestions. Plan 02 wires these into the engine fold.
+export {
+  buildCenterTwinFromFold,
+  epochResultToRerouteSuggestions,
+} from "./optimize.js";
+export type {
+  CenterFoldRouteLeg,
+  CenterFoldSlice,
+  CenterFoldTrailer,
+} from "./optimize.js";

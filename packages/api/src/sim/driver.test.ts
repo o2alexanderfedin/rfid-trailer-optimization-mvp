@@ -179,6 +179,56 @@ describe("makeSimRunner — rolling optimizer is triggered per tick", () => {
 });
 
 // ---------------------------------------------------------------------------
+// COORD-06 (Phase 26, T-26-05): the GLOBAL RollingLoop is DISABLED under the
+// coordinator flag so the global optimizer and the per-center coordinators never
+// double-plan. `makeSimRunner({ loop, coordinatorUsesOptimizer: true })` returns
+// the no-op runner — `loop.tick` is NEVER invoked.
+// ---------------------------------------------------------------------------
+
+describe("makeSimRunner — global loop disabled under coordinatorUsesOptimizer (COORD-06)", () => {
+  const fakeResult: EpochResult = {
+    epochId: "e",
+    scopeHash: "h",
+    accepted: null,
+    generated: null,
+    recommendations: [],
+  };
+
+  it("does NOT call loop.tick when coordinatorUsesOptimizer is true (no double-plan)", async () => {
+    const { makeSimRunner } = await import("./driver.js");
+    const mockLoop = { tick: vi.fn(() => Promise.resolve(fakeResult)) };
+    const runner = makeSimRunner({ loop: mockLoop, coordinatorUsesOptimizer: true });
+    // The runner is a no-op even though a loop is wired — the global loop is disabled.
+    await expect(runner([], 60_000)).resolves.toBeUndefined();
+    expect(mockLoop.tick).not.toHaveBeenCalled();
+  });
+
+  it("STILL calls loop.tick when the flag is off (backward-compatible)", async () => {
+    const { makeSimRunner } = await import("./driver.js");
+    const mockLoop = { tick: vi.fn(() => Promise.resolve(fakeResult)) };
+    const runner = makeSimRunner({ loop: mockLoop, coordinatorUsesOptimizer: false });
+    await runner([], 60_000);
+    expect(mockLoop.tick).toHaveBeenCalledOnce();
+  });
+
+  it("STILL calls loop.tick when the flag is ABSENT (strict === true gate)", async () => {
+    const { makeSimRunner } = await import("./driver.js");
+    const seen: number[] = [];
+    const mockLoop = {
+      tick: vi.fn((input: { events: readonly DomainEvent[]; simMs: number }) => {
+        seen.push(input.simMs);
+        return Promise.resolve(fakeResult);
+      }),
+    };
+    // Absent flag must leave the global loop enabled (never accidentally truthy).
+    const runner = makeSimRunner({ loop: mockLoop });
+    await runner([], 120_000);
+    expect(mockLoop.tick).toHaveBeenCalledOnce();
+    expect(seen).toEqual([120_000]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T3 — DETERMINISM CONTRACT: pacing/pause are presentation-only. The emitted
 // sim STREAM must be byte-identical regardless of tick interval or pause — the
 // interval/pause flags never reach `simulate`. This guards the regression that

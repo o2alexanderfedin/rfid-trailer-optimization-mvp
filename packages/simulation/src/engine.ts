@@ -41,6 +41,17 @@ import {
   mayDriveNow,
   remainingLegalDriveMinutes,
 } from "@mm/domain";
+// COORD-06 (Phase 26): the proven @mm/optimizer core, called PURE + SYNCHRONOUSLY
+// IN-FOLD for the optimizer-backed reroute branch. Value imports (`detectAffectedScope`,
+// `partitionScopeByCenter`, `runEpoch`, the default weights) + type-only contract
+// imports. The optimizer depends ONLY on @mm/domain + @mm/load-planner (no cycle).
+import {
+  DEFAULT_OBJECTIVE_WEIGHTS,
+  detectAffectedScope,
+  partitionScopeByCenter,
+  runEpoch,
+} from "@mm/optimizer";
+import type { Epoch as OptimizerEpoch, OptimizerScope } from "@mm/optimizer";
 import { USA_HUBS, generateBigCityHubs, hubRegisteredEvent } from "./network/hubs.js";
 import {
   buildRoutes,
@@ -69,16 +80,22 @@ import {
   truckLegFeasibility,
 } from "./ooda/index.js";
 import {
+  type CenterFoldRouteLeg,
+  type CenterFoldSlice,
+  type CenterFoldTrailer,
   type CoordinatorLease,
   type CoordinatorObservation,
   type CoordinatorSuggestion,
   type ObservedSpoke,
   type ObservedTruck,
+  COORDINATOR_THRESHOLDS,
   acquireLease,
   arbitrateSuggestion,
+  buildCenterTwinFromFold,
   canonicalizeSuggestionPayload,
   decideCoordinatorSuggestions,
   deriveCoordinatorRng,
+  epochResultToRerouteSuggestions,
   inBackoff,
   isExpired,
   isPruned,
@@ -452,6 +469,39 @@ export interface SimulateOptions {
    * capturing the full coordinator-on golden is Plan 05.
    */
   readonly coordinatorsEnabled?: boolean;
+
+  /**
+   * COORD-06 (Phase 26): OPT-IN optimizer-backed REROUTE generation — a SUB-FLAG
+   * of {@link coordinatorsEnabled}. **DEFAULT FALSE — the determinism keystone.**
+   * It has NO effect unless `coordinatorsEnabled` is ALSO `true` (the effective
+   * read is `coordinatorsEnabled && opts.coordinatorUsesOptimizer === true`). When
+   * absent or `false`, `stepCoordinators` generates ALL four suggestion kinds via
+   * the Phase-25 rule-based {@link decideCoordinatorSuggestions} EXACTLY as before
+   * — it makes NO `runEpoch` call, NO `partitionScopeByCenter` call, and NO twin
+   * build, so the seed-42 10k coordinator-on golden (`edfa5a6d…`) AND every
+   * flags-off golden (`3920accc…`/`94689f99…`) are BYTE-IDENTICAL. It is checked
+   * with a STRICT `=== true` comparison (never `??`/`||`, which would make an
+   * absent flag accidentally truthy and perturb the golden).
+   *
+   * When `true` (AND coordinators on), the `stepCoordinators` REROUTE candidates
+   * are SOURCED FROM the proven `@mm/optimizer` core instead of the rule-based
+   * congestion heuristic: for each center, the engine derives that center's
+   * affected scope (`detectAffectedScope` over the in-region reroute-driving
+   * events), partitions it to the per-center slice (`partitionScopeByCenter` —
+   * NET-05's first live consumer), builds a small per-center twin from the FROZEN
+   * fold state (`buildCenterTwinFromFold`), runs the pure `runEpoch` SYNCHRONOUSLY
+   * IN-FOLD at the deterministic tick clock (NEVER the async worker), and
+   * translates the result into reroute-only suggestions
+   * (`epochResultToRerouteSuggestions`). The OTHER three kinds (hold / consolidate
+   * / dispatch) STAY rule-based. If a center's partitioned slice exceeds the named
+   * integer scope-size cap ({@link COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS} /
+   * {@link COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS}), the reroute branch falls
+   * back to the rule-based reroute for THAT center — a deterministic, documented
+   * threshold (the integer scope SIZE, NEVER wall-clock). A flag-on run is
+   * REPRODUCIBLE per seed (same seed twice ⇒ byte-identical); the optimizer-backed
+   * coordinator golden is baked in Plan 03.
+   */
+  readonly coordinatorUsesOptimizer?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -520,6 +570,74 @@ const COORDINATOR_START_TICK = 1;
  * golden). 6 ticks × `MS_PER_TICK` (1 tick = 1 sim-minute) = 360_000 sim-ms.
  */
 const COORDINATOR_TTL_SIM_MS = 6 * MS_PER_TICK;
+/**
+ * COORD-06 (Phase 26): the per-center `runEpoch` FREEZE WINDOW (minutes). A trailer
+ * scheduled to depart within `[now, now + this]` is FROZEN by the epoch (anti-P7
+ * thrash) so the in-fold optimizer never reroutes a truck about to roll. Mirrors the
+ * live `RollingLoop`'s 15-min freeze window (server.ts) so the per-center epoch and
+ * the (now-disabled-under-the-flag) global loop share ONE freeze discipline. A named
+ * deterministic integer — never wall-clock — baked into the Plan-03 optimizer golden.
+ */
+const COORDINATOR_OPTIMIZER_FREEZE_WINDOW_MIN = 15;
+/**
+ * COORD-06: the DETERMINISTIC integer scope-size CAP on a center's per-epoch HUB
+ * slice. When a center's partitioned slice names MORE than this many hubs, the
+ * reroute branch falls back to the Phase-25 rule-based reroute for THAT center
+ * instead of calling `runEpoch` (the in-fold cost guard — T-26-07). The decision is
+ * a PURE function of the integer slice size (`slice.hubIds.length`), NEVER wall-clock
+ * timing, so it is reproducible per seed + network and baked into the Plan-03 golden.
+ * NET-05 keeps a single center's slice bounded by that center's own hubs, so this cap
+ * is reached only by a pathologically dense single-center event burst.
+ */
+export const COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS = 64;
+/**
+ * COORD-06: the DETERMINISTIC integer scope-size CAP on a center's per-epoch TRAILER
+ * slice (the companion to {@link COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS}). When a
+ * center's partitioned slice names MORE than this many trailers, the reroute branch
+ * falls back to the rule-based reroute for THAT center. Same discipline: a pure
+ * function of the integer `slice.trailerIds.length`, never wall-clock.
+ */
+export const COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS = 64;
+
+/**
+ * COORD-06 (T-26-07) — the PURE, DETERMINISTIC fallback predicate: `true` iff a
+ * center's partitioned per-epoch slice exceeds the in-fold scope-size budget (the
+ * integer hub OR trailer cap). When `true`, the engine's reroute branch falls back
+ * to the Phase-25 rule-based reroute for that center INSTEAD of calling `runEpoch`
+ * — the documented in-fold cost guard.
+ *
+ * The decision is a PURE FUNCTION of the integer slice SIZE (`hubIds.length` /
+ * `trailerIds.length`), NEVER wall-clock timing: no `Date.now`, no timers, no RNG.
+ * So the SAME slice always yields the SAME verdict (reproducible per seed + network,
+ * baked into the Plan-03 optimizer golden). Exported so the engine and the fallback
+ * test exercise the SAME canonical threshold (DRY — no drift between code + test).
+ */
+export function exceedsCoordinatorOptimizerScopeCap(slice: OptimizerScope): boolean {
+  return (
+    slice.hubIds.length > COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS ||
+    slice.trailerIds.length > COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS
+  );
+}
+/**
+ * COORD-06: the per-center twin's integer trailer freight capacity — mirrors the
+ * API twin-snapshot's `DEFAULT_TRAILER_CAPACITY` (50) so the in-fold per-center
+ * epoch uses the SAME utilization/capacity model the global loop would have. A
+ * named integer (no floats, P12); baked into the Plan-03 optimizer golden.
+ */
+const COORDINATOR_OPTIMIZER_TRAILER_CAPACITY = 50;
+/**
+ * COORD-06: the per-center twin's integer route-leg capacity — mirrors the API
+ * twin-snapshot's `DEFAULT_ROUTE_CAPACITY` (200). Any positive integer satisfies
+ * the flow solver; this keeps the per-center epoch consistent with the global loop.
+ */
+const COORDINATOR_OPTIMIZER_ROUTE_CAPACITY = 200;
+/**
+ * COORD-06: the per-center twin's integer leg travel time (minutes) — mirrors the
+ * API twin-snapshot's `TRANSIT_MIN` (30). The reroute decision is route-aware but
+ * the exact leg time only shifts soft objective terms, never the cross-dock-relief
+ * reroute verdict; a named round integer keeps the epoch deterministic (anti-P12).
+ */
+const COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN = 30;
 /** SLA classes in a fixed order (the induction RNG picks an index). */
 const SLA_CLASSES: readonly SlaClass[] = [
   "express",
@@ -750,6 +868,12 @@ export function runToHorizon(
   // never `??`/`||` (an absent flag must stay falsy). When ON, one coordinator per
   // center generates rule-based advisory suggestions in-fold (Task 3 body).
   const coordinatorsEnabled = opts.coordinatorsEnabled === true;
+  // COORD-06 (Phase 26): the optimizer-backed reroute SUB-FLAG. STRICT `=== true`
+  // AND gated on `coordinatorsEnabled` so it can NEVER take effect on its own — an
+  // absent (or set-but-coordinators-off) flag yields `false`, leaving the rule-based
+  // reroute path (and every golden) byte-identical (the two-part flags-off keystone).
+  const coordinatorUsesOptimizer =
+    coordinatorsEnabled && opts.coordinatorUsesOptimizer === true;
 
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
@@ -2253,7 +2377,163 @@ export function runToHorizon(
       return { centerId, tick, issuedAtSimMs, spokes: spokeObs, trucks: truckObs };
     };
 
+    // === COORD-06: the optimizer-backed REROUTE generator (sub-flag ON only) ====
+    // The per-center, PURE, in-fold call into the proven @mm/optimizer core. Built
+    // here only when `coordinatorUsesOptimizer` is on; the off path NEVER reaches
+    // any of this (no scope detection, no partition, no twin, no runEpoch), so the
+    // rule-based golden stays byte-identical (the two-part flags-off keystone).
+    //
+    // `centerOfMap` is the `ReadonlyMap<hubId, centerHubId>` that
+    // `partitionScopeByCenter` (NET-05) buckets every in-scope hub by: each spoke →
+    // its owning center via `centerOf`; each center → itself. Built ONCE per pass
+    // (sorted-key construction is byte-stable; reads only the fold topology).
+    const buildCenterOfMap = (): ReadonlyMap<string, string> => {
+      const m = new Map<string, string>();
+      // Every center maps to itself.
+      for (const cId of coordinatorCenterIds) m.set(cId, cId);
+      // Every spoke maps to its owning center (legacy star ⇒ the single center).
+      for (const s of spokes) m.set(s.hubId, centerOf(s.hubId).hubId);
+      return m;
+    };
+
+    /**
+     * COORD-06 — generate ONE center's REROUTE candidates from the optimizer
+     * instead of the rule-based congestion heuristic. Returns BOTH the reroute
+     * suggestions AND whether the optimizer path was taken (`false` ⇒ the cap was
+     * exceeded ⇒ the caller falls back to the rule-based reroute for this center).
+     *
+     * Pure + deterministic: reads ONLY the FROZEN observation + the frozen fold
+     * maps captured at pass entry; the epoch clock is the integer `tick` (sim-
+     * minutes — 1 tick = 1 sim-min); sorted iteration throughout; NO Date.now / NO
+     * Math.random / NO async. Same seed + same network ⇒ identical output.
+     */
+    const optimizerRerouteFor = (
+      obs: CoordinatorObservation,
+      centerOfMap: ReadonlyMap<string, string>,
+    ): { readonly suggestions: readonly CoordinatorSuggestion[]; readonly usedOptimizer: boolean } => {
+      // 1. The reroute-DRIVING events: the SAME deterministic congestion signal the
+      //    rule-based reroute reads — an in-region truck whose NEXT hub (≠ this
+      //    center) is congested beyond the threshold. Each becomes a synthetic
+      //    `TrailerArrivedAtHub` naming {trailerId, congested-next-hub} so
+      //    `detectAffectedScope` pulls BOTH the trailer and the hub into scope.
+      //    String/integer-derived from the frozen obs (sorted by trailerId already).
+      const events: DomainEvent[] = [];
+      for (const truck of obs.trucks) {
+        if (
+          truck.nextHubId !== null &&
+          truck.nextHubId !== obs.centerId &&
+          truck.nextHubQueueDepth > COORDINATOR_THRESHOLDS.congestionQueueDepth
+        ) {
+          events.push({
+            type: "TrailerArrivedAtHub",
+            schemaVersion: 1,
+            payload: {
+              trailerId: truck.trailerId,
+              tripId: activeTripByTrailer.get(truck.trailerId)?.tripId ?? `coord-${truck.trailerId}`,
+              hubId: truck.nextHubId,
+            },
+          });
+        }
+      }
+      // No congestion signal ⇒ no reroute candidates (optimizer path, trivially).
+      if (events.length === 0) return { suggestions: [], usedOptimizer: true };
+
+      // 2. NET-05 — detect the affected scope, then PARTITION to this center's slice.
+      //    `tick` IS the epoch clock in whole sim-minutes (1 tick = 1 sim-min).
+      const epoch: OptimizerEpoch = {
+        epochId: `coord-${obs.centerId}-${tick}`,
+        nowMin: tick,
+        freezeWindowMin: COORDINATOR_OPTIMIZER_FREEZE_WINDOW_MIN,
+      };
+      const scope = detectAffectedScope(events, epoch);
+      const partitioned = partitionScopeByCenter(scope, centerOfMap, events);
+      const slice: OptimizerScope | undefined = partitioned.get(obs.centerId);
+      // No slice for this center (no in-scope hub bucketed here) ⇒ nothing to do.
+      if (slice === undefined) return { suggestions: [], usedOptimizer: true };
+
+      // 3. DETERMINISTIC SIZE CAP (T-26-07): the shared pure predicate over the
+      //    integer slice size, NEVER wall-clock. Over-cap ⇒ signal the caller to fall
+      //    back to the rule-based reroute for THIS center (no runEpoch call at all).
+      if (exceedsCoordinatorOptimizerScopeCap(slice)) {
+        return { suggestions: [], usedOptimizer: false };
+      }
+
+      // 4. Build the per-center fold slice (FROM the frozen fold state, NOT a scan)
+      //    bounded to the partitioned slice's trailers. Each in-scope trailer's
+      //    twin route head is THIS center (stopIndex 0) — the cross-dock relief
+      //    destination the optimizer plans toward; the translator reads route[0].
+      const inScopeTrailers = new Set(slice.trailerIds);
+      const trailers: CenterFoldTrailer[] = [];
+      const currentNextHubByTrailer = new Map<string, string>();
+      for (const truck of obs.trucks) {
+        if (!inScopeTrailers.has(truck.trailerId)) continue;
+        const trip = activeTripByTrailer.get(truck.trailerId);
+        if (trip === undefined) continue; // mid-trip trucks only (have a current leg)
+        currentNextHubByTrailer.set(truck.trailerId, trip.toHubId);
+        trailers.push({
+          trailerId: truck.trailerId,
+          currentHubId: trip.fromHubId,
+          departureOffsetMin: COORDINATOR_OPTIMIZER_FREEZE_WINDOW_MIN + 1, // past freeze ⇒ actionable
+          capacity: COORDINATOR_OPTIMIZER_TRAILER_CAPACITY,
+          // Route head = this center (the cross-dock relief target the optimizer
+          // endorses); a second stop at the (congested) current next hub keeps the
+          // route well-formed without changing the head the translator reads.
+          routeStops: [
+            { hubId: obs.centerId, stopIndex: 0 },
+            { hubId: trip.toHubId, stopIndex: 1 },
+          ],
+          blocks: [],
+        });
+      }
+      // No mid-trip in-scope trailers ⇒ nothing for the optimizer to reroute.
+      if (trailers.length === 0) return { suggestions: [], usedOptimizer: true };
+
+      // The in-scope route legs: this center ⇄ each named next hub (sorted, deduped),
+      // so the twin is self-consistent (every trailer stop has a leg).
+      const legHubs = [...new Set(trailers.map((t) => t.routeStops[1]!.hubId))].sort();
+      const routeLegs: CenterFoldRouteLeg[] = legHubs.flatMap((hubId) => [
+        {
+          routeId: `coord-leg-${obs.centerId}-${hubId}`,
+          fromHubId: obs.centerId,
+          toHubId: hubId,
+          travelMin: COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN,
+          capacity: COORDINATOR_OPTIMIZER_ROUTE_CAPACITY,
+        },
+        {
+          routeId: `coord-leg-${hubId}-${obs.centerId}`,
+          fromHubId: hubId,
+          toHubId: obs.centerId,
+          travelMin: COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN,
+          capacity: COORDINATOR_OPTIMIZER_ROUTE_CAPACITY,
+        },
+      ]);
+
+      const foldSlice: CenterFoldSlice = {
+        centerId: obs.centerId,
+        spokeHubIds: obs.spokes.map((s) => s.hubId),
+        trailers,
+        routeLegs,
+      };
+      const twin = buildCenterTwinFromFold(foldSlice, tick);
+
+      // 5. PURE in-fold runEpoch (NEVER the async worker) at the deterministic tick,
+      //    in sorted-centerId order (the caller iterates centers sorted), over pure
+      //    fold-derived inputs + the optimizer's own default weights.
+      const result = runEpoch(
+        epoch,
+        { events, twinSnapshot: twin },
+        DEFAULT_OBJECTIVE_WEIGHTS,
+      );
+
+      // 6. Translate to reroute-only suggestions (sorted by targetAgentId, pure).
+      const suggestions = epochResultToRerouteSuggestions(result, twin, currentNextHubByTrailer);
+      return { suggestions, usedOptimizer: true };
+    };
+
     // === DECIDE + GUARD-FILTER + ACT (sorted-by-centerId) ======================
+    // COORD-06: when the sub-flag is on, build the `centerOf` map ONCE (only on the
+    // on path — the off path never constructs it, so it allocates nothing).
+    const centerOfMap = coordinatorUsesOptimizer ? buildCenterOfMap() : undefined;
     for (const centerId of coordinatorCenterIds) {
       const obs = observeCenter(centerId);
       // Anything-to-suggest guard (mirror the agent guard): a center with no spokes
@@ -2264,7 +2544,29 @@ export function runToHorizon(
       // Lazy per-center substream — constructed ONLY here, on the on path, for a
       // center that actually has scope (a flag-off run allocates nothing).
       const rng = deriveCoordinatorRng(seed, centerId);
-      const candidates = decideCoordinatorSuggestions(obs, rng);
+      const ruleBased = decideCoordinatorSuggestions(obs, rng);
+
+      // COORD-06: under the sub-flag, the REROUTE kind is SOURCED FROM the optimizer
+      // (per-center pure runEpoch over a partitioned twin) while hold/consolidate/
+      // dispatch stay rule-based. Off (or coordinators-off) ⇒ `candidates` is the
+      // UNCHANGED rule-based list — byte-identical to the Phase-25 path.
+      let candidates: readonly CoordinatorSuggestion[];
+      if (coordinatorUsesOptimizer && centerOfMap !== undefined) {
+        // Keep ONLY the non-reroute rule-based candidates (hold/consolidate/dispatch).
+        const nonReroute = ruleBased.filter((c) => c.kind !== "reroute");
+        const opt = optimizerRerouteFor(obs, centerOfMap);
+        // FALLBACK (T-26-07): an over-cap slice (`usedOptimizer === false`) reuses the
+        // rule-based reroute candidates for THIS center; otherwise the optimizer's.
+        const reroute = opt.usedOptimizer
+          ? opt.suggestions
+          : ruleBased.filter((c) => c.kind === "reroute");
+        // Merge: reroute candidates FIRST (already sorted by targetAgentId), then the
+        // rule-based non-reroute candidates in their existing per-spoke order — so the
+        // surviving-index/suggestionId scheme stays byte-stable + deterministic.
+        candidates = [...reroute, ...nonReroute];
+      } else {
+        candidates = ruleBased;
+      }
 
       // --- GUARD 5 (prune-clearing on zone change) -----------------------------
       // A `centerOf` change for a target (a shift/zone change) re-opens every option

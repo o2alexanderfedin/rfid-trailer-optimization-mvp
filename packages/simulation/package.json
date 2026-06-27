@@ -18,7 +18,8 @@
     "test:all": "vitest run --root ../.. packages/simulation/"
   },
   "dependencies": {
-    "@mm/domain": "workspace:*"
+    "@mm/domain": "workspace:*",
+    "@mm/optimizer": "workspace:*"
   },
   "devDependencies": {
     "@mm/event-store": "workspace:*",

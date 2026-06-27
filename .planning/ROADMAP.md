@@ -72,7 +72,7 @@
 - [x] **Phase 23: Multi-Center Topology** — big-city hub generation (1–3/state, ~80–130) + parameterized regional centers + near-full-mesh backbone + per-center scope partition + **`applyHubInventory` key-scoping (P1-BLOCKING)**; FOUNDATION for everything (HUB-01..04, NET-01..05, PERF-01, DET-01) (completed 2026-06-26)
 - [x] **Phase 24: OODA Step-Agents** — deterministic per-truck + per-hub `step()` (Observe→Orient→Decide→Act) emitting domain events, sorted-by-stable-id passes, per-agent seeded substreams, frozen observation surface, continuation-equivalent agent state; the decentralized decision core (OODA-01..05, DET-03) (completed 2026-06-26)
 - [x] **Phase 25: Coordination Centers** — one advisory process-manager per regional center emitting `ActionSuggested`; agents accept/reject-with-reason on local feasibility; the five anti-oscillation/anti-deadlock guards + scope-neutral suggestion events; the headline "smart and honest" differentiator (COORD-01..05) (completed 2026-06-27)
-- [ ] **Phase 26: Coordinator ↔ Optimizer** — coordinators invoke the proven optimizer as a scoped, pure `runEpoch` suggestion engine called synchronously in-fold; global `RollingLoop` disabled under the flag so the two never double-plan (COORD-06)
+- [x] **Phase 26: Coordinator ↔ Optimizer** — coordinators invoke the proven optimizer as a scoped, pure `runEpoch` suggestion engine called synchronously in-fold; global `RollingLoop` disabled under the flag so the two never double-plan (COORD-06) (completed 2026-06-27)
 - [ ] **Phase 27: Perf + Plumbing + Scale Viz** — incremental cursor-fold twin-snapshot projections + `async-queue` runtime-plumbing wiring (ESLint-banned from the core) + 100+-hub clustered/decluttered scale viz + sustained continental-run perf (PERF-02..04, VIZ-15..17)
 - [ ] **Phase 28: Continental Hardening** — consolidated determinism/golden audit: per-model new goldens, agent-order-shuffle, N-agent-RNG-decorrelation, and continuation-equivalence all green together, plus the cross-arch capture note (DET-02)
 
@@ -143,7 +143,11 @@ Plans:
   2. The scope stays bounded: each coordinator reuses `detectAffectedScope` over a short horizon (a single event triggers an epoch whose scope ⊆ that center's affected hubs, size independent of total network size) — no per-center full-region re-solve
   3. The global `RollingLoop` is **disabled under the coordinator flag** so the two never double-plan; a heuristic-Decide fallback remains behind the sub-flag if profiling shows the in-fold call is too heavy
   4. **Determinism gate:** the in-fold `runEpoch` call runs at a deterministic tick in sorted order over pure inputs; with `coordinatorUsesOptimizer` absent (and `:false`) replay is byte-identical to the Phase-25 coordinator model, and the optimizer-backed model captures its own golden
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 26-01-PLAN.md — Pure in-fold optimizer adapter: buildCenterTwinFromFold + epochResultToRerouteSuggestions (reroute-only, scope-size-invariant, pure)
+- [x] 26-02-PLAN.md — Engine wiring: coordinatorUsesOptimizer sub-flag + optimizer-backed reroute branch (partitionScopeByCenter NET-05 live + runEpoch in-fold + deterministic fallback) + global RollingLoop disabled
+- [x] 26-03-PLAN.md — Determinism keystone: two-part flags-off gate (absent⇒edfa5a6d) + reproducibility-first optimizer-backed golden + continuation-equivalence
 
 ### Phase 27: Perf + Plumbing + Scale Viz
 **Goal**: A continental run renders cleanly at 100+ hubs and sustains a live demo without the freeze/stall failure mode — read-side projections fold incrementally, runtime plumbing is backpressured via the vendored async-queue (kept out of the deterministic core), and the map declutters the dense static network.
@@ -174,7 +178,7 @@ Plans:
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
 | 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
-| 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
+| 26. Coordinator ↔ Optimizer | 3/3 | Complete   | 2026-06-27 |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
 | 28. Continental Hardening | 0/TBD | Not started | - |
 

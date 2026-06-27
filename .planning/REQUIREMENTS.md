@@ -39,7 +39,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **COORD-03**: **Visible reject-with-reason** — a rejected suggestion (e.g. "won't divert: HOS/fuel") surfaces in the alert feed + audit timeline (the headline "smart and honest" demo moment).
 - [ ] **COORD-04**: Anti-oscillation / anti-conflict guards ship with the **first** coordinator: **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning**; `ActionSuggested`/`Accepted`/`Rejected` are classified **scope-neutral** (no re-plan feedback storm).
 - [ ] **COORD-05**: Every agent has a **feasible no-op default** so each tick always closes (no advisory-reject Zeno livelock).
-- [ ] **COORD-06**: A coordinator **may invoke the existing optimizer** as a **scoped, pure `runEpoch` suggestion engine called synchronously in-fold** (not the async worker path); the global `RollingLoop` is disabled under the coordinator flag so the two never double-plan. *(Phase D; sub-flag with a heuristic fallback if profiling shows the in-fold call is too heavy.)*
+- [x] **COORD-06**: A coordinator **may invoke the existing optimizer** as a **scoped, pure `runEpoch` suggestion engine called synchronously in-fold** (not the async worker path); the global `RollingLoop` is disabled under the coordinator flag so the two never double-plan. *(Phase D; sub-flag with a heuristic fallback if profiling shows the in-fold call is too heavy.)*
 
 ### Performance & plumbing (PERF)
 - [x] **PERF-01**: `applyHubInventory` is **key-scoped to the touched hub id(s)** — shipped **in Phase A** (P1-blocking; prevents the latent v2.1-style O(events×hubs) freeze from going active at 100 hubs).
@@ -108,7 +108,7 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | COORD-03 | Phase 25 — Coordination Centers | Pending |
 | COORD-04 | Phase 25 — Coordination Centers | Pending |
 | COORD-05 | Phase 25 — Coordination Centers | Pending |
-| COORD-06 | Phase 26 — Coordinator ↔ Optimizer | Pending |
+| COORD-06 | Phase 26 — Coordinator ↔ Optimizer | Complete |
 | PERF-02 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | PERF-03 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | PERF-04 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
