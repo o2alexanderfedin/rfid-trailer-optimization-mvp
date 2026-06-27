@@ -47,7 +47,7 @@ export async function rebuildProjections(
 ): Promise<void> {
   // 1. Drop derived state. CASCADE is unnecessary (no FKs into these tables);
   //    RESTART IDENTITY is moot (no identity columns) — kept simple (KISS).
-  await sql`TRUNCATE TABLE package_location, trailer_state, hub_inventory, driver_status, driver_assignment, tag_registry, zone_estimate, exceptions, exception_kpi`.execute(
+  await sql`TRUNCATE TABLE package_location, trailer_state, hub_inventory, driver_status, driver_assignment, tag_registry, zone_estimate, exceptions, exception_kpi, trailer_fuel, induction_deadline`.execute(
     db,
   );
 
@@ -135,12 +135,24 @@ export function serializeTwin(twin: OperationalTwin): string {
       lastEventAt: a.lastEventAt,
     }));
 
+  // PERF-02: trailer fuel odometer (sorted by trailerId for byte-stability)
+  const trailerFuel = [...twin.trailerFuel.entries()]
+    .sort(([a], [b]) => compare(a, b))
+    .map(([trailerId, milesSinceRefuel]) => ({ trailerId, milesSinceRefuel }));
+
+  // PERF-02: induction deadlines (sorted by packageId for byte-stability)
+  const inductionDeadline = [...twin.inductionDeadline.entries()]
+    .sort(([a], [b]) => compare(a, b))
+    .map(([packageId, deadlineMin]) => ({ packageId, deadlineMin }));
+
   return JSON.stringify({
     packageLocation,
     trailerState,
     hubInventory,
     driverStatus,
     driverAssignment,
+    trailerFuel,
+    inductionDeadline,
   });
 }
 

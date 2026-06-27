@@ -34,6 +34,16 @@ import {
   trailerStateReducer,
   type ZoneEstimateState,
 } from "../reducers/index.js";
+import {
+  emptyTrailerFuelState,
+  trailerFuelReducer,
+} from "../reducers/trailer-fuel.js";
+import {
+  emptyInductionDeadlineState,
+  inductionDeadlineReducer,
+  type InductionDeadlineState,
+} from "../reducers/induction-deadline.js";
+import { legKey } from "../reducers/geo-track.js";
 
 /**
  * Inline (read-your-writes) projection application + the truncate/replay
@@ -851,6 +861,199 @@ async function applyExceptions(
     .execute();
 }
 
+// ---------------------------------------------------------------------------
+// PERF-02: trailer_fuel key-scoped applier
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the affected trailer id for `trailer_fuel`, or null for a no-op.
+ * Only the four event types that mutate the trailerFuelReducer need DB I/O.
+ */
+function affectedTrailerFuelId(event: DomainEvent): string | null {
+  switch (event.type) {
+    case "TrailerArrivedAtHub":
+      return event.payload.trailerId;
+    case "TruckRefueled":
+      return event.payload.trailerId;
+    // RouteRegistered and TrailerDeparted mutate the reducer's internal
+    // routes/inflight indices but NOT the persisted trailer_fuel row directly
+    // (the rows read/persist ONLY miles_since_refuel). However, they DO affect
+    // which miles will be accrued on arrival — so we persist the inflight index
+    // via the geo_inflight_trip table (the catchup pattern). For the trailer_fuel
+    // column itself, only Arrived (accrue) and Refueled (reset) write a row.
+    // TrailerDeparted: write the in-flight leg to geo_inflight_trip (M-4 pattern).
+    case "TrailerDeparted":
+      return event.payload.trailerId; // no fuel row written, but inflight updated
+    case "RouteRegistered":
+      return null; // geo_route is already persisted by catch-up; no-op here
+    default:
+      return null;
+  }
+}
+
+/**
+ * PERF-02: key-scoped applier for `trailer_fuel(trailer_id, miles_since_refuel)`.
+ *
+ * Loads ONLY the affected trailer's row from `trailer_fuel`. Seeds the reducer's
+ * `routes` + `inflight` indices from the already-persisted `geo_route` +
+ * `geo_inflight_trip` tables (the catchup pattern — those tables are populated by
+ * the geo-track catch-up runner). Folds with `trailerFuelReducer`, then persists
+ * ONLY `(trailer_id, miles_since_refuel)`.
+ *
+ * For `TrailerDeparted`: also writes the in-flight leg to `geo_inflight_trip`
+ * (M-4 pattern) so a future `TrailerArrivedAtHub` resolves the right geometry.
+ * For `TrailerArrivedAtHub`: deletes the matching `geo_inflight_trip` row.
+ * Cost: O(1) fuel reads + O(all routes/inflight) for seeding the fold state —
+ * routes/inflight are small compared to the full event log.
+ */
+export async function applyTrailerFuel(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  const trailerId = affectedTrailerFuelId(replay.event);
+  if (trailerId === null) return; // no-op event
+
+  // Load the fuel row for THIS trailer only
+  const fuelRows = await db
+    .selectFrom("trailer_fuel")
+    .selectAll()
+    .where("trailer_id", "=", trailerId)
+    .execute();
+
+  // Load ALL route geometry + inflight entries (small, bounded by entity count)
+  const [routeRows, inflightRows] = await Promise.all([
+    db.selectFrom("geo_route").selectAll().execute(),
+    db.selectFrom("geo_inflight_trip").selectAll().execute(),
+  ]);
+
+  // Rebuild the reducer's internal state from persisted tables
+  const routes = new Map<string, readonly [number, number][]>();
+  for (const r of routeRows) {
+    routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
+  }
+  const inflight = new Map<string, string>();
+  for (const r of inflightRows) {
+    inflight.set(r.trip_id, legKey(r.from_hub_id, r.to_hub_id));
+  }
+
+  // Build the per-trailer partial state (just this trailer's fuel row)
+  const fuelMap = new Map(
+    fuelRows.map((r) => [
+      r.trailer_id,
+      { trailerId: r.trailer_id, milesSinceRefuel: r.miles_since_refuel },
+    ]),
+  );
+
+  const priorState = {
+    ...emptyTrailerFuelState,
+    fuel: fuelMap,
+    routes,
+    inflight,
+    size: fuelMap.size,
+  };
+
+  const next = trailerFuelReducer(priorState, toOccurred(replay));
+
+  // Persist the delta for the affected trailer
+  const nextFuel = next.fuel.get(trailerId);
+  if (nextFuel === undefined) {
+    // Reducer removed this trailer (not expected in current logic, but handle it)
+    await db.deleteFrom("trailer_fuel").where("trailer_id", "=", trailerId).execute();
+  } else {
+    await db
+      .insertInto("trailer_fuel")
+      .values({ trailer_id: nextFuel.trailerId, miles_since_refuel: nextFuel.milesSinceRefuel })
+      .onConflict((oc) =>
+        oc.column("trailer_id").doUpdateSet({ miles_since_refuel: nextFuel.milesSinceRefuel }),
+      )
+      .execute();
+  }
+
+  // M-4: maintain the geo_inflight_trip index so future arrivals resolve the right leg
+  if (replay.event.type === "TrailerDeparted") {
+    const p = replay.event.payload;
+    await db
+      .insertInto("geo_inflight_trip")
+      .values({
+        trip_id: p.tripId,
+        from_hub_id: p.fromHubId,
+        to_hub_id: p.toHubId,
+        depart_at: replay.occurredAt,
+      })
+      .onConflict((oc) =>
+        oc.column("trip_id").doUpdateSet({
+          from_hub_id: p.fromHubId,
+          to_hub_id: p.toHubId,
+          depart_at: replay.occurredAt,
+        }),
+      )
+      .execute();
+  } else if (replay.event.type === "TrailerArrivedAtHub") {
+    // Clean up the in-flight entry so the table stays bounded
+    const p = replay.event.payload;
+    await db.deleteFrom("geo_inflight_trip").where("trip_id", "=", p.tripId).execute();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PERF-02: induction_deadline key-scoped applier
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the affected package id for `induction_deadline`, or null for no-op.
+ * Only `PackageInducted` mutates the inductionDeadlineReducer.
+ */
+function affectedInductionDeadlineId(event: DomainEvent): string | null {
+  if (event.type === "PackageInducted") return event.payload.packageId;
+  return null;
+}
+
+/**
+ * PERF-02: key-scoped applier for `induction_deadline(package_id, deadline_min)`.
+ *
+ * Loads ONLY the affected package's row, folds with `inductionDeadlineReducer`
+ * (LWW — `PackageInducted` replaces the deadline), and upserts the row.
+ * Cost: O(1) rows read per event, independent of state size.
+ */
+export async function applyInductionDeadline(
+  db: Kysely<ProjectionDb>,
+  replay: ReplayEvent,
+): Promise<void> {
+  const packageId = affectedInductionDeadlineId(replay.event);
+  if (packageId === null) return; // no-op event
+
+  // Load the existing row for this package (0 or 1 row)
+  const rows = await db
+    .selectFrom("induction_deadline")
+    .selectAll()
+    .where("package_id", "=", packageId)
+    .execute();
+
+  // Build a partial Map<packageId, deadlineMin> from the persisted row
+  const priorState: InductionDeadlineState = new Map(
+    rows.map((r) => [r.package_id, r.deadline_min]),
+  );
+
+  const next = inductionDeadlineReducer(priorState, toOccurred(replay));
+
+  // next === priorState (reference equal) means the event was a no-op
+  if (next === priorState) return;
+
+  const deadlineMin = next.get(packageId);
+  if (deadlineMin === undefined) {
+    // Reducer removed it (not possible for LWW, but handle defensively)
+    await db.deleteFrom("induction_deadline").where("package_id", "=", packageId).execute();
+  } else {
+    await db
+      .insertInto("induction_deadline")
+      .values({ package_id: packageId, deadline_min: deadlineMin })
+      .onConflict((oc) =>
+        oc.column("package_id").doUpdateSet({ deadline_min: deadlineMin }),
+      )
+      .execute();
+  }
+}
+
 type Applier = (db: Kysely<ProjectionDb>, replay: ReplayEvent) => Promise<void>;
 
 /** Each operational projection: its checkpoint name + its load/fold/persist step. */
@@ -871,6 +1074,11 @@ const APPLIERS: ReadonlyArray<{ name: OperationalProjectionName; apply: Applier 
   // The exceptions feed folds ONLY the detector's WrongTrailerDetected /
   // MissedUnloadDetected; order vs the others is immaterial (disjoint events).
   { name: "exceptions", apply: applyExceptions },
+  // PERF-02: incremental fuel odometer + induction deadline (bounded reads,
+  // replacing the two readAll(0n) full-log scans in twin-snapshot.ts).
+  // Disjoint from every other applier — order vs the others is immaterial.
+  { name: "trailer-fuel", apply: applyTrailerFuel },
+  { name: "induction-deadline", apply: applyInductionDeadline },
 ];
 
 /**
@@ -928,19 +1136,31 @@ export interface OperationalTwin {
   readonly driverStatus: DriverStatusState;
   /** PRJ-02: driver -> trip/trailer assignment, keyed by driverId. */
   readonly driverAssignment: DriverAssignmentState;
+  /**
+   * PERF-02: trailer fuel odometer (trailerId → milesSinceRefuel), folded
+   * incrementally. Replaces the full-log scan in twin-snapshot.ts.
+   */
+  readonly trailerFuel: ReadonlyMap<string, number>;
+  /**
+   * PERF-02: induction deadlines (packageId → epoch-minutes, LWW), folded
+   * incrementally. Replaces the full-log scan in twin-snapshot.ts.
+   */
+  readonly inductionDeadline: InductionDeadlineState;
 }
 
 /** Read the full operational twin from the persisted projection tables. */
 export async function readOperationalTwin(
   db: Kysely<ProjectionDb>,
 ): Promise<OperationalTwin> {
-  const [pkgRows, trailerRows, hubRows, driverRows, assignmentRows] =
+  const [pkgRows, trailerRows, hubRows, driverRows, assignmentRows, fuelRows, deadlineRows] =
     await Promise.all([
       db.selectFrom("package_location").selectAll().execute(),
       db.selectFrom("trailer_state").selectAll().execute(),
       db.selectFrom("hub_inventory").selectAll().execute(),
       db.selectFrom("driver_status").selectAll().execute(),
       db.selectFrom("driver_assignment").selectAll().execute(),
+      db.selectFrom("trailer_fuel").selectAll().execute(),
+      db.selectFrom("induction_deadline").selectAll().execute(),
     ]);
 
   const packageLocation: PackageLocationState = pkgRows.length
@@ -1020,12 +1240,24 @@ export async function readOperationalTwin(
       )
     : emptyDriverAssignmentState;
 
+  // PERF-02: trailer fuel odometer (trailerId → milesSinceRefuel)
+  const trailerFuel: ReadonlyMap<string, number> = new Map(
+    fuelRows.map((r) => [r.trailer_id, r.miles_since_refuel]),
+  );
+
+  // PERF-02: induction deadlines (packageId → epoch-minutes)
+  const inductionDeadline: InductionDeadlineState = deadlineRows.length
+    ? new Map(deadlineRows.map((r) => [r.package_id, r.deadline_min]))
+    : emptyInductionDeadlineState;
+
   return {
     packageLocation,
     trailerState,
     hubInventory,
     driverStatus,
     driverAssignment,
+    trailerFuel,
+    inductionDeadline,
   };
 }
 
