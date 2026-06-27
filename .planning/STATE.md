@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
-stopped_at: Phase 27 UI-SPEC approved
-last_updated: "2026-06-27T07:15:35.699Z"
+stopped_at: "Completed 27-03: VIZ-15/VIZ-16 scale viz (cluster + tier styles)"
+last_updated: "2026-06-27T07:35:53.432Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 24
-  completed_plans: 20
-  percent: 83
+  completed_plans: 21
+  percent: 88
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-26)
 ## Current Position
 
 Phase: 27 (Perf + Plumbing + Scale Viz) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-06-27
 
@@ -59,6 +59,7 @@ Last activity: 2026-06-27
 | Phase 26 P26-02 | 14min | 3 tasks | 5 files |
 | Phase 26 P26-03 | 70min | 3 tasks | 3 files |
 | Phase 27-perf-plumbing-scale-viz P02 | 6 | 3 tasks | 6 files |
+| Phase 27-perf-plumbing-scale-viz P03 | 50m | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting v3.0:
 - [Phase ?]: 26-02: stepCoordinators reroute sourced from per-center pure runEpoch under coordinatorUsesOptimizer sub-flag; hold/consolidate/dispatch stay rule-based (COORD-06)
 - [Phase ?]: 26-02: partitionScopeByCenter (NET-05) wired LIVE as the per-center epoch scope; deterministic scope-size cap falls back to rule-based; global RollingLoop disabled under the flag (no double-plan)
 - [Phase ?]: [Phase 26-03 COORD-06]: optimizer-on golden captured reproducibility-first = edfa5a6d (DOCUMENTED-EQUAL to the Phase-25 coordinator golden, planner-truth #2 amended/Option A): the optimizer is genuinely invoked (instrumented: 2000 runEpoch epochs / 9663 pre-guard reroutes / 0 fallbacks) but on the center-headed/always-feasible per-center twin it only ENDORSES the same reroute the rule-based heuristic makes => byte-identical on every config. coordinatorUsesOptimizer two-part flags-off gate (false===absent + absent=>edfa5a6d, 3920accc/94689f99 intact); continuation-equivalence chunked==all-at-once 1/7/23/500 with NO new SerializedWorldState field. No production change. Phase-27 carry-over: make the optimizer reroute genuinely route-aware-divergent + reject-with-reason continental tuning.
+- [Phase ?]: OL 10 Style Options has no opacity property — encode per-style opacity in rgba() color string alpha channel
+- [Phase ?]: HubLayers interface: unified source for metric delta application + tier sources for per-tier OL layer styling
+- [Phase ?]: Static topology fields (hub kind/tier, route isBackbone) sent REST-only — never on ws tick payloads
 
 ### Pending Todos
 
@@ -116,8 +120,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T07:15:35.689Z
-Stopped at: Phase 27 UI-SPEC approved
+Last session: 2026-06-27T07:35:53.422Z
+Stopped at: Completed 27-03: VIZ-15/VIZ-16 scale viz (cluster + tier styles)
 Resume file: None
 
 ## Operator Next Steps

@@ -48,8 +48,8 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [ ] **PERF-04**: A **sustained continental-run** at ~80–130 hubs holds a target sim-min/wall-sec without the freeze/stall failure mode. *(Phase E)*
 
 ### Scale visualization (VIZ) — continues v2.0 numbering
-- [ ] **VIZ-15**: 100+ hubs render **without clutter** via OpenLayers `Cluster` + `declutter` + `VectorImageLayer`; static topology is sent **once**, per-tick deltas carry only trailers + transient suggestions.
-- [ ] **VIZ-16**: Regional centers + the near-full-mesh backbone render as a **distinct visual tier** (centers vs spokes vs backbone legs).
+- [x] **VIZ-15**: 100+ hubs render **without clutter** via OpenLayers `Cluster` + `declutter` + `VectorImageLayer`; static topology is sent **once**, per-tick deltas carry only trailers + transient suggestions.
+- [x] **VIZ-16**: Regional centers + the near-full-mesh backbone render as a **distinct visual tier** (centers vs spokes vs backbone legs).
 - [ ] **VIZ-17**: An **advisory-suggestion overlay** (accept-green / reject-red) is opt-in / decluttered on the map.
 
 ### Determinism keystone (DET) — cross-cutting, every phase
@@ -112,8 +112,8 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | PERF-02 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | PERF-03 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | PERF-04 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
-| VIZ-15 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
-| VIZ-16 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| VIZ-15 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
+| VIZ-16 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | VIZ-17 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | DET-02 | Phase 28 — Continental Hardening (consolidated new-golden/order-shuffle/continuation audit) | Pending |
 
