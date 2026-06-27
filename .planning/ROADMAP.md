@@ -146,7 +146,7 @@ Plans:
 **Plans**: 3 plans
 Plans:
 - [x] 26-01-PLAN.md — Pure in-fold optimizer adapter: buildCenterTwinFromFold + epochResultToRerouteSuggestions (reroute-only, scope-size-invariant, pure)
-- [ ] 26-02-PLAN.md — Engine wiring: coordinatorUsesOptimizer sub-flag + optimizer-backed reroute branch (partitionScopeByCenter NET-05 live + runEpoch in-fold + deterministic fallback) + global RollingLoop disabled
+- [x] 26-02-PLAN.md — Engine wiring: coordinatorUsesOptimizer sub-flag + optimizer-backed reroute branch (partitionScopeByCenter NET-05 live + runEpoch in-fold + deterministic fallback) + global RollingLoop disabled
 - [ ] 26-03-PLAN.md — Determinism keystone: two-part flags-off gate (absent⇒edfa5a6d) + reproducibility-first optimizer-backed golden + continuation-equivalence
 
 ### Phase 27: Perf + Plumbing + Scale Viz
@@ -178,7 +178,7 @@ Plans:
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
 | 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
-| 26. Coordinator ↔ Optimizer | 1/3 | In Progress|  |
+| 26. Coordinator ↔ Optimizer | 2/3 | In Progress|  |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
 | 28. Continental Hardening | 0/TBD | Not started | - |
 
