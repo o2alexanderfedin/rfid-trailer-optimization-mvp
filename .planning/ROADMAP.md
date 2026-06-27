@@ -177,7 +177,12 @@ Plans:
   1. Each new model (continental topology, OODA agents, coordinators, optimizer-backed coordinators) has its **own committed new golden**, captured only after same-seed reproducibility + the flags-off gate are proven first (no non-reproducible golden baked in)
   2. The consolidated determinism suite is green together: **agent-order-shuffle** (shuffle the per-tick agent set → byte-identical batch), **N-agent-RNG-decorrelation** (N agents → N independent streams; rename/reorder leaves goldens unchanged), and **continuation-equivalence** (chunked == all-at-once) across every v3.0 flag combination
   3. **Master flags-off gate re-asserted:** with all v3.0 flags absent and explicit-`false`, the seed-42 10k-tick golden is byte-identical to `3920accc…` (the full DET-01 two-part gate per flag, audited in one place); the cross-arch capture environment is documented next to each new golden with the integer-LUT contingency noted
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 28-01-PLAN.md — Canonical goldens.ts module + DRY refactor: extract 5 golden SHAs + provenance into one home, import everywhere, remove all bare literals (DET-02)
+- [ ] 28-02-PLAN.md — Coordinator agent-order-shuffle batch test mirroring ooda-determinism.unit.test.ts:49-105 for the per-center coordinator set (DET-02 GAP-1)
+- [ ] 28-03-PLAN.md — Continental continuation-equivalence test: chunked==all-at-once with continentalTopology:true ALONE and stacked, chunks 1/7/23/500 (DET-02 GAP-2)
+- [ ] 28-04-PLAN.md — scripts/capture-golden.ts: reproducibility-first 4-way hash protocol (in-process x2 + fork x2) as a one-command capture tool (DET-02 recommended)
 
 ## Progress
 
@@ -188,7 +193,7 @@ Plans:
 | 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
 | 26. Coordinator ↔ Optimizer | 3/3 | Complete   | 2026-06-27 |
 | 27. Perf + Plumbing + Scale Viz | 7/7 | Complete   | 2026-06-27 |
-| 28. Continental Hardening | 0/TBD | Not started | - |
+| 28. Continental Hardening | 0/4 | Not started | - |
 
 | Milestone | Phases | Status | Shipped |
 |-----------|--------|--------|---------|
