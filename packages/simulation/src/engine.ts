@@ -884,6 +884,32 @@ export function runToHorizon(
    * only happens under the flag. Serialization into the continuation is Plan 05.
    */
   const pendingSuggestionsByTarget = new Map<string, ActionSuggested[]>();
+  // COORD-01/02 continuation-equivalence: restore any captured cross-tick pending
+  // suggestions on resume. Each pending event is rebuilt through the SAME
+  // `canonicalizeSuggestionPayload` the emit site uses, so the rehydrated payload key
+  // order is byte-identical to the all-at-once form. Empty on the off path and on a
+  // within-tick-consumed run (the captured array is `[]`), so this adds ZERO behaviour
+  // to the flag-off stream.
+  if (resuming) {
+    for (const [target, list] of start.world.pendingSuggestionsByTarget) {
+      pendingSuggestionsByTarget.set(
+        target,
+        list.map((s) => ({
+          type: "ActionSuggested",
+          schemaVersion: 1,
+          payload: canonicalizeSuggestionPayload({
+            suggestionId: s.suggestionId,
+            coordinatorId: s.coordinatorId,
+            targetAgentId: s.targetAgentId,
+            kind: s.kind,
+            params: s.params.toHubId !== undefined ? { toHubId: s.params.toHubId } : {},
+            issuedAtSimMs: s.issuedAtSimMs,
+            ttlSimMs: s.ttlSimMs,
+          }),
+        })),
+      );
+    }
+  }
 
   /**
    * Phase-25 COORD-04: the five-guard sim-time STATE, threaded through the
@@ -908,6 +934,27 @@ export function runToHorizon(
   const backoffUntilByOption = new Map<string, number>();
   const metricAboveSinceByOption = new Map<string, number>();
   const lastCenterByAgent = new Map<string, string>();
+  // COORD-04 continuation-equivalence: restore the five guard state maps on resume so
+  // a chunked/continued coordinator-on run picks up each lease/prune/backoff/
+  // hysteresis exactly where the previous chunk left it (T-25-19). Empty on a fresh
+  // run AND on the off path (the captured arrays are `[]` whenever
+  // `coordinatorsEnabled` is off), so this adds ZERO behaviour to the flag-off stream
+  // (the 3920accc… keystone holds).
+  if (resuming) {
+    for (const [agentId, lease] of start.world.leaseByAgent) {
+      leaseByAgent.set(agentId, {
+        coordinatorId: lease.coordinatorId,
+        expiresAtSimMs: lease.expiresAtSimMs,
+      });
+    }
+    for (const [key, count] of start.world.rejectCountByOption) rejectCountByOption.set(key, count);
+    for (const [key, until] of start.world.backoffUntilByOption)
+      backoffUntilByOption.set(key, until);
+    for (const [key, since] of start.world.metricAboveSinceByOption)
+      metricAboveSinceByOption.set(key, since);
+    for (const [agentId, centerId] of start.world.lastCenterByAgent)
+      lastCenterByAgent.set(agentId, centerId);
+  }
   /** The stable per-option guard key (GUARDs 2+5+1). */
   const optionKey = (coordinatorId: string, targetAgentId: string, kind: string): string =>
     `${coordinatorId}|${targetAgentId}|${kind}`;
@@ -3292,6 +3339,59 @@ export function runToHorizon(
         ([k, v]) =>
           [k, { tripId: v.tripId, fromHubId: v.fromHubId, toHubId: v.toHubId }] as const,
       ),
+      // Phase-25 COORD-04 (continuation-equivalence): capture the five coordinator
+      // GUARD state maps so a chunked/continued coordinator-on run that crosses a
+      // boundary between two coordinator passes restores the SAME lease/prune/backoff/
+      // hysteresis state the next `stepCoordinators` filter reads — the chunked
+      // coordinator-on stream is then byte-identical to all-at-once (T-25-19). Each is
+      // EMPTY on the off path (every WRITE is gated on `coordinatorsEnabled`), so this
+      // is byte-identical to pre-Phase-25 when off (the 3920accc… keystone). Each map
+      // is sorted by key so the serialized bytes are deterministic regardless of
+      // source insertion order, with a FIXED value-field order on the lease tuple.
+      leaseByAgent: [...leaseByAgent.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(
+          ([k, v]) =>
+            [k, { coordinatorId: v.coordinatorId, expiresAtSimMs: v.expiresAtSimMs }] as const,
+        ),
+      rejectCountByOption: [...rejectCountByOption.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, v] as const),
+      backoffUntilByOption: [...backoffUntilByOption.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, v] as const),
+      metricAboveSinceByOption: [...metricAboveSinceByOption.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, v] as const),
+      lastCenterByAgent: [...lastCenterByAgent.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, v] as const),
+      // Phase-25 COORD-01/02: capture any cross-tick pending suggestions DEFENSIVELY
+      // (the handshake is strictly within-tick, so this is normally empty; serialized
+      // so a suggestion targeting an agent not in the same-tick roster never desyncs a
+      // chunked run). The full ActionSuggested payload is plain schema-pinned data.
+      // Empty on the off path (byte-identical to pre-Phase-25). Sorted by target key;
+      // the per-target list keeps its emit order (sorted center / sorted index).
+      pendingSuggestionsByTarget: [...pendingSuggestionsByTarget.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(
+          ([k, list]) =>
+            [
+              k,
+              list.map((s) => ({
+                suggestionId: s.payload.suggestionId,
+                coordinatorId: s.payload.coordinatorId,
+                targetAgentId: s.payload.targetAgentId,
+                kind: s.payload.kind,
+                params:
+                  s.payload.params.toHubId !== undefined
+                    ? { toHubId: s.payload.params.toHubId }
+                    : {},
+                issuedAtSimMs: s.payload.issuedAtSimMs,
+                ttlSimMs: s.payload.ttlSimMs,
+              })),
+            ] as const,
+        ),
     };
     return {
       version: 1,
