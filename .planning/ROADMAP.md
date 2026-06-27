@@ -127,7 +127,7 @@ Plans:
   5. **Determinism gate:** `ActionSuggested`/`SuggestionAccepted`/`SuggestionRejected` are added to the closed union + zod + every exhaustive switch and classified **scope-neutral** (no re-plan feedback storm); all new hashed payloads go through `canonicalize`; with `coordinatorsEnabled` absent (and `:false`) the seed-42 10k golden stays byte-identical to `3920accc…`, and the coordinator-on model captures its own new golden (+ continuation-equivalence green)
 **Plans**: 5 plans
 Plans:
-- [ ] 25-01-PLAN.md — 3 advisory events (ActionSuggested/Accepted/Rejected) through the closed union + zod + every exhaustive switch + scope-neutral + canonicalize (COORD-02 substrate)
+- [x] 25-01-PLAN.md — 3 advisory events (ActionSuggested/Accepted/Rejected) through the closed union + zod + every exhaustive switch + scope-neutral + canonicalize (COORD-02 substrate)
 - [ ] 25-02-PLAN.md — stepCoordinators in-fold SimTask (one per center, sorted by centerId) + rule-based 4-kind suggestion generation + ninth RNG salt + pendingSuggestionsByTarget (COORD-01, COORD-02)
 - [ ] 25-03-PLAN.md — same-tick accept/reject handshake in stepAgents on the agent's binding feasibility + visible reject-with-reason in the alert feed + audit timeline (COORD-02, COORD-03)
 - [ ] 25-04-PLAN.md — the five anti-oscillation/anti-deadlock guards + anti-livelock convergence + bounded-events-per-tick stability tests (COORD-04, COORD-05)
@@ -173,7 +173,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
-| 25. Coordination Centers | 0/TBD | Not started | - |
+| 25. Coordination Centers | 1/5 | In Progress|  |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
 | 28. Continental Hardening | 0/TBD | Not started | - |

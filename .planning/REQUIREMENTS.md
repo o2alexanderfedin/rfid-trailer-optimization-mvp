@@ -35,7 +35,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 
 ### Coordination centers (COORD) — Phases C (rule-based) + D (optimizer-backed)
 - [ ] **COORD-01**: **One advisory coordination center per regional center** — an event-sourcing process-manager that runs **in-fold** (not as an async subscriber), with bounded per-center scope.
-- [ ] **COORD-02**: Coordinators emit advisory **`ActionSuggested`** events (re-route / hold / consolidate / dispatch); the target agent **accepts** (`SuggestionAccepted` + the binding event) or **rejects** (`SuggestionRejected` + reason code) based on its local feasibility.
+- [x] **COORD-02**: Coordinators emit advisory **`ActionSuggested`** events (re-route / hold / consolidate / dispatch); the target agent **accepts** (`SuggestionAccepted` + the binding event) or **rejects** (`SuggestionRejected` + reason code) based on its local feasibility.
 - [ ] **COORD-03**: **Visible reject-with-reason** — a rejected suggestion (e.g. "won't divert: HOS/fuel") surfaces in the alert feed + audit timeline (the headline "smart and honest" demo moment).
 - [ ] **COORD-04**: Anti-oscillation / anti-conflict guards ship with the **first** coordinator: **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning**; `ActionSuggested`/`Accepted`/`Rejected` are classified **scope-neutral** (no re-plan feedback storm).
 - [ ] **COORD-05**: Every agent has a **feasible no-op default** so each tick always closes (no advisory-reject Zeno livelock).
@@ -104,7 +104,7 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | OODA-05 | Phase 24 — OODA Step-Agents | Complete |
 | DET-03 | Phase 24 — OODA Step-Agents (decision-core guard lands here) | Complete |
 | COORD-01 | Phase 25 — Coordination Centers | Pending |
-| COORD-02 | Phase 25 — Coordination Centers | Pending |
+| COORD-02 | Phase 25 — Coordination Centers | Complete |
 | COORD-03 | Phase 25 — Coordination Centers | Pending |
 | COORD-04 | Phase 25 — Coordination Centers | Pending |
 | COORD-05 | Phase 25 — Coordination Centers | Pending |
