@@ -589,7 +589,7 @@ const COORDINATOR_OPTIMIZER_FREEZE_WINDOW_MIN = 15;
  * NET-05 keeps a single center's slice bounded by that center's own hubs, so this cap
  * is reached only by a pathologically dense single-center event burst.
  */
-const COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS = 64;
+export const COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS = 64;
 /**
  * COORD-06: the DETERMINISTIC integer scope-size CAP on a center's per-epoch TRAILER
  * slice (the companion to {@link COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS}). When a
@@ -597,7 +597,27 @@ const COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS = 64;
  * falls back to the rule-based reroute for THAT center. Same discipline: a pure
  * function of the integer `slice.trailerIds.length`, never wall-clock.
  */
-const COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS = 64;
+export const COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS = 64;
+
+/**
+ * COORD-06 (T-26-07) — the PURE, DETERMINISTIC fallback predicate: `true` iff a
+ * center's partitioned per-epoch slice exceeds the in-fold scope-size budget (the
+ * integer hub OR trailer cap). When `true`, the engine's reroute branch falls back
+ * to the Phase-25 rule-based reroute for that center INSTEAD of calling `runEpoch`
+ * — the documented in-fold cost guard.
+ *
+ * The decision is a PURE FUNCTION of the integer slice SIZE (`hubIds.length` /
+ * `trailerIds.length`), NEVER wall-clock timing: no `Date.now`, no timers, no RNG.
+ * So the SAME slice always yields the SAME verdict (reproducible per seed + network,
+ * baked into the Plan-03 optimizer golden). Exported so the engine and the fallback
+ * test exercise the SAME canonical threshold (DRY — no drift between code + test).
+ */
+export function exceedsCoordinatorOptimizerScopeCap(slice: OptimizerScope): boolean {
+  return (
+    slice.hubIds.length > COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS ||
+    slice.trailerIds.length > COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS
+  );
+}
 /**
  * COORD-06: the per-center twin's integer trailer freight capacity — mirrors the
  * API twin-snapshot's `DEFAULT_TRAILER_CAPACITY` (50) so the in-fold per-center
@@ -2431,13 +2451,10 @@ export function runToHorizon(
       // No slice for this center (no in-scope hub bucketed here) ⇒ nothing to do.
       if (slice === undefined) return { suggestions: [], usedOptimizer: true };
 
-      // 3. DETERMINISTIC SIZE CAP (T-26-07): a pure function of the integer slice
-      //    size, NEVER wall-clock. Over-cap ⇒ signal the caller to fall back to the
-      //    rule-based reroute for THIS center (no runEpoch call at all).
-      if (
-        slice.hubIds.length > COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS ||
-        slice.trailerIds.length > COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS
-      ) {
+      // 3. DETERMINISTIC SIZE CAP (T-26-07): the shared pure predicate over the
+      //    integer slice size, NEVER wall-clock. Over-cap ⇒ signal the caller to fall
+      //    back to the rule-based reroute for THIS center (no runEpoch call at all).
+      if (exceedsCoordinatorOptimizerScopeCap(slice)) {
         return { suggestions: [], usedOptimizer: false };
       }
 
