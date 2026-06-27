@@ -105,28 +105,28 @@ describe("buildCenterTwinFromFold — per-center TwinSnapshot from a fold slice"
 
   it("is pure & deterministic: deep-equal + byte-identical, and never mutates the source slice", () => {
     const slice = sliceDFW();
-    const frozen: CenterFoldSlice = Object.freeze({
-      ...slice,
-      spokeHubIds: Object.freeze([...slice.spokeHubIds]) as readonly string[],
-      trailers: Object.freeze(
-        slice.trailers.map((tr) =>
-          Object.freeze({
-            ...tr,
-            routeStops: Object.freeze([...tr.routeStops]),
-            blocks: Object.freeze([...tr.blocks]),
-          }),
-        ),
-      ) as CenterFoldSlice["trailers"],
-      routeLegs: Object.freeze([...slice.routeLegs]) as CenterFoldSlice["routeLegs"],
-    });
+    // Deep-freeze the slice: any in-place write the builder might attempt (e.g.
+    // sorting the source routeStops array) would THROW, proving frozen-in ⇒
+    // frozen-out (the builder reads + copies, never mutates).
+    Object.freeze(slice);
+    Object.freeze(slice.spokeHubIds);
+    Object.freeze(slice.routeLegs);
+    Object.freeze(slice.trailers);
+    for (const tr of slice.trailers) {
+      Object.freeze(tr);
+      Object.freeze(tr.routeStops);
+      Object.freeze(tr.blocks);
+    }
 
-    const first = buildCenterTwinFromFold(frozen, NOW_MIN);
-    const second = buildCenterTwinFromFold(frozen, NOW_MIN);
+    const first = buildCenterTwinFromFold(slice, NOW_MIN);
+    const second = buildCenterTwinFromFold(slice, NOW_MIN);
 
     expect(first).toEqual(second);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
-    // frozen-in ⇒ no mutation occurred (Object.freeze would have thrown otherwise)
-    expect(frozen.spokeHubIds).toEqual(["AUS", "OKC"]);
+    // frozen-in ⇒ no mutation occurred (a write would have thrown above)
+    expect(slice.spokeHubIds).toEqual(["AUS", "OKC"]);
+    // the first trailer's source routeStops stay in their original (unsorted) order
+    expect(slice.trailers[0]!.routeStops.map((s) => s.stopIndex)).toEqual([1, 0]);
   });
 
   it("empty-trailer slice ⇒ a twin with empty trailers but still its hubs + routes", () => {
