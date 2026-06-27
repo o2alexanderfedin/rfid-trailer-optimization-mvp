@@ -195,3 +195,19 @@ CREATE TABLE IF NOT EXISTS geo_inflight_trip (
 );
 
 ALTER TABLE geo_inflight_trip ADD COLUMN IF NOT EXISTS depart_at TIMESTAMPTZ;
+
+-- PERF-02: a trailer's miles-since-last-refuel (the optimizer's fuel-aware
+-- odometer), folded incrementally so twin-snapshot reads it bounded instead of
+-- re-scanning the log. One row per trailer that has reported fuel state.
+CREATE TABLE IF NOT EXISTS trailer_fuel (
+  trailer_id         TEXT             PRIMARY KEY,
+  miles_since_refuel DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+
+-- PERF-02: per-package SLA induction deadline (epoch-minutes), LWW from
+-- PackageInducted. Twin-snapshot reads this bounded table instead of scanning
+-- the entire event log for PackageInducted events on every optimizer epoch.
+CREATE TABLE IF NOT EXISTS induction_deadline (
+  package_id   TEXT    PRIMARY KEY,
+  deadline_min INTEGER NOT NULL
+);
