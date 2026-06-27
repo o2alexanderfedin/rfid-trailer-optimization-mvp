@@ -205,6 +205,29 @@ export interface ExceptionKpiTable {
   low_confidence_exceptions: ColumnType<bigint, string | number, string | number>;
 }
 
+/**
+ * PERF-02: a trailer's cumulative miles since last refuel, folded incrementally
+ * from the trailer-fuel reducer. Twin-snapshot reads this bounded table instead
+ * of re-scanning the entire event log on every optimizer epoch.
+ * One row per trailer that has ever departed (absent until first `TrailerDeparted`).
+ */
+export interface TrailerFuelTable {
+  trailer_id: string;
+  miles_since_refuel: number;
+}
+
+/**
+ * PERF-02 (IND-03): per-package SLA induction deadline, LWW from
+ * `PackageInducted`. Twin-snapshot reads this bounded table instead of
+ * re-scanning the event log for `PackageInducted` events on every epoch.
+ * One row per inducted package (the row is retained even after delivery so the
+ * optimizer can read the deadline without a log rescan).
+ */
+export interface InductionDeadlineTable {
+  package_id: string;
+  deadline_min: number;
+}
+
 export type PackageLocationRow = Selectable<PackageLocationTable>;
 export type ExceptionsRow = Selectable<ExceptionsTable>;
 export type ExceptionKpiRow = Selectable<ExceptionKpiTable>;
@@ -218,6 +241,10 @@ export type AuditTimelineRow = Selectable<AuditTimelineTable>;
 export type GeoRouteRow = Selectable<GeoRouteTable>;
 export type GeoKeyframeRow = Selectable<GeoKeyframeTable>;
 export type GeoInflightTripRow = Selectable<GeoInflightTripTable>;
+/** PERF-02: trailer fuel row (trailer_id, miles_since_refuel). */
+export type TrailerFuelRow = Selectable<TrailerFuelTable>;
+/** PERF-02: induction deadline row (package_id, deadline_min). */
+export type InductionDeadlineRow = Selectable<InductionDeadlineTable>;
 
 /**
  * The projection tables this package owns. The inline applier/rebuild driver
@@ -239,6 +266,10 @@ export interface ProjectionDatabase {
   geo_route: GeoRouteTable;
   geo_keyframe: GeoKeyframeTable;
   geo_inflight_trip: GeoInflightTripTable;
+  /** PERF-02: trailer fuel state (bounded odometer, replaces full-log scan in twin-snapshot). */
+  trailer_fuel: TrailerFuelTable;
+  /** PERF-02: induction deadlines (LWW from PackageInducted, replaces full-log scan in twin-snapshot). */
+  induction_deadline: InductionDeadlineTable;
 }
 
 /**
@@ -256,6 +287,8 @@ export const OPERATIONAL_PROJECTIONS = [
   "tag-registry",
   "zone-estimate",
   "exceptions",
+  "trailer-fuel", // PERF-02: incremental bounded odometer (replaces full-log scan)
+  "induction-deadline", // PERF-02: LWW deadline map (replaces full-log scan)
 ] as const;
 
 export type OperationalProjectionName = (typeof OPERATIONAL_PROJECTIONS)[number];
@@ -468,4 +501,20 @@ CREATE TABLE IF NOT EXISTS geo_inflight_trip (
 );
 
 ALTER TABLE geo_inflight_trip ADD COLUMN IF NOT EXISTS depart_at TIMESTAMPTZ;
+
+-- PERF-02: a trailer's miles-since-last-refuel (the optimizer's fuel-aware
+-- odometer), folded incrementally so twin-snapshot reads it bounded instead of
+-- re-scanning the log. One row per trailer that has reported fuel state.
+CREATE TABLE IF NOT EXISTS trailer_fuel (
+  trailer_id         TEXT             PRIMARY KEY,
+  miles_since_refuel DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+
+-- PERF-02: per-package SLA induction deadline (epoch-minutes), LWW from
+-- PackageInducted. Twin-snapshot reads this bounded table instead of scanning
+-- the entire event log for PackageInducted events on every optimizer epoch.
+CREATE TABLE IF NOT EXISTS induction_deadline (
+  package_id   TEXT    PRIMARY KEY,
+  deadline_min INTEGER NOT NULL
+);
 `;

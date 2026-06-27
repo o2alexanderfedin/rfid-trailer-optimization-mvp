@@ -1,3 +1,0 @@
-
-## 22:22 | feature/phase-26-coordinator-optimizer
-Phase 26 (3/3) complete: coordinatorUsesOptimizer + optimizer reroute (COORD-06 shipped), NET-05 closed, determ golden documented-equal edfa5a6d (2000 epochs/endorses same decisions), 1570 tests green + 4 golds verified. P27 carryover: make reroute genuinely divergent via real constraints. Commits: aee0415..65fceab (26-02), a74173b..97bd2af (26-03).

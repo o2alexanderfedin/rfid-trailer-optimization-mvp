@@ -11,6 +11,7 @@ import { assertNever, type Severity } from "@mm/domain";
 import { EPOCH_MS, MEMPHIS } from "@mm/simulation";
 import type { Kysely } from "kysely";
 import { type ApiDb, readHubsFromLog } from "../routes/queries.js";
+import { AsyncQueue } from "@alexanderfedin/async-queue";
 import {
   diffTick,
   type DeliveryEvent,
@@ -20,6 +21,7 @@ import {
   type RouteState,
   type SimSpeedState,
   type SnapshotPayload,
+  type SuggestionEvent,
   type TickPayload,
   type TrailerKeyframe,
   type TrailerStop,
@@ -80,11 +82,14 @@ export type SnapshotPayloadBuilder = (db: ApiDb) => Promise<SnapshotPayload>;
  * `inductionEvents` (VIZ-13) are the packages inducted during this tick/frame —
  * TRANSIENT, attached to the tick payload to drive the pulsing-marker animation
  * (never persisted, never on a snapshot). Returns the `WsEnvelope` sent.
+ * `suggestions` (VIZ-17) are the advisory suggestion outcomes this tick —
+ * TRANSIENT, attached to drive the accept/reject flash overlay + feed.
  */
 export type Broadcast = (
   simMs: number,
   inductionEvents?: readonly InductionEvent[],
   deliveryEvents?: readonly DeliveryEvent[],
+  suggestions?: readonly SuggestionEvent[],
 ) => Promise<WsEnvelope>;
 
 /** Options for {@link attachSnapshotSocket} (dependency inversion / testing). */
@@ -735,6 +740,77 @@ function closeIfOpen(socket: WebSocket): void {
 }
 
 // ---------------------------------------------------------------------------
+// PERF-03 (seam c): per-client bounded AsyncQueue<string> backpressure
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum number of wire frames buffered per-client before the broadcaster
+ * experiences backpressure (blocks on enqueue). 64 frames × ~2–5 KB = ~128–320 KB
+ * max server-side memory per slow client — well-bounded (T-27-11).
+ */
+export const CLIENT_QUEUE_MAX_SIZE = 64;
+
+/**
+ * Handle returned by `createClientQueue`. The broadcast loop calls `enqueue`
+ * per frame; socket close/error calls `close`.
+ */
+export interface ClientQueueHandle {
+  /** Enqueue a wire frame for delivery; blocks (backpressure) when the queue is full. */
+  enqueue(frame: string): Promise<void>;
+  /** Signal socket close/error: stop the consumer, wake any blocked enqueuers. */
+  close(): void;
+}
+
+/**
+ * PERF-03 (seam c): create a per-client bounded `AsyncQueue<string>` and start a
+ * consumer loop that dequeues frames and awaits `send(frame)` drain.
+ *
+ * Contract:
+ *  - FIFO: frames are sent in enqueue order.
+ *  - Bounded: at most `maxSize` frames buffered; enqueue blocks when full
+ *    (backpressure) — no silent frame drops.
+ *  - Isolated: each client has its own queue; a slow client does not block other clients.
+ *  - Clean shutdown: after `close()`, the consumer exits; no further send is attempted.
+ *  - The initial-connect snapshot is sent DIRECTLY via `sendRawIfOpen`, NOT through
+ *    this queue — Pitfall 4 (a fresh socket is at bufferedAmount=0, so the old gate
+ *    was a harmless no-op there; we preserve this by keeping snapshots out of the queue).
+ *
+ * Exported for unit testing (no direct server dependency).
+ */
+export function createClientQueue(
+  send: (frame: string) => Promise<void>,
+  maxSize: number = CLIENT_QUEUE_MAX_SIZE,
+): ClientQueueHandle {
+  const queue = new AsyncQueue<string>(maxSize);
+
+  // Consumer loop: dequeue frames and await send drain. Exits cleanly when the
+  // queue is closed + drained (dequeue returns undefined).
+  (async () => {
+    for await (const frame of queue) {
+      // Fire-and-forget each send inside the loop; error on a single frame
+      // should not stop the consumer from draining the rest.
+      try {
+        await send(frame);
+      } catch {
+        // Socket error during send: the socket close handler will call close()
+        // which will exit this loop on the next dequeue iteration.
+      }
+    }
+  })().catch(() => {
+    // Consumer pump error (e.g. queue internal error) — close() handles cleanup.
+  });
+
+  return {
+    enqueue(frame: string): Promise<void> {
+      return queue.enqueue(frame);
+    },
+    close(): void {
+      queue.close();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // attachSnapshotSocket: the channel
 // ---------------------------------------------------------------------------
 
@@ -754,7 +830,10 @@ export function attachSnapshotSocket(
   speedController: SpeedController,
   options: SnapshotSocketOptions = {},
 ): Broadcast {
-  const clients = new Set<WebSocket>();
+  // PERF-03 (seam c): per-client bounded queues. Each socket gets a
+  // `ClientQueueHandle`; the broadcast loop enqueues wire strings per client
+  // instead of calling `sendRawIfOpen` (which dropped frames at 256 KB).
+  const clientQueues = new Map<WebSocket, ClientQueueHandle>();
   const build = options.buildPayload ?? buildSnapshotPayload;
 
   /** The effective speed state stamped on every envelope (snapshot/resync/tick). */
@@ -774,9 +853,27 @@ export function attachSnapshotSocket(
   }
 
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {
-    clients.add(socket);
-    socket.on("close", () => clients.delete(socket));
-    socket.on("error", () => clients.delete(socket));
+    // Create a per-client bounded queue + consumer loop for tick frames.
+    const clientQueue = createClientQueue(
+      async (frame: string) => {
+        // Await socket.send drain (bounded-memory backpressure — T-27-11).
+        if (socket.readyState === WS_OPEN) {
+          await new Promise<void>((resolve, reject) => {
+            socket.send(frame, (err) => (err !== undefined ? reject(err) : resolve()));
+          });
+        }
+      },
+    );
+    clientQueues.set(socket, clientQueue);
+
+    socket.on("close", () => {
+      clientQueues.delete(socket);
+      clientQueue.close();
+    });
+    socket.on("error", () => {
+      clientQueues.delete(socket);
+      clientQueue.close();
+    });
 
     // FIX 14: handle client resync requests. When a client detects a seq-gap
     // (missed ticks), it sends `{ type: "resync" }`. Reply to THAT socket with
@@ -859,7 +956,8 @@ export function attachSnapshotSocket(
       })
       .catch((err: unknown) => {
         app.log.error(err, "initial ws snapshot failed");
-        clients.delete(socket);
+        clientQueues.delete(socket);
+        clientQueue.close();
         closeIfOpen(socket);
       });
   });
@@ -869,6 +967,7 @@ export function attachSnapshotSocket(
     simMs: number,
     inductionEvents?: readonly InductionEvent[],
     deliveryEvents?: readonly DeliveryEvent[],
+    suggestions?: readonly SuggestionEvent[],
   ): Promise<WsEnvelope> => {
     const current = await build(db);
     const prev = baseline ?? emptySnapshotPayload();
@@ -879,17 +978,21 @@ export function attachSnapshotSocket(
     speedController.noteSimMs(simMs);
 
     const diff: TickPayload = diffTick(prev, current);
-    // VIZ-13 / VIZ-14: attach the tick's transient induction + delivery events
-    // onto the delta when present — never persisted, never on a snapshot (the
-    // Pitfall-7 guard: these fields exist ONLY on a TickPayload).
+    // VIZ-13 / VIZ-14 / VIZ-17: attach the tick's transient induction, delivery,
+    // and suggestion events onto the delta when present — never persisted, never
+    // on a snapshot (the Pitfall-7 guard: these fields exist ONLY on a TickPayload).
     const withInduction: TickPayload =
       inductionEvents !== undefined && inductionEvents.length > 0
         ? { ...diff, inductionEvents }
         : diff;
-    const delta: TickPayload =
+    const withDelivery: TickPayload =
       deliveryEvents !== undefined && deliveryEvents.length > 0
         ? { ...withInduction, deliveryEvents }
         : withInduction;
+    const delta: TickPayload =
+      suggestions !== undefined && suggestions.length > 0
+        ? { ...withDelivery, suggestions }
+        : withDelivery;
     seq += 1;
     const envelope: WsEnvelope = {
       v: 1,
@@ -902,7 +1005,15 @@ export function attachSnapshotSocket(
       payload: delta,
     };
     const wire = JSON.stringify(envelope);
-    for (const socket of clients) sendRawIfOpen(socket, wire);
+    // PERF-03 (seam c): enqueue the wire string for each client's bounded queue.
+    // Per-client isolation: one slow client's blocked queue does not stall other clients
+    // (each enqueue is independent — T-27-12). Enqueue is fire-and-forget here;
+    // backpressure is felt by the broadcast caller if a queue is full.
+    for (const [, queue] of clientQueues) {
+      queue.enqueue(wire).catch(() => {
+        // Queue closed (client disconnected) — ignore silently.
+      });
+    }
     return envelope;
   };
 }

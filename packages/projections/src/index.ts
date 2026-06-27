@@ -136,6 +136,13 @@ export {
   trailerFuelReducer,
 } from "./reducers/trailer-fuel.js";
 
+// --- PERF-02: induction deadline (LWW from PackageInducted) -------------------
+export type { InductionDeadlineState } from "./reducers/induction-deadline.js";
+export {
+  emptyInductionDeadlineState,
+  inductionDeadlineReducer,
+} from "./reducers/induction-deadline.js";
+
 // --- Operational twin: schema + inline applier + rebuild driver --------------
 export type {
   ProjectionDatabase,
@@ -157,6 +164,10 @@ export type {
   AuditTimelineTable,
   GeoRouteTable,
   GeoKeyframeTable,
+  TrailerFuelTable,
+  TrailerFuelRow,
+  InductionDeadlineTable,
+  InductionDeadlineRow,
   OperationalProjectionName,
   CatchupProjectionName,
 } from "./schema.js";
@@ -173,6 +184,8 @@ export type {
 } from "./runner/inline.js";
 export {
   applyInline,
+  applyTrailerFuel,
+  applyInductionDeadline,
   readOperationalTwin,
   projectionView,
   readOpenExceptions,

@@ -224,6 +224,54 @@ export default tseslint.config(
     },
   },
   {
+    // Phase-27 DET-03 — FULL DETERMINISTIC SIMULATION CORE STATIC GUARD.
+    //
+    // The entire simulation deterministic core (`packages/simulation/src/**`) MUST
+    // stay synchronous + pure + seeded: NO async-queue plumbing, and NO database
+    // access (`kysely`). This WIDENS the per-subdir bans above (OODA + coordinator)
+    // to the full engine src so no other simulation source file (engine.ts, network,
+    // etc.) can accidentally import runtime plumbing either. Any violation FAILS
+    // the lint — the CI gate that makes T-27-04 (async-queue leaking into the
+    // deterministic core) structurally CAUGHT, not merely discouraged. Test
+    // siblings (`*.test.ts`) are excluded: they legitimately import the async-queue
+    // for order-guarantee tests and integration assertions. `vendor/**` stays in
+    // the global `ignores` above — the lib itself is not linted; only our call
+    // sites are. The ban applies at the path level (not the vendor source).
+    files: ["packages/simulation/src/**/*.ts"],
+    ignores: ["packages/simulation/src/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@alexanderfedin/async-queue",
+              message:
+                "DET-03: async-queue is runtime plumbing only — the simulation deterministic core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              name: "kysely",
+              message:
+                "DET-03: the simulation deterministic core must not touch the database. Read frozen observations only.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["*async-queue*"],
+              message:
+                "DET-03: async-queue is runtime plumbing only — the simulation deterministic core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              group: ["kysely/*", "*/kysely", "pg", "@mm/persistence", "*/persistence"],
+              message:
+                "DET-03: the simulation deterministic core must not touch the database/driver layer.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Vitest Browser Mode tests (`*.browser.test.tsx`) execute in a real browser
     // type universe — their `vitest-browser-react` `render()` result and the
     // `@vitest/browser` `expect.element`/locator augmentations are not part of

@@ -90,17 +90,20 @@ const COORDINATOR_OPTIMIZER_ON_OPTS = {
 } as const;
 
 // Captured REPRODUCIBILITY-FIRST from COORDINATOR_OPTIMIZER_ON_OPTS on arm64
-// (darwin), 61128 events: run twice in-process ⇒ identical, AND across two separate
-// `node` process invocations ⇒ identical, BEFORE baking the literal (PITFALLS: never
-// commit a non-reproducible golden).
+// (darwin), P27-A (plan 27-04): run twice in-process ⇒ identical, AND across two
+// separate `node` process invocations ⇒ identical, BEFORE baking the literal
+// (PITFALLS: never commit a non-reproducible golden).
 //
-// DOCUMENTED EQUALITY (Plan-03 planner-truth #2 amendment): this hash IS the Phase-25
-// rule-based coordinator golden `edfa5a6d…`. The optimizer path is genuinely invoked
-// (verified by instrumentation: 2000 runEpoch epochs / 9663 pre-guard reroutes / 0
-// fallbacks) but on the current always-feasible/center-headed per-center twin it can
-// only ENDORSE the same reroute the rule-based heuristic makes, so the route-aware
-// stream coincides with the rule-based stream byte-for-byte. The test below asserts
-// the equality explicitly (a truthful determinism pin), NOT a difference.
+// DOCUMENTED DIVERGENCE (P27-A — COORD-06 criterion-1): this hash DIFFERS from the
+// Phase-25 rule-based coordinator golden `edfa5a6d…`. The three structural pins in
+// `optimizerRerouteFor` have been removed (Plan 27-04 Task 1):
+//   PIN 1: route head is now the LEAST-CONGESTED relief spoke (not always obs.centerId)
+//   PIN 2: departureOffsetMin derived from real transit median + dwell (not FREEZE+1)
+//   PIN 3: real block volume from inboundDepthByHub (not empty blocks) + real per-leg
+//          travelMin/distanceMiles from transitByLeg/legMilesFor
+// As a result the optimizer can now DECLINE over-capacity reroutes and CHOOSE genuinely
+// different destinations — producing a divergent event stream (reroute 7378 vs 9553).
+// The three prior goldens (3920accc/edfa5a6d/94689f99) are byte-identical (asserted below).
 //
 // Cross-arch contingency (RESEARCH VQ#9 / Pitfall 2): the prior goldens were captured
 // on x86_64; this hash was captured on arm64 (the flags-off `3920accc…`, OODA-on
@@ -109,7 +112,7 @@ const COORDINATOR_OPTIMIZER_ON_OPTS = {
 // produces a different hash, the contingency is the integer lookup-table sampler swap
 // (do NOT do this unless the hash actually fails on CI).
 const COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256 =
-  "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc";
+  "162efbd8c02f64c7fed96e142ec9d26c3b26c283c44bf80979a67dc9d6d3f233";
 
 // The three prior goldens (asserted INTACT — the optimizer arm pins against all of
 // them). The optimizer-on golden EQUALS the coordinator-on golden (documented above)
@@ -135,22 +138,24 @@ describe("optimizer-backed coordinator 10k golden (COORD-06, reproducibility-fir
     expect(a).toBe(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256);
   });
 
-  // DOCUMENTED EQUALITY (planner-truth #2 amendment): the optimizer-on golden EQUALS
-  // the Phase-25 coordinator golden edfa5a6d… (the optimizer endorses the same reroute
-  // the rule-based path makes on the current center-headed/always-feasible twin) — a
-  // truthful pin that the route-aware path is a byte-stable superset coinciding with
-  // the rule-based stream on this topology.
-  it("the optimizer-on golden EQUALS the Phase-25 coordinator golden edfa5a6d… (documented coincidence)", () => {
-    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).toBe(COORDINATOR_ON_GOLDEN_SHA256);
-    expect(sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS))).toBe(COORDINATOR_ON_GOLDEN_SHA256);
+  // DOCUMENTED DIVERGENCE (P27-A — COORD-06 criterion-1): the optimizer-on golden
+  // DIFFERS from the Phase-25 coordinator-on golden edfa5a6d… — the three structural
+  // pins in `optimizerRerouteFor` have been removed so the optimizer can now choose
+  // a genuinely different destination (least-congested relief spoke) and DECLINE
+  // over-capacity reroutes. This is the route-aware divergence the plan requires.
+  it("the optimizer-on golden DIFFERS from the Phase-25 coordinator-on golden edfa5a6d… (route-aware divergence)", () => {
+    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
+    expect(sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS))).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
   });
 
-  it("the optimizer-on golden DIFFERS from the flags-off 3920accc… AND the OODA-on 94689f99…", () => {
+  it("the optimizer-on golden DIFFERS from the flags-off 3920accc…, OODA-on 94689f99…, AND coordinator-on edfa5a6d…", () => {
     expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(FLAGS_OFF_GOLDEN_SHA256);
     expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(OODA_ON_GOLDEN_SHA256);
+    expect(COORDINATOR_OPTIMIZER_ON_GOLDEN_SHA256).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
     const h = sha(simulate(COORDINATOR_OPTIMIZER_ON_OPTS));
     expect(h).not.toBe(FLAGS_OFF_GOLDEN_SHA256);
     expect(h).not.toBe(OODA_ON_GOLDEN_SHA256);
+    expect(h).not.toBe(COORDINATOR_ON_GOLDEN_SHA256);
   });
 
   it("every emitted optimizer-on event passes the domain validateEvent boundary", () => {
@@ -169,12 +174,13 @@ describe("optimizer-backed coordinator 10k golden (COORD-06, reproducibility-fir
     const rejected = stream.filter((e) => e.event.type === "SuggestionRejected").length;
     // The optimizer-backed reroute kind is genuinely produced (the route-aware
     // suggestions are observably present — NOT a skipped/empty path). Captured
-    // post-guard counts: suggested 22290, reroute 9553, accepted 22269, rejected 21
-    // (every suggestion consumed: accepted + rejected == suggested). The reroute count
-    // matches the rule-based golden because the optimizer ENDORSES the same decision
-    // (the documented coincidence above) — the value witnesses the path is real.
+    // post-guard counts (P27-A recapture): suggested 20115, reroute 7378,
+    // accepted 20094, rejected 21 (every suggestion consumed: accepted + rejected ==
+    // suggested). The reroute count is LOWER than the rule-based 9553 because the
+    // optimizer now DECLINES over-capacity reroutes (real blocks from inboundDepthByHub)
+    // — this is the route-aware divergence (COORD-06 criterion-1).
     expect(reroute).toBeGreaterThan(1000);
-    expect(reroute).toBe(9553);
+    expect(reroute).toBe(7378);
     expect(suggested).toBeGreaterThan(1000);
     expect(accepted).toBeGreaterThan(1000);
     expect(rejected).toBeGreaterThan(0);

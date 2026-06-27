@@ -61,7 +61,21 @@ async function main(): Promise<void> {
   // and the plan reflects the lost time. Off-by-default in the engine keeps the
   // unit determinism goldens byte-identical; this env wiring affects ONLY the demo.
   const fuelEnabled = resolveDemoFuelEnabled();
-  const fuelConfig: FuelConfig = { ...DEFAULT_FUEL_CONFIG, enabled: fuelEnabled };
+  // P27-B (COORD-03 live reject): the CONTINENTAL demo config enables fuel and
+  // lowers `refuelThresholdMiles` so long backbone legs deterministically push a
+  // mid-trip truck past the refuel limit exactly when a coordinator targets it →
+  // the "won't divert: fuel" SuggestionRejected fires LIVE. 250 miles is short
+  // enough that a single hub-to-hub backbone leg (400–900 mi) crosses the
+  // threshold mid-trip, but large enough that short spoke legs rarely trigger
+  // early. Do NOT edit DEFAULT_FUEL_CONFIG — this override affects ONLY the live
+  // continental demo run, never the unit determinism goldens (which call
+  // simulate() directly with the engine default, fuel OFF).
+  const fuelConfig: FuelConfig = {
+    ...DEFAULT_FUEL_CONFIG,
+    enabled: fuelEnabled,
+    // P27-B override: lower threshold so backbone legs trigger the fuel guard.
+    refuelThresholdMiles: 250,
+  };
   // Phase 22 (OUT-01): terminal delivery on the LIVE demo (DEFAULT ON; set
   // OUTBOUND_DELIVERY_ENABLED=0 to disable). When on, freight reaching its
   // destination hub fires PackageDelivered after a seeded dwell — driving the
