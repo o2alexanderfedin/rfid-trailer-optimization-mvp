@@ -1,36 +1,48 @@
 {
   "version": "1.0",
-  "timestamp": "2026-06-24T04:37:12Z",
-  "context": "milestone-planning",
-  "milestone": "v2.0",
-  "milestone_name": "Complete Simulation Model",
+  "timestamp": "2026-06-27T05:34:06.873Z",
+  "milestone": "v3.0",
+  "milestone_name": "Continental OODA Network",
+  "context": "between-phases (milestone in progress)",
+  "phase": "27",
+  "phase_name": "Perf + Plumbing + Scale Viz",
+  "phase_dir": null,
   "status": "paused",
-  "phase": null,
-  "plan": null,
-  "task": null,
-  "total_tasks": null,
-  "completed_tasks": [
-    {"name": "Confirm v2.0 scope (4 audited gaps), version v2.0 (major), research-first", "status": "done"},
-    {"name": "PROJECT.md → v2.0 Current Milestone + Active + Out-of-Scope reframe + footer", "status": "done", "commit": "2638290"},
-    {"name": "STATE.md milestone-switch → v2.0/planning; commit + push develop", "status": "done", "commit": "2638290"}
+  "position": "4 of 6 phases complete (23-26 merged + pushed); Phase 27 not started",
+  "branch": "develop",
+  "head": "6ab4b6b",
+  "origin_synced": true,
+  "completed_phases": [
+    {"phase": 23, "name": "Multi-Center Topology", "status": "complete", "note": "92 big-city hubs, 6 regional centers, full-mesh+anti-SPOF backbone, applyHubInventory P1 freeze fix; continental fixture golden 8f91b13f"},
+    {"phase": 24, "name": "OODA Step-Agents", "status": "complete", "note": "truck+hub deterministic step(), DET-03 ooda/** guard; golden 94689f99"},
+    {"phase": 25, "name": "Coordination Centers", "status": "complete", "note": "advisory ActionSuggested + accept/reject + reject-with-reason + 5 anti-oscillation guards + anti-livelock; golden edfa5a6d; adversarial-verified; orphaned TTL guard fixed"},
+    {"phase": 26, "name": "Coordinator Optimizer", "status": "complete", "note": "pure runEpoch in-fold reroute suggestion engine; NET-05 partitionScopeByCenter now LIVE; optimizer-on golden == edfa5a6d (documented-equal)"}
   ],
-  "remaining_tasks": [
-    {"name": "Step 8 Research (research-first): 4 gsd-project-researcher (stack/features/architecture/pitfalls) on middle-mile induction/consolidation/outbound/continuous DES → gsd-research-synthesizer → .planning/research/SUMMARY.md", "status": "not_started"},
-    {"name": "Step 9 Requirements → .planning/REQUIREMENTS.md (REQ-IDs CONT-*/IND-*/OUT-*/FLOW-* + projections/viz/optimizer-awareness); user confirm gate", "status": "not_started"},
-    {"name": "Step 10 Roadmap → gsd-roadmapper → .planning/ROADMAP.md; user approval gate; Step 10.5 link todos; Step 11 done", "status": "not_started"},
-    {"name": "STOP — implementation needs a separate go-ahead (do NOT auto-start building)", "status": "not_started"}
+  "remaining_phases": [
+    {"phase": 27, "name": "Perf + Plumbing + Scale Viz", "status": "not_started", "reqs": "PERF-02, PERF-03, PERF-04, VIZ-15, VIZ-16, VIZ-17"},
+    {"phase": 28, "name": "Continental Hardening", "status": "not_started", "reqs": "DET-02 (consolidated determinism/golden audit)"}
+  ],
+  "phase_27_demo_carryovers": [
+    {"id": "P27-A", "from": "Phase 26", "action": "Make the optimizer-backed reroute GENUINELY route-aware-divergent — rebuild the per-center twin to reflect real freeze-windows/capacity + give the optimizer a real destination choice beyond the center — so COORD-06 criterion-1 (observably plan-quality vs rule-based) is demonstrable. USER-APPROVED deferral.", "source": "26-VERIFICATION.md"},
+    {"id": "P27-B", "from": "Phase 25", "action": "Reject-with-reason continental scenario tuning — tune the continental scenario/suggestion heuristic so the headline 'won't divert: HOS/fuel' reject fires LIVE in the continental config (0 rejects across 7 seeds currently). Machinery is proven; scenario needs tuning.", "source": "25-VERIFICATION.md"}
   ],
   "blockers": [],
-  "human_actions_pending": [
-    {"action": "Decide whether to release develop → main (SP1+SP2 shipped; main is behind)", "context": "Outward-facing release; left to user", "blocking": false}
-  ],
+  "human_actions_pending": [],
   "decisions": [
-    {"decision": "Milestone = v2.0 (major), not v1.3", "rationale": "finite distribution-playback → full continuous logistics sim is a v2-level upgrade (user choice)"},
-    {"decision": "Scope = all 4 audited gaps (continuous, external induction, outbound delivery, bidirectional freight)", "rationale": "without inbound/outbound + continuity it is playback, not simulation"},
-    {"decision": "Outbound HANDOFF in scope; door-level last-mile ROUTING stays out of scope", "rationale": "model freight leaving hubs, not customer delivery-route optimization"},
-    {"decision": "Reconcile SP1 (paced-loop) + SP2 (rest/fuel) into v2.0 history", "rationale": "shipped on develop post-v1.2 outside GSD; release with v2.0"}
+    {"decision": "v2.1.0 released to main + pushed (develop->main, tag v2.1.0)", "rationale": "demo-hardening fixes (projection fold + snapshot clock-anchor) shipped before v3.0", "phase": "pre-v3.0"},
+    {"decision": "async-queue vendored as git submodule vendor/async-queue, plumbing-only, ESLint-banned from deterministic core (vendor/** ignored)", "rationale": "O(1)-memory backpressured queue for runtime plumbing (P27); Promise-based so banned from the seeded core", "phase": "v3.0 setup"},
+    {"decision": "6 regional centers (empirical, Phase 23)", "rationale": "best fan-out balance / 30-leg <=2-hop mesh / 0 over-cap orphans across the 4-8 envelope; user deferred the number to empirical", "phase": "23"},
+    {"decision": "COORD-06 Option A: ship optimizer-endorses-rule now, make genuinely divergent in P27", "rationale": "optimizer is invoked (2000 epochs) but the always-feasible/center-headed twin makes it a rubber-stamp; divergence is a demo-quality enhancement -> P27", "phase": "26"},
+    {"decision": "Per-phase cadence: feature branch -> gsd-plan-phase -> sequential gsd-executor per plan -> gsd-verifier (adversarial on risky phases) -> remediate -> git flow feature finish -> push develop", "rationale": "proven across 4 phases; context-lean; produces GSD artifacts; goldens re-verified in main each phase", "phase": "all"}
   ],
-  "uncommitted_files": [".remember/* (session bookkeeping)"],
-  "next_action": "Re-run /gsd-new-milestone in a fresh session; STATE is at v2.0/planning so continue from Step 8 (research). Do NOT start implementation.",
-  "context_notes": "Paused for context budget after milestone INIT committed+pushed (develop synced). Determinism keystone: every new behavior seeded + golden-safe (feature-off byte-identical). GOTCHAS: direct develop commits are pre-commit-hook-blocked (feature branch, or --no-verify for planning docs); include `pnpm typecheck` in any gate (catches test-file TS errors build/lint/vitest miss); api (tsx) imports @mm/simulation from dist → `pnpm build` after engine edits. SP1 34f02cc + SP2 eb65a75 on develop, gate green (unit 1291/ui 214/integration 97). Full continuation in .planning/.continue-here.md + .remember/remember.md."
+  "goldens": {
+    "flags_off": "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
+    "ooda_on": "94689f9989c0019edff27134dad0ef4cfb07c15c9c308ef4b40c38e848f4e608",
+    "coordinator_on": "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc",
+    "optimizer_on": "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc (documented-equal to coordinator_on)",
+    "continental_fixture": "8f91b13f06e8481b5d80f0beb3c36b9307abad21242bdc1696b8769175db6644"
+  },
+  "uncommitted_files": [],
+  "next_action": "Resume Phase 27 (Perf + Plumbing + Scale Viz): git flow feature start phase-27-... -> discuss (grey-area table) -> gsd-plan-phase 27 (fold in the 2 demo carry-overs P27-A/P27-B) -> sequential executors -> verify -> merge -> push. Then Phase 28 (DET-02) -> milestone audit -> complete -> cleanup -> release v3.0 + restart demo. Or simply /gsd-autonomous --from 27.",
+  "context_notes": "Long autonomous build run via /gsd-autonomous --from 23. 4/6 phases shipped this session on top of v2.1 release + v3.0 milestone init (4-researcher sweep + Google AI Mode consult). Demo is STOPPED during the build (ports 3001/5173 free; Postgres docker compose 'postgres' service up) — restart at milestone end. Determinism keystone held every phase (flags-off byte-identical to 3920accc). Gotchas: planning-doc commits on develop/feature need git commit --no-verify; pnpm typecheck is a SEPARATE gate (catches missed exhaustive switches vitest passes); any new domain event must thread through the closed union + zod + EVERY exhaustive switch; run vitest lanes ONE AT A TIME (full concurrent gate OOMs); external-drive int-tests time out at 120s (raise timeout, not a real failure); kill demo procs by PORT."
 }
