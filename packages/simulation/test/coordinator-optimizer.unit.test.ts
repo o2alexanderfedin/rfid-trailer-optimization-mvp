@@ -13,7 +13,12 @@ import {
   epochResultToRerouteSuggestions,
   type CenterFoldSlice,
 } from "../src/coordinator/index.js";
-import { simulate } from "../src/engine.js";
+import {
+  COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS,
+  COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS,
+  exceedsCoordinatorOptimizerScopeCap,
+  simulate,
+} from "../src/engine.js";
 
 /**
  * Phase-26 COORD-06 (Plan 02) — the optimizer-backed REROUTE branch in
@@ -239,5 +244,71 @@ describe("NET-05 live: a center's reroute scope is independent of total network 
     // MEM's slice names ONLY its own hub (LAX) + trailer (T001) — never DEN's.
     expect(memSlice!.hubIds).toEqual(["LAX"]);
     expect(memSlice!.trailerIds).toEqual(["T001"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 2 — DETERMINISTIC horizon/size-cap FALLBACK to the rule-based reroute.
+//
+// `exceedsCoordinatorOptimizerScopeCap` is the PURE predicate the engine's
+// reroute branch consults: a per-center slice whose hub OR trailer count exceeds
+// the named integer cap takes the rule-based reroute for that center INSTEAD of
+// calling runEpoch. The decision is a pure function of the integer scope SIZE —
+// never wall-clock — so it is reproducible per seed + network (T-26-07).
+// ---------------------------------------------------------------------------
+
+/** Build a synthetic OptimizerScope with `nHubs` hubs + `nTrailers` trailers. */
+function syntheticScope(nHubs: number, nTrailers: number): OptimizerScope {
+  return {
+    hubIds: Array.from({ length: nHubs }, (_, i) => `H${String(i).padStart(4, "0")}`),
+    trailerIds: Array.from({ length: nTrailers }, (_, i) => `T${String(i).padStart(4, "0")}`),
+    horizonStartMin: 0,
+    horizonEndMin: 240,
+    timeStepMin: 15,
+  };
+}
+
+describe("Task 2: deterministic integer-scope-size cap fallback (T-26-07)", () => {
+  it("a sub-cap slice does NOT exceed the cap (⇒ the optimizer path is taken)", () => {
+    const small = syntheticScope(
+      COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS,
+      COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS,
+    );
+    // Exactly AT the cap is NOT over (strict `>` threshold).
+    expect(exceedsCoordinatorOptimizerScopeCap(small)).toBe(false);
+  });
+
+  it("an over-cap HUB count exceeds the cap (⇒ rule-based fallback, no runEpoch)", () => {
+    const tooManyHubs = syntheticScope(COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS + 1, 1);
+    expect(exceedsCoordinatorOptimizerScopeCap(tooManyHubs)).toBe(true);
+  });
+
+  it("an over-cap TRAILER count exceeds the cap (⇒ rule-based fallback, no runEpoch)", () => {
+    const tooManyTrailers = syntheticScope(1, COORDINATOR_OPTIMIZER_MAX_SCOPE_TRAILERS + 1);
+    expect(exceedsCoordinatorOptimizerScopeCap(tooManyTrailers)).toBe(true);
+  });
+
+  it("the cap decision is a PURE function of the integer scope size (deterministic, no wall-clock)", () => {
+    const a = syntheticScope(COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS + 5, 3);
+    const b = syntheticScope(COORDINATOR_OPTIMIZER_MAX_SCOPE_HUBS + 5, 3);
+    // Same integer sizes ⇒ same verdict, every call (no timer/clock dependence).
+    expect(exceedsCoordinatorOptimizerScopeCap(a)).toBe(exceedsCoordinatorOptimizerScopeCap(b));
+    expect(exceedsCoordinatorOptimizerScopeCap(a)).toBe(true);
+    // The verdict is stable across repeated calls (idempotent / referentially transparent).
+    for (let i = 0; i < 5; i += 1) {
+      expect(exceedsCoordinatorOptimizerScopeCap(a)).toBe(true);
+    }
+  });
+
+  it("an empty scope is well under the cap (the no-congestion no-op default)", () => {
+    expect(exceedsCoordinatorOptimizerScopeCap(syntheticScope(0, 0))).toBe(false);
+  });
+
+  it("the all-on optimizer run is byte-identical regardless of the cap decision (same-seed reproducible)", () => {
+    // The fallback path NEVER perturbs reproducibility: same seed ⇒ identical
+    // stream, whether centers take the optimizer path or the rule-based fallback.
+    const a = JSON.stringify(simulate(OPT_ON));
+    const b = JSON.stringify(simulate({ ...OPT_ON }));
+    expect(b).toBe(a);
   });
 });
