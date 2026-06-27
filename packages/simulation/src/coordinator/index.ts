@@ -35,3 +35,12 @@ export type {
   CoordinatorSuggestion,
   CoordinatorSuggestionKind,
 } from "./coordinator.js";
+
+// COORD-02 (consume half) — the pure accept/reject arbitration (the un-overridable
+// feasibility contract; the engine consumes this in stepAgents, Plan 03 Task 2).
+export { arbitrateSuggestion } from "./handshake.js";
+export type {
+  SuggestionArbitration,
+  SuggestionBindingKind,
+  SuggestionRejectReason,
+} from "./handshake.js";
