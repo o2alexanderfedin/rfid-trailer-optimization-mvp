@@ -44,3 +44,30 @@ export type {
   SuggestionBindingKind,
   SuggestionRejectReason,
 } from "./handshake.js";
+
+// COORD-04 — the named sim-time constant envelope for the five guards.
+export {
+  BACKOFF_BASE_SIM_MS,
+  BACKOFF_CAP_SIM_MS,
+  BACKOFF_JITTER_SIM_MS,
+  HYSTERESIS_DWELL_SIM_MS,
+  LEASE_SIM_MS,
+  REJECT_COOLDOWN_K,
+  SUGGESTION_TTL_SIM_MS,
+} from "./constants.js";
+
+// COORD-04 — the five pure / sim-time / seeded guard predicates (hysteresis,
+// seeded-jitter backoff, sim-time TTL, single-owner lease, reject-path pruning).
+export {
+  acquireLease,
+  clearPruneOnZoneChange,
+  inBackoff,
+  isExpired,
+  isPruned,
+  leaseAvailable,
+  nextBackoffUntil,
+  passesHysteresis,
+  recordReject,
+  updateHysteresisMarker,
+} from "./guards.js";
+export type { CoordinatorLease } from "./guards.js";
