@@ -43,7 +43,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 
 ### Performance & plumbing (PERF)
 - [x] **PERF-01**: `applyHubInventory` is **key-scoped to the touched hub id(s)** — shipped **in Phase A** (P1-blocking; prevents the latent v2.1-style O(events×hubs) freeze from going active at 100 hubs).
-- [ ] **PERF-02**: `twin-snapshot` reads **incremental cursor-fold projections** (`milesSinceRefuel`, `inductionDeadlines`) instead of two full event-log scans per epoch. *(Phase E)*
+- [x] **PERF-02**: `twin-snapshot` reads **incremental cursor-fold projections** (`milesSinceRefuel`, `inductionDeadlines`) instead of two full event-log scans per epoch. *(Phase E)*
 - [ ] **PERF-03**: `@alexanderfedin/async-queue` is wired into **runtime plumbing only** (worker↔optimizer handoff, DB write-batching, ws backpressure), **banned from the deterministic core by ESLint**; the vendored `dist/` is resolved and `vendor/*` added to the workspace; an append-order==generation-order test guards it. *(Phase E)*
 - [ ] **PERF-04**: A **sustained continental-run** at ~80–130 hubs holds a target sim-min/wall-sec without the freeze/stall failure mode. *(Phase E)*
 
@@ -109,7 +109,7 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | COORD-04 | Phase 25 — Coordination Centers | Complete |
 | COORD-05 | Phase 25 — Coordination Centers | Complete |
 | COORD-06 | Phase 26 — Coordinator ↔ Optimizer | Complete |
-| PERF-02 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| PERF-02 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | PERF-03 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | PERF-04 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | VIZ-15 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
