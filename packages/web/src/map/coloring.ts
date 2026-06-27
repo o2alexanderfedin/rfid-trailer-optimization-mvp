@@ -399,16 +399,23 @@ export const LEG_TIER_LABELS: readonly string[] = ["Backbone", "Spoke leg"];
 /** Leg tier swatch colors for the Legend. */
 export const LEG_TIER_COLORS: readonly string[] = [BACKBONE_LEG_COLOR, "#94a3b8"];
 
-/** Pre-allocated backbone-leg style (4px, slate-300, 0.9 opacity). */
+/**
+ * Pre-allocated backbone-leg style (4px, slate-300, ~0.9 opacity).
+ * Opacity is encoded in the stroke color as rgba (OL 10 Style has no top-level
+ * opacity option; use the color's alpha channel instead).
+ */
 const BACKBONE_LEG_STYLE = new Style({
-  stroke: new Stroke({ color: BACKBONE_LEG_COLOR, width: BACKBONE_LEG_WIDTH }),
-  opacity: 0.9,
+  // rgba(203,213,225, 0.9) ≈ #cbd5e1 at 90% opacity
+  stroke: new Stroke({ color: "rgba(203,213,225,0.9)", width: BACKBONE_LEG_WIDTH }),
 });
 
-/** Pre-allocated spoke-leg style (2px, slate-400, 0.55 opacity). */
+/**
+ * Pre-allocated spoke-leg style (2px, slate-400, ~0.55 opacity).
+ * Dimmer than the backbone to push spoke legs visually behind the backbone + trailers.
+ */
 const SPOKE_LEG_STYLE = new Style({
-  stroke: new Stroke({ color: "#94a3b8", width: 2 }),
-  opacity: SPOKE_LEG_OPACITY,
+  // rgba(148,163,184, 0.55) ≈ #94a3b8 at 55% opacity
+  stroke: new Stroke({ color: "rgba(148,163,184,0.55)", width: 2 }),
 });
 
 /**

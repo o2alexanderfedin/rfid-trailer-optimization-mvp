@@ -19,9 +19,11 @@ import {
   createTrailerStopLayer,
   createInductionLayer,
   createDeliveryLayer,
+  createSuggestionLayer,
   applyTrailerStops,
   flashInduction,
   flashDelivery,
+  flashSuggestion,
   upsertTrailerKeyframe,
   removeTrailerFeature,
   applyHubBuckets,
@@ -83,9 +85,19 @@ interface MapViewProps {
    * co-located) trailer hit so the Hub Detail panel opens reliably.
    */
   readonly onHubSelect?: ((hubId: string | null) => void) | undefined;
+  /**
+   * VIZ-17: whether the advisory suggestion overlay is visible (default false).
+   * When false the suggestion layer is hidden and no flash markers are placed.
+   * The same toggle governs the Advisory Suggestions rail feed (in RightRail).
+   */
+  readonly showSuggestions?: boolean;
 }
 
-export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): React.JSX.Element {
+export function MapView({
+  onTrailerSelect,
+  onHubSelect,
+  showSuggestions = false,
+}: MapViewProps = {}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
   const trailerSourceRef = useRef<VectorSource | null>(null);
@@ -97,6 +109,10 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
   const inductionSourceRef = useRef<VectorSource | null>(null);
   // VIZ-14: the transient outbound-delivery flash layer source.
   const deliverySourceRef = useRef<VectorSource | null>(null);
+  // VIZ-17: the transient advisory-suggestion flash layer source + layer ref for
+  // toggle visibility without recreating the map.
+  const suggestionSourceRef = useRef<VectorSource | null>(null);
+  const suggestionLayerRef = useRef<import("ol/layer/Vector.js").default | null>(null);
 
   /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
   const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
@@ -133,6 +149,10 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     onHubSelect,
   );
   onHubSelectRef.current = onHubSelect;
+
+  /** VIZ-17: stable ref for the suggestions-visible flag so onEnvelope stays stable. */
+  const showSuggestionsRef = useRef(showSuggestions);
+  showSuggestionsRef.current = showSuggestions;
 
   /** Leak guard counters. */
   const mapInstancesRef = useRef(0);
@@ -175,6 +195,14 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     const delivery = createDeliveryLayer();
     deliverySourceRef.current = delivery.source;
 
+    // VIZ-17: the transient advisory-suggestion layer, ABOVE the delivery layer.
+    // Decluttered so a burst of accepts/rejects never stacks unreadably. Visibility
+    // is controlled by `showSuggestions` (default OFF — clean map first).
+    const suggestion = createSuggestionLayer();
+    suggestionSourceRef.current = suggestion.source;
+    suggestionLayerRef.current = suggestion.layer;
+    suggestion.layer.setVisible(false); // default OFF per UI-SPEC
+
     const map = new OlMap({
       target: container,
       layers: [
@@ -196,6 +224,7 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
         stop.layer,
         induction.layer,
         delivery.layer,
+        suggestion.layer,
       ],
       view: new View({
         center: fromLonLat([USA_CENTER[0], USA_CENTER[1]]),
@@ -334,11 +363,21 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       stopSourceRef.current = null;
       inductionSourceRef.current = null;
       deliverySourceRef.current = null;
+      suggestionSourceRef.current = null;
+      suggestionLayerRef.current = null;
       trailerAnimsRef.current.clear();
       routeDtosRef.current.clear();
       hubLonLatRef.current.clear();
     };
   }, [setAttr]);
+
+  // --- VIZ-17: sync suggestion layer visibility to the prop ------------------
+  // When the "Suggestions" toggle flips, show/hide the OL layer in place
+  // without recreating the map. The ref guards against the layer not yet
+  // created (first render before the async geo fetch completes).
+  useEffect(() => {
+    suggestionLayerRef.current?.setVisible(showSuggestions);
+  }, [showSuggestions]);
 
   // --- Apply each ws envelope (VIZ-02 keyframes + VIZ-03 bucket deltas) -----
   const onEnvelope = useCallback(
@@ -349,6 +388,7 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       const stopSource = stopSourceRef.current;
       const inductionSource = inductionSourceRef.current;
       const deliverySource = deliverySourceRef.current;
+      const suggestionSource = suggestionSourceRef.current;
       if (trailerSource === null) return;
 
       // Drive the local clock's PLAYBACK RATE from the server's effective speed
@@ -432,6 +472,26 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
             const lonLat = hubLonLatRef.current.get(ev.hubId);
             if (lonLat !== undefined) {
               flashDelivery(deliverySource, ev.hubId, lonLat[0], lonLat[1]);
+            }
+          }
+        }
+        // VIZ-17: flash a transient accept/reject marker at each suggestion's
+        // target hub for ~2500ms (only when the Suggestions toggle is ON).
+        // `locationHubId` is resolved to lon/lat from the static hub cache.
+        // `suggestions` exists ONLY on a TickPayload (Pitfall-7), so a reconnect
+        // snapshot never re-flashes historical suggestion outcomes.
+        if (suggestionSource !== null && showSuggestionsRef.current && payload.suggestions !== undefined) {
+          for (const ev of payload.suggestions) {
+            if (ev.locationHubId === "") continue; // no hub resolved — skip marker
+            const lonLat = hubLonLatRef.current.get(ev.locationHubId);
+            if (lonLat !== undefined) {
+              flashSuggestion(
+                suggestionSource,
+                ev.suggestionId,
+                lonLat[0],
+                lonLat[1],
+                ev.outcome,
+              );
             }
           }
         }

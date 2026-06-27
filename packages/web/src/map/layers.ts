@@ -17,6 +17,7 @@ import { classifyDutyBucket } from "./dutyColoring.js";
 import { stopStyle } from "./stopColoring.js";
 import { inductionStyle } from "./inductionColoring.js";
 import { deliveryStyle } from "./deliveryColoring.js";
+import { suggestionStyle } from "./suggestionColoring.js";
 
 /**
  * The three logical map layers (VIZ-01), each backed by ONE reused
@@ -538,4 +539,54 @@ export function applyRouteBuckets(
     feature.set("loadBucket", route.loadBucket);
     feature.set("slaRiskBucket", route.slaRiskBucket);
   }
+}
+
+// ---------------------------------------------------------------------------
+// VIZ-17 — advisory-suggestion transient flash layer
+// ---------------------------------------------------------------------------
+
+/**
+ * Create the (initially empty) suggestion-outcome layer (VIZ-17). A
+ * `SuggestionEvent` tick-field adds a transient flash marker here via
+ * {@link flashSuggestion}; a `setTimeout` removes it after ~2500 ms. The source
+ * is never blindly cleared — features are added + removed individually (same
+ * discipline as the induction + delivery layers).
+ *
+ * `declutter: true` so a burst of suggestions never stacks into an unreadable
+ * pile (as specified in UI-SPEC VIZ-17).
+ */
+export function createSuggestionLayer(): Layer {
+  const source = new VectorSource({ useSpatialIndex: true });
+  // Use a VectorLayer with declutter: true to prevent overlapping label pile-ups.
+  const layer = new VectorLayer({ source, style: suggestionStyle, declutter: true });
+  return { layer, source };
+}
+
+/**
+ * Flash a suggestion marker at `[lon, lat]` for `durationMs` (default 2500): add a
+ * transient Point feature with the `outcome` property, then remove it after the
+ * timeout. `Date.now()` is used ONLY for feature-id uniqueness (markers just need
+ * to not collide per flash) — it is NOT a virtual-clock concern, so this is correct
+ * here (same sanctioned pattern as {@link flashInduction} / {@link flashDelivery}).
+ */
+export function flashSuggestion(
+  source: VectorSource,
+  suggestionId: string,
+  lon: number,
+  lat: number,
+  outcome: "accepted" | "rejected",
+  durationMs = 2500,
+): void {
+  const featureId = `suggestion:${suggestionId}:${Date.now()}:${Math.random()}`;
+  const feature = new Feature({
+    geometry: new Point(fromLonLat([lon, lat])),
+    outcome,
+    suggestionId,
+  });
+  feature.setId(featureId);
+  source.addFeature(feature);
+  setTimeout(() => {
+    const f = source.getFeatureById(featureId);
+    if (f !== null) source.removeFeature(f);
+  }, durationMs);
 }
