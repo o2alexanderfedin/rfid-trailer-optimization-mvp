@@ -348,6 +348,10 @@ export async function readAuditTimeline(
     hubId: r.hub_id,
     scanType: r.scan_type,
     recommendation: r.recommendation,
+    // Phase-25 COORD-03: reasonCode is an in-memory enrichment this plan (no DB
+    // column) — the persisted audit row carries the recommendation text; the
+    // dedicated reasonCode is null on the DB-backed read path.
+    reasonCode: null,
   }));
 }
 
@@ -377,6 +381,10 @@ export async function readTrailerAuditTimeline(
     hubId: r.hub_id,
     scanType: r.scan_type,
     recommendation: r.recommendation,
+    // Phase-25 COORD-03: reasonCode is an in-memory enrichment this plan (no DB
+    // column) — the persisted audit row carries the recommendation text; the
+    // dedicated reasonCode is null on the DB-backed read path.
+    reasonCode: null,
   }));
 }
 

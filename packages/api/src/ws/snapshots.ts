@@ -419,6 +419,12 @@ export function exceptionKindToWire(kind: ExceptionKind): ExceptionItem["kind"] 
       return "wrongTrailer";
     case "missed-unload":
       return "missedUnload";
+    // Phase-25 COORD-03: a coordination reject (an agent honestly declining a
+    // re-route, e.g. "won't divert: HOS/fuel") REUSES the existing `blockedFreight`
+    // wire kind in the alert feed (CONTEXT decision: no new UI panel). The
+    // human-readable reason/label travels in the `reason`/`recommendedAction` fields.
+    case "coordination-rejected":
+      return "blockedFreight";
     default:
       return assertNever(kind);
   }
@@ -635,14 +641,23 @@ export async function buildSnapshotPayload(db: ApiDb): Promise<SnapshotPayload> 
   }
   routes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
-  // Exceptions → ExceptionItem (map from OpenException)
+  // Exceptions → ExceptionItem (map from OpenException). Phase-25 COORD-03: a
+  // coordination-rejected row surfaces its honest "won't divert: HOS/fuel" label as
+  // the `reason` (the demo moment) and falls back to the suggestionId for entityId
+  // (a reject names no trailer in its payload — the agent is on the event stream).
   const exceptionsOpen: ExceptionItem[] = openExceptions.map(
     (ex): ExceptionItem => ({
       id: ex.exceptionId,
       kind: exceptionKindToWire(ex.kind),
       severity: exceptionSeverityToWire(ex.severity),
-      entityId: ex.trailerId,
-      reason: `${ex.kind} detected`,
+      entityId:
+        ex.kind === "coordination-rejected"
+          ? ex.suggestionId ?? ex.exceptionId
+          : ex.trailerId,
+      reason:
+        ex.kind === "coordination-rejected"
+          ? ex.label ?? ex.recommendedAction
+          : `${ex.kind} detected`,
       recommendedAction: ex.recommendedAction,
       simMs: isoToMs(ex.occurredAt),
     }),

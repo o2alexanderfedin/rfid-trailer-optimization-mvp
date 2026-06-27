@@ -95,6 +95,9 @@ export function tagRegistryReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: delivery carries no RFID tag mapping
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route carries no RFID tag mapping
+    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events carry no RFID tag mapping
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return state;
     default:
       return assertNeverEvent(event);

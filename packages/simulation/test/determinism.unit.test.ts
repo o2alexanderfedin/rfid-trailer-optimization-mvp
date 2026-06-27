@@ -328,4 +328,45 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     });
     expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });
+
+  // Phase 25 (COORD-01/04/DET-01): the advisory coordination-center process manager
+  // is OPT-IN and DEFAULT OFF. The two-part flags-off gate (mirrors the OODA case),
+  // CONSOLIDATED here in the canonical DET-01 gate file (it is also asserted in
+  // coordinator-engine.unit.test.ts; this is the keystone confirmation):
+  //   (a) `coordinatorsEnabled: false` is byte-identical to the flag being absent,
+  //   (b) the flag ABSENT => the seed-42 10k golden is still 3920accc… ,
+  //   (c) the EXPLICIT false 10k run is byte-identical to absent.
+  // This witnesses that wiring the `stepCoordinators` SimTask + the five guards + the
+  // same-tick handshake + the serialized guard state (25-05) preserved byte-identical
+  // legacy replay (the seed-42 stream never moved).
+
+  // (a) explicit false === absent over a short run.
+  it("explicit coordinatorsEnabled: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      coordinatorsEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // (b) flag ABSENT => the seed-42 10k golden is byte-identical to 3920accc… .
+  it("coordinatorsEnabled ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(
+      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
+    );
+  });
+
+  // (c) ...and the EXPLICIT false 10k-tick coordinator run is byte-identical to absent.
+  it("coordinatorsEnabled: false is byte-identical to absent over the 10k golden run", () => {
+    const absent = simulate({ seed: 42, durationTicks: 10000 });
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      coordinatorsEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
 });

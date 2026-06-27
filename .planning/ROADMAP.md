@@ -71,7 +71,7 @@
 
 - [x] **Phase 23: Multi-Center Topology** — big-city hub generation (1–3/state, ~80–130) + parameterized regional centers + near-full-mesh backbone + per-center scope partition + **`applyHubInventory` key-scoping (P1-BLOCKING)**; FOUNDATION for everything (HUB-01..04, NET-01..05, PERF-01, DET-01) (completed 2026-06-26)
 - [x] **Phase 24: OODA Step-Agents** — deterministic per-truck + per-hub `step()` (Observe→Orient→Decide→Act) emitting domain events, sorted-by-stable-id passes, per-agent seeded substreams, frozen observation surface, continuation-equivalent agent state; the decentralized decision core (OODA-01..05, DET-03) (completed 2026-06-26)
-- [ ] **Phase 25: Coordination Centers** — one advisory process-manager per regional center emitting `ActionSuggested`; agents accept/reject-with-reason on local feasibility; the five anti-oscillation/anti-deadlock guards + scope-neutral suggestion events; the headline "smart and honest" differentiator (COORD-01..05)
+- [x] **Phase 25: Coordination Centers** — one advisory process-manager per regional center emitting `ActionSuggested`; agents accept/reject-with-reason on local feasibility; the five anti-oscillation/anti-deadlock guards + scope-neutral suggestion events; the headline "smart and honest" differentiator (COORD-01..05) (completed 2026-06-27)
 - [ ] **Phase 26: Coordinator ↔ Optimizer** — coordinators invoke the proven optimizer as a scoped, pure `runEpoch` suggestion engine called synchronously in-fold; global `RollingLoop` disabled under the flag so the two never double-plan (COORD-06)
 - [ ] **Phase 27: Perf + Plumbing + Scale Viz** — incremental cursor-fold twin-snapshot projections + `async-queue` runtime-plumbing wiring (ESLint-banned from the core) + 100+-hub clustered/decluttered scale viz + sustained continental-run perf (PERF-02..04, VIZ-15..17)
 - [ ] **Phase 28: Continental Hardening** — consolidated determinism/golden audit: per-model new goldens, agent-order-shuffle, N-agent-RNG-decorrelation, and continuation-equivalence all green together, plus the cross-arch capture note (DET-02)
@@ -125,7 +125,13 @@ Plans:
   3. The network stays stable: the five guards ship with the first coordinator — **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning** — and a fixed scenario converges to a stable plan within K epochs with no A↔B↔A oscillation
   4. No livelock/deadlock: every agent has a **feasible no-op default** so each tick always closes; an agent that rejects every suggestion still closes its tick and the coordinator stops re-suggesting after K rejections — events-per-tick stays bounded (no advisory-reject Zeno livelock)
   5. **Determinism gate:** `ActionSuggested`/`SuggestionAccepted`/`SuggestionRejected` are added to the closed union + zod + every exhaustive switch and classified **scope-neutral** (no re-plan feedback storm); all new hashed payloads go through `canonicalize`; with `coordinatorsEnabled` absent (and `:false`) the seed-42 10k golden stays byte-identical to `3920accc…`, and the coordinator-on model captures its own new golden (+ continuation-equivalence green)
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [x] 25-01-PLAN.md — 3 advisory events (ActionSuggested/Accepted/Rejected) through the closed union + zod + every exhaustive switch + scope-neutral + canonicalize (COORD-02 substrate)
+- [x] 25-02-PLAN.md — stepCoordinators in-fold SimTask (one per center, sorted by centerId) + rule-based 4-kind suggestion generation + ninth RNG salt + pendingSuggestionsByTarget (COORD-01, COORD-02)
+- [x] 25-03-PLAN.md — same-tick accept/reject handshake in stepAgents on the agent's binding feasibility + visible reject-with-reason in the alert feed + audit timeline (COORD-02, COORD-03)
+- [x] 25-04-PLAN.md — the five anti-oscillation/anti-deadlock guards + anti-livelock convergence + bounded-events-per-tick stability tests (COORD-04, COORD-05)
+- [x] 25-05-PLAN.md — determinism keystone: two-part flags-off gate + serialized guard-state continuation-equivalence + reproducibility-first coordinator-on golden + salt-collision + coordinator/** DET-03 ESLint guard (COORD-04 determinism facet)
 **UI hint**: yes
 
 ### Phase 26: Coordinator ↔ Optimizer
@@ -167,7 +173,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
-| 25. Coordination Centers | 0/TBD | Not started | - |
+| 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
 | 28. Continental Hardening | 0/TBD | Not started | - |

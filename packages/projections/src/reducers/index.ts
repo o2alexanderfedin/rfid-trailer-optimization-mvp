@@ -61,13 +61,16 @@ export {
 export type { DeliveryKpiState } from "./delivery-kpi.js";
 export { deliveryKpiReducer, emptyDeliveryKpiState } from "./delivery-kpi.js";
 
-// --- SNS-04/05: open exceptions feed + false-positive-rate KPI --------------
+// --- SNS-04/05: open exceptions feed + false-positive-rate KPI + COORD-03 ----
 export type {
+  CoordinationRejectReason,
   ExceptionKind,
   ExceptionsState,
   OpenException,
 } from "./exceptions.js";
 export {
+  COORDINATION_REJECT_LABELS,
+  coordinationRejectId,
   emptyExceptionsState,
   exceptionId,
   exceptionsReducer,

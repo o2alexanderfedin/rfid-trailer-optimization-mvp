@@ -496,6 +496,78 @@ export const trailerDivertedSchema = eventSchema(
   }),
 );
 
+// --- Phase-25 advisory coordination events (COORD-02) -----------------------
+
+/**
+ * `ActionSuggested` — an ADVISORY coordination suggestion emitted by a
+ * regional-center coordinator (COORD-01/02 / Phase 25). It is NON-binding: the
+ * target agent (the Phase-24 truck/hub OODA step) ACCEPTS it (→ a binding domain
+ * event + `SuggestionAccepted`) or REJECTS it against its OWN local feasibility
+ * verdict (→ `SuggestionRejected`). Streamed on `coordinator-<centerId>`.
+ *
+ * GUARD SUBSTRATE (COORD-04): the payload is RICH because the five anti-
+ * oscillation guards need it — `suggestionId` (lease/pruning/TTL key),
+ * `coordinatorId` (single-owner lease), `targetAgentId` (the advisee),
+ * `kind` (the closed 4-option enum the reject-path-pruning cooldown keys on),
+ * `params` (a small CLOSED option object per kind), `issuedAtSimMs`+`ttlSimMs`
+ * (sim-time TTL self-destruct).
+ *
+ * DETERMINISM (Pitfall 1): ids + a CLOSED `kind` enum + an integer/string-only
+ * `params` + sim-time INTEGER milliseconds ONLY — NO lon/lat float geometry and
+ * NO RNG value in the payload. The boundary is `.strict()`, so an unknown field
+ * (or a non-enum `kind`) is rejected; the hashed payload is pinned through
+ * `canonicalizeSuggestionPayload` (simulation/src/coordinator/canonical.ts) so
+ * key order never drifts the golden (Pitfall 7).
+ */
+export const actionSuggestedSchema = eventSchema(
+  "ActionSuggested",
+  z.object({
+    suggestionId: id,
+    coordinatorId: id,
+    targetAgentId: id,
+    kind: z.enum(["reroute", "hold", "consolidate", "dispatch"]),
+    // A small CLOSED option object — integer/string only (Pitfall 1: no float
+    // geometry, no RNG). `toHubId` carries a reroute/dispatch destination hub;
+    // hold/consolidate carry an empty `{}`. `.strict()` rejects any other field.
+    params: z.object({ toHubId: id.optional() }).strict(),
+    issuedAtSimMs: z.number().int().nonnegative(),
+    ttlSimMs: z.number().int().nonnegative(),
+  }),
+);
+
+/**
+ * `SuggestionAccepted` — the target agent ACCEPTED an `ActionSuggested`; the
+ * agent then emits the corresponding binding domain event (e.g. a
+ * `TrailerDiverted` for a `reroute`) in the SAME atomic in-fold step. Carries
+ * only the `suggestionId` correlation key + the virtual-clock `occurredAt`.
+ * Streamed on the target's own stream (`trailer-<id>` / `hub-<id>`). SCOPE-NEUTRAL.
+ */
+export const suggestionAcceptedSchema = eventSchema(
+  "SuggestionAccepted",
+  z.object({
+    suggestionId: id,
+    occurredAt,
+  }),
+);
+
+/**
+ * `SuggestionRejected` — the target agent DECLINED an `ActionSuggested` against
+ * the binding local feasibility it alone knows (Phase 24). The `reasonCode` is a
+ * CLOSED enum (`hos | fuel | dock | infeasible`) — the visible "won't divert:
+ * HOS/fuel" demo moment surfaces from it (COORD-03, wired in Plan 03). Carries
+ * the `suggestionId` correlation key + the virtual-clock `occurredAt`. Streamed
+ * on the target's own stream. SCOPE-NEUTRAL — it must NOT re-trigger the
+ * suggesting coordinator (anti-feedback-storm, Pitfall 11).
+ */
+export const suggestionRejectedSchema = eventSchema(
+  "SuggestionRejected",
+  z.object({
+    suggestionId: id,
+    reasonCode: z.enum(["hos", "fuel", "dock", "infeasible"]),
+    occurredAt,
+  }),
+);
+
 /**
  * The closed discriminated union, keyed on `type`. zod rejects any `type`
  * outside this list (unknown-event-type guard) and any payload that fails its
@@ -535,4 +607,8 @@ export const domainEventSchema = z.discriminatedUnion("type", [
   packageDeliveredSchema,
   // Phase-24 OODA truck divert (OODA-01).
   trailerDivertedSchema,
+  // Phase-25 advisory coordination events (COORD-02).
+  actionSuggestedSchema,
+  suggestionAcceptedSchema,
+  suggestionRejectedSchema,
 ]);

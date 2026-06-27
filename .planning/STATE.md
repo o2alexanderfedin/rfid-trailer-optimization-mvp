@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
-stopped_at: Completed 24-01-PLAN.md
-last_updated: "2026-06-26T23:12:19.882Z"
-last_activity: 2026-06-26
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-06-27T00:25:24.809Z"
+last_activity: 2026-06-27
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  total_plans: 14
+  completed_plans: 11
+  percent: 79
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-26)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** Phase 24 — OODA Step-Agents
+**Current focus:** Phase 25 — Coordination Centers
 
 ## Current Position
 
-Phase: 24 (OODA Step-Agents) — EXECUTING
-Plan: 3 of 4
+Phase: 25 (Coordination Centers) — EXECUTING
+Plan: 3 of 5
 Status: Ready to execute
-Last activity: 2026-06-26
+Last activity: 2026-06-27
 
 ## Performance Metrics
 
@@ -54,6 +54,8 @@ Last activity: 2026-06-26
 | Phase 23 P05 | 70min | 4 tasks | 6 files |
 | Phase 24 P24-01 | 13min | 3 tasks | 31 files |
 | Phase 24 P24-04 | 15min | 3 tasks | 8 files |
+| Phase 25 P25-01 | 13 | 3 tasks | 23 files |
+| Phase 25 P25-02 | 12min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -74,6 +76,8 @@ Recent decisions affecting v3.0:
 - [Phase ?]: Truck Decide priority ladder: rest > refuel > divert > hold > proceed (binding feasibility first)
 - [Phase ?]: [Phase 24-04] OODA-05: activeTripByTrailer serialized into SerializedWorldState (present-only-when-on); per-agent RNG stateless re-derive so no new rng field; chunked OODA-on run byte-identical to all-at-once
 - [Phase ?]: [Phase 24-04] OODA-on golden 94689f99… (seed 42/10k, 9170 events) captured reproducibility-first, != flags-off 3920accc; DET-03 ESLint guard bans Date.now/Math.random/async-queue/kysely in ooda/** (proven); TrailerDiverted canonicalized
+- [Phase 25-01 COORD-02]: 3 advisory coordination events (ActionSuggested/SuggestionAccepted/SuggestionRejected) added to closed DomainEvent union + zod; all SCOPE-NEUTRAL in scope.ts; ActionSuggested pinned via canonicalizeSuggestionPayload (coordinator/canonical.ts). kind=reroute|hold|consolidate|dispatch, reasonCode=hos|fuel|dock|infeasible, integer/string-only params + integer sim-time ms (no RNG/float). Zero behavior change (flags-off golden 3920accc + OODA-on 94689f99 byte-identical); pnpm typecheck is the exhaustiveness proof (not vitest — esbuild strips types).
+- [Phase 25-02 COORD-01/02]: in-fold `stepCoordinators` SimTask — one coordinator per center, sorted by centerId, bounded per-center scope, self-rescheduling (mirrors stepAgents). Rule-based `decideCoordinatorSuggestions` (pure, integer/string-only) for all 4 kinds into `pendingSuggestionsByTarget` (consumed P25-03, serialized P25-05). COORDINATOR_RNG_SALT=0x1c6ea54b (9th salt, pairwise-distinct, lazy `deriveCoordinatorRng` in pure coordinator/rng.ts leaf). Coordinator cadence==OODA cadence (5/1) + bootstrap-seeded BEFORE stepAgents ⇒ same-tick handshake. suggestionId=`centerId-tick-index` (byte-stable, collision-free); issuedAtSimMs=tick*MS_PER_TICK, ttlSimMs=6*MS_PER_TICK (TTL enforcement is P25-04). reroute needs activeTripByTrailer (OODA-on); all 4 kinds appear under all-on stack (hold/reroute/consolidate/dispatch). `coordinatorsEnabled` OFF (strict ===true) ⇒ no task/substream/emit, golden 3920accc + OODA-on 94689f99 byte-identical (two-part gate added).
 
 ### Pending Todos
 
@@ -104,8 +108,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-26T23:11:50.606Z
-Stopped at: Completed 24-01-PLAN.md
+Last session: 2026-06-27T00:25:24.802Z
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

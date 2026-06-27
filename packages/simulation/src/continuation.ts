@@ -37,6 +37,15 @@ export type SimTask =
   // successor. The absolute `fireTick` is captured by SerializedScheduled, so a
   // resume between two OODA passes never loses/reorders it (continuation-safe).
   | { readonly kind: "stepAgents"; readonly tick: number }
+  // Phase-25 COORD-01/02: the per-center coordinator process-manager pass — a
+  // self-rescheduling task with the SAME tick-based shape as `stepAgents`. Seeded
+  // ONLY when `coordinatorsEnabled` (the off path schedules none, so the golden is
+  // byte-identical to 3920accc…); on every fire it re-enqueues its
+  // `+COORDINATOR_INTERVAL_TICKS` successor. The absolute `fireTick` is captured by
+  // SerializedScheduled, so a resume between two coordinator passes never
+  // loses/reorders it (continuation-safe). Fires in the SAME tick as `stepAgents`
+  // so the suggestion handshake is same-tick (Plan 03 consumes it).
+  | { readonly kind: "stepCoordinators"; readonly tick: number }
   | { readonly kind: "departTrailer"; readonly trailerId: string; readonly spokeHubId: string; readonly departTick: number }
   | {
       readonly kind: "arriveTrailer";
@@ -178,6 +187,74 @@ export interface SerializedWorldState {
   readonly activeTripByTrailer: readonly (readonly [
     string,
     { readonly tripId: string; readonly fromHubId: string; readonly toHubId: string },
+  ])[];
+  /**
+   * Phase-25 COORD-04 (continuation-equivalence): the coordinator GUARD state — the
+   * five anti-oscillation/anti-deadlock state maps the `stepCoordinators` filter and
+   * the `stepAgents` reject handshake read/advance ACROSS coordinator passes. Each is
+   * present-only-when-on (written ONLY under `coordinatorsEnabled`), so on the off
+   * path every array is `[]` and the serialized form is byte-identical to
+   * pre-Phase-25 (the seed-42 10k golden stays `3920accc…` — the determinism
+   * keystone). Captured + restored exactly like `activeTripByTrailer`, with a FIXED
+   * key order (sorted by key) so the serialized bytes are deterministic regardless of
+   * source-map insertion order, and a fixed value-field order on the lease tuple.
+   *
+   * Without these, a chunk boundary landing between two coordinator passes would
+   * resume with EMPTY guard state — re-issuing a just-leased/backed-off/pruned
+   * suggestion the all-at-once run suppressed — so the chunked coordinator-on stream
+   * would diverge (the OODA odometer-clobber class of bug, T-25-19).
+   *
+   * GUARD 4: single-owner lease per target agent (`agentId -> {coordinatorId,
+   * expiresAtSimMs}`).
+   */
+  readonly leaseByAgent: readonly (readonly [
+    string,
+    { readonly coordinatorId: string; readonly expiresAtSimMs: number },
+  ])[];
+  /**
+   * GUARDs 2+5: per-option (`${coordinatorId}|${targetAgentId}|${kind}`) rejection
+   * count (toward the K-prune cooldown). Present-only-when-on (empty `[]` off path).
+   */
+  readonly rejectCountByOption: readonly (readonly [string, number])[];
+  /**
+   * GUARD 2: per-option backoff-until sim-ms (a rejected option is suppressed until
+   * this sim-time). Present-only-when-on (empty `[]` off path).
+   */
+  readonly backoffUntilByOption: readonly (readonly [string, number])[];
+  /**
+   * GUARD 1: per-option metric-above-since sim-ms hysteresis marker (a candidate must
+   * persist the dwell before it fires). Present-only-when-on (empty `[]` off path).
+   */
+  readonly metricAboveSinceByOption: readonly (readonly [string, number])[];
+  /**
+   * GUARD 5: per-agent last-seen owning center; a change clears that agent's
+   * prune/backoff/hysteresis (the shift/zone-change reset). Present-only-when-on
+   * (empty `[]` off path).
+   */
+  readonly lastCenterByAgent: readonly (readonly [string, string])[];
+  /**
+   * Phase-25 COORD-01/02 (continuation-equivalence): the same-tick suggestion
+   * handshake substrate (`targetAgentId -> the pending ActionSuggested events`). The
+   * Plan-03 handshake is STRICTLY within-tick — `stepCoordinators` fires one queue-seq
+   * BEFORE `stepAgents` at a shared tick, and each agent DELETES its entry after
+   * consuming it — so a captured continuation is normally empty here. It is serialized
+   * DEFENSIVELY anyway (present-only-when-on, empty `[]` off path) so that ANY pending
+   * suggestion targeting an agent NOT in the same-tick roster (e.g. a truck that
+   * arrived between the two passes) survives a chunk boundary, keeping the chunked
+   * coordinator-on stream byte-identical to all-at-once unconditionally. Each value is
+   * the full `ActionSuggested` event payload (plain data, schema-pinned, pointer-free).
+   */
+  readonly pendingSuggestionsByTarget: readonly (readonly [
+    string,
+    readonly {
+      readonly suggestionId: string;
+      readonly coordinatorId: string;
+      readonly targetAgentId: string;
+      readonly kind: "reroute" | "hold" | "consolidate" | "dispatch";
+      readonly params: { readonly toHubId?: string };
+      readonly issuedAtSimMs: number;
+      readonly ttlSimMs: number;
+    }[],
   ])[];
 }
 

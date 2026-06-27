@@ -75,6 +75,9 @@ function hubsOf(event: DomainEvent): readonly string[] {
     case "TruckRefueled":
     case "PackageDelivered":
     case "TrailerDiverted":
+    case "ActionSuggested": // Phase-25 COORD-02 advisory coordination events
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       // SP2 stop events (TruckRested/TruckRefueled) are SCOPE-NEUTRAL — a
       // rest/refuel never re-scopes the optimizer, so an absent-fuelConfig epoch
       // stays byte-identical to the pre-SP2 result.
@@ -84,6 +87,12 @@ function hubsOf(event: DomainEvent): readonly string[] {
       // already scoped the hub if needed).
       // Phase-24 OODA-01: TrailerDiverted is a truck re-route decision; the
       // optimizer re-scoping on diverts is deferred to 24-02+ — SCOPE-NEUTRAL here.
+      // Phase-25 COORD-02/Pitfall-11: the three advisory coordination events are
+      // SCOPE-NEUTRAL — they must NOT re-trigger the suggesting coordinator (nor
+      // the rolling optimizer), exactly mirroring PlanGenerated/PlanAccepted/
+      // PlanSuperseded. Returning [] means a suggestion/accept/reject never adds a
+      // hub to the affected scope, so an unchanged scope re-emits nothing — the
+      // anti-feedback-storm guarantee the whole phase depends on.
       return [];
     default: {
       // Exhaustiveness guard — a new event type must be classified here.

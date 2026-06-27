@@ -34,8 +34,31 @@ import { type OccurredEvent, assertNeverEvent } from "./reducer.js";
  * sequence -> identical state (auditable, replayable, rebuildable).
  */
 
-/** The two exception kinds the detector emits. */
-export type ExceptionKind = "wrong-trailer" | "missed-unload";
+/**
+ * The exception kinds surfaced in the feed. `wrong-trailer` / `missed-unload` are
+ * the detector's planned-vs-observed disagreements; `coordination-rejected`
+ * (Phase-25 COORD-03) is a coordinator suggestion the target agent honestly
+ * declined against its own binding feasibility (the "won't divert: HOS/fuel" demo
+ * moment) — an honest operational ALERT, never a low-confidence detection fault.
+ */
+export type ExceptionKind = "wrong-trailer" | "missed-unload" | "coordination-rejected";
+
+/** The closed coordination reject reasons (mirrors `SuggestionRejected.reasonCode`). */
+export type CoordinationRejectReason = "hos" | "fuel" | "dock" | "infeasible";
+
+/**
+ * Human-readable label per reject reason — the operator-facing "won't …" string the
+ * COORD-03 alert surfaces. A closed, pure map (no clock, no RNG) so the rebuild-from-
+ * log fold produces the same label as the live fold (FND-04).
+ */
+export const COORDINATION_REJECT_LABELS: Readonly<
+  Record<CoordinationRejectReason, string>
+> = {
+  hos: "won't divert: HOS",
+  fuel: "won't divert: fuel",
+  dock: "won't dispatch: dock full",
+  infeasible: "declined: infeasible",
+};
 
 /**
  * The severity the detector's calibrated `severityFor` assigns to the marginal,
@@ -47,13 +70,14 @@ export type ExceptionKind = "wrong-trailer" | "missed-unload";
  */
 export const FALSE_POSITIVE_SEVERITY: Severity = "info";
 
-/** One open exception row surfaced in the feed (SNS-04/05). */
+/** One open exception row surfaced in the feed (SNS-04/05 + COORD-03). */
 export interface OpenException {
-  /** Stable, deterministic identity (kind + package + trailer + hub). */
+  /** Stable, deterministic identity (kind + package + trailer + hub, or suggestionId). */
   readonly exceptionId: string;
   readonly kind: ExceptionKind;
+  /** Package id for a detection row; `""` for a coordination-rejected alert. */
   readonly packageId: string;
-  /** The trailer the package was OBSERVED aboard. */
+  /** The trailer the package was OBSERVED aboard; `""` for a coordination alert. */
   readonly trailerId: string;
   /** The hub the package should have unloaded at (missed-unload only). */
   readonly hubId: string | null;
@@ -63,6 +87,13 @@ export interface OpenException {
   readonly confidence: number;
   /** Domain time the exception was detected (`occurredAt`), ISO-8601. */
   readonly occurredAt: string;
+  // --- Phase-25 COORD-03 (coordination-rejected rows only; null otherwise) -----
+  /** The closed reject reasonCode (`hos|fuel|dock|infeasible`), else null. */
+  readonly reasonCode: CoordinationRejectReason | null;
+  /** The rejected suggestion's correlation id, else null. */
+  readonly suggestionId: string | null;
+  /** The operator-facing "won't …" label for the reject, else null. */
+  readonly label: string | null;
 }
 
 /**
@@ -85,7 +116,7 @@ export const emptyExceptionsState: ExceptionsState = {
   lowConfidenceExceptions: 0,
 };
 
-/** Deterministic, collision-resistant identity for an exception row. */
+/** Deterministic, collision-resistant identity for a DETECTION exception row. */
 export function exceptionId(
   kind: ExceptionKind,
   packageId: string,
@@ -93,6 +124,15 @@ export function exceptionId(
   hubId: string | null,
 ): string {
   return `${kind}:${packageId}:${trailerId}:${hubId ?? ""}`;
+}
+
+/**
+ * Deterministic identity for a COORD-03 coordination-rejected row. Keyed by the
+ * unique `suggestionId` (one reject per suggestion), so re-applying the same
+ * `SuggestionRejected` is an idempotent upsert onto the same row.
+ */
+export function coordinationRejectId(suggestionId: string): string {
+  return `coordination-rejected:${suggestionId}`;
 }
 
 /**
@@ -167,6 +207,9 @@ export function exceptionsReducer(
         recommendedAction: p.recommendedAction,
         confidence: p.confidence,
         occurredAt,
+        reasonCode: null,
+        suggestionId: null,
+        label: null,
       });
     }
     case "MissedUnloadDetected": {
@@ -182,6 +225,35 @@ export function exceptionsReducer(
         recommendedAction: p.recommendedAction,
         confidence: p.confidence,
         occurredAt,
+        reasonCode: null,
+        suggestionId: null,
+        label: null,
+      });
+    }
+    // Phase-25 COORD-03: a coordinator suggestion the target agent DECLINED against
+    // its own binding feasibility surfaces here as an honest operational ALERT (the
+    // "won't divert: HOS/fuel" demo moment). Severity is `warning` — a reject is
+    // honest, NOT a low-confidence detection fault — so it never inflates the
+    // detection false-positive-rate numerator (`lowConfidenceExceptions` counts only
+    // `info`-severity detections). It DOES appear in the feed (a real alert) and in
+    // `totalExceptions`. The `targetAgentId` is carried by the event's stream
+    // (the agent's own stream), not the payload, so it is not reconstructable here;
+    // `suggestionId` + `reasonCode` + `label` are the surfaced fields.
+    case "SuggestionRejected": {
+      const p = event.payload;
+      return open(state, {
+        exceptionId: coordinationRejectId(p.suggestionId),
+        kind: "coordination-rejected",
+        packageId: "",
+        trailerId: "",
+        hubId: null,
+        severity: "warning",
+        recommendedAction: COORDINATION_REJECT_LABELS[p.reasonCode],
+        confidence: 0,
+        occurredAt,
+        reasonCode: p.reasonCode,
+        suggestionId: p.suggestionId,
+        label: COORDINATION_REJECT_LABELS[p.reasonCode],
       });
     }
     // Every non-detection event is a no-op: the feed surfaces ONLY positive
@@ -214,6 +286,8 @@ export function exceptionsReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery opens no exception
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route is a planned decision, not an exception
+    case "ActionSuggested": // Phase-25 COORD-02: an advisory suggestion opens no exception (the ACCEPT/REJECT verdict is the alert)
+    case "SuggestionAccepted": // Phase-25 COORD-03: an accept is the happy path — no alert (only a reject surfaces here)
       return state;
     default:
       return assertNeverEvent(event);

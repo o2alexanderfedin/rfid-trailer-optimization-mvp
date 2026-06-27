@@ -221,6 +221,9 @@ export function driverStatusReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery is package-only, not a driver concern
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route does not change driver duty status
+    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events do not change driver duty status
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return state;
     default:
       return assertNeverEvent(event);

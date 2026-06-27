@@ -155,6 +155,75 @@ export default tseslint.config(
     },
   },
   {
+    // Phase-25 DET-03 — THE COORDINATOR DECISION-CORE STATIC GUARD.
+    //
+    // The advisory coordination core (`packages/simulation/src/coordinator/**`) MUST
+    // be a pure, synchronous, seeded leaf — EXACTLY like the OODA core above: NO
+    // wall-clock (`Date.now`/`new Date()`), NO ambient randomness (`Math.random`), NO
+    // async-queue plumbing, and NO database access (`kysely`). Any of these silently
+    // entering the coordinator's suggestion generation or its anti-oscillation guards
+    // breaks byte-identical replay (the determinism keystone). This rule FAILS the
+    // lint on a violation — the CI gate that makes T-25-22 (tampering: wall-clock/
+    // random in the coordinator core) structurally CAUGHT, not merely discouraged.
+    // Test siblings (`*.test.ts`) are excluded: they legitimately import seed
+    // constants from the engine and assert on the core's purity. The constant/guard
+    // doc comments legitimately NAME the banned APIs (to document the contract) —
+    // ESLint matches AST nodes, never comments, so the pure tree passes (exit 0).
+    files: ["packages/simulation/src/coordinator/**/*.ts"],
+    ignores: ["packages/simulation/src/coordinator/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "kysely",
+              message:
+                "DET-03: the coordinator decision core must not touch the database. Read frozen observations only.",
+            },
+            {
+              name: "@alexanderfedin/async-queue",
+              message:
+                "DET-03: async-queue is runtime plumbing only — the coordinator core stays synchronous + pure (Pitfall 5).",
+            },
+          ],
+          patterns: [
+            {
+              group: ["*async-queue*"],
+              message:
+                "DET-03: async-queue is runtime plumbing only — the coordinator core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              group: ["kysely/*", "*/kysely", "pg", "@mm/persistence", "*/persistence"],
+              message:
+                "DET-03: the coordinator decision core must not touch the database/driver layer.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.object.name='Date'][callee.property.name='now']",
+          message:
+            "DET-03: no Date.now() in the coordinator core — read the frozen virtual-clock observation / sim-time (Pitfall 6).",
+        },
+        {
+          selector: "NewExpression[callee.name='Date'][arguments.length=0]",
+          message:
+            "DET-03: no wall-clock `new Date()` in the coordinator core — use sim-time (tick * MS_PER_TICK) (Pitfall 6).",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          message:
+            "DET-03: no Math.random() in the coordinator core — draw from the seeded per-center substream (deriveCoordinatorRng) (Pitfall 6).",
+        },
+      ],
+    },
+  },
+  {
     // Vitest Browser Mode tests (`*.browser.test.tsx`) execute in a real browser
     // type universe — their `vitest-browser-react` `render()` result and the
     // `@vitest/browser` `expect.element`/locator augmentations are not part of
