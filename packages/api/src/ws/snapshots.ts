@@ -21,6 +21,7 @@ import {
   type RouteState,
   type SimSpeedState,
   type SnapshotPayload,
+  type SuggestionEvent,
   type TickPayload,
   type TrailerKeyframe,
   type TrailerStop,
@@ -81,11 +82,14 @@ export type SnapshotPayloadBuilder = (db: ApiDb) => Promise<SnapshotPayload>;
  * `inductionEvents` (VIZ-13) are the packages inducted during this tick/frame —
  * TRANSIENT, attached to the tick payload to drive the pulsing-marker animation
  * (never persisted, never on a snapshot). Returns the `WsEnvelope` sent.
+ * `suggestions` (VIZ-17) are the advisory suggestion outcomes this tick —
+ * TRANSIENT, attached to drive the accept/reject flash overlay + feed.
  */
 export type Broadcast = (
   simMs: number,
   inductionEvents?: readonly InductionEvent[],
   deliveryEvents?: readonly DeliveryEvent[],
+  suggestions?: readonly SuggestionEvent[],
 ) => Promise<WsEnvelope>;
 
 /** Options for {@link attachSnapshotSocket} (dependency inversion / testing). */
@@ -963,6 +967,7 @@ export function attachSnapshotSocket(
     simMs: number,
     inductionEvents?: readonly InductionEvent[],
     deliveryEvents?: readonly DeliveryEvent[],
+    suggestions?: readonly SuggestionEvent[],
   ): Promise<WsEnvelope> => {
     const current = await build(db);
     const prev = baseline ?? emptySnapshotPayload();
@@ -973,17 +978,21 @@ export function attachSnapshotSocket(
     speedController.noteSimMs(simMs);
 
     const diff: TickPayload = diffTick(prev, current);
-    // VIZ-13 / VIZ-14: attach the tick's transient induction + delivery events
-    // onto the delta when present — never persisted, never on a snapshot (the
-    // Pitfall-7 guard: these fields exist ONLY on a TickPayload).
+    // VIZ-13 / VIZ-14 / VIZ-17: attach the tick's transient induction, delivery,
+    // and suggestion events onto the delta when present — never persisted, never
+    // on a snapshot (the Pitfall-7 guard: these fields exist ONLY on a TickPayload).
     const withInduction: TickPayload =
       inductionEvents !== undefined && inductionEvents.length > 0
         ? { ...diff, inductionEvents }
         : diff;
-    const delta: TickPayload =
+    const withDelivery: TickPayload =
       deliveryEvents !== undefined && deliveryEvents.length > 0
         ? { ...withInduction, deliveryEvents }
         : withInduction;
+    const delta: TickPayload =
+      suggestions !== undefined && suggestions.length > 0
+        ? { ...withDelivery, suggestions }
+        : withDelivery;
     seq += 1;
     const envelope: WsEnvelope = {
       v: 1,
