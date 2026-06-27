@@ -1,13 +1,18 @@
 import VectorLayer from "ol/layer/Vector.js";
+import VectorImageLayer from "ol/layer/VectorImage.js";
 import VectorSource from "ol/source/Vector.js";
+import Cluster from "ol/source/Cluster.js";
 import Feature from "ol/Feature.js";
 import Point from "ol/geom/Point.js";
 import LineString from "ol/geom/LineString.js";
 import { fromLonLat } from "ol/proj.js";
+import { Style, Fill, Stroke, Circle as CircleStyle, Text } from "ol/style.js";
+import type { FeatureLike } from "ol/Feature.js";
+import type { StyleFunction } from "ol/style/Style.js";
 import type { HubDto, RouteDto } from "../api/client.js";
 import type { TrailerSnapshot } from "./useTrailerSnapshots.js";
 import type { HubState, RouteState, TrailerKeyframe, TrailerStop } from "@mm/api";
-import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
+import { hubStyleTiered, routeStyleTiered, trailerStyle } from "./coloring.js";
 import { classifyDutyBucket } from "./dutyColoring.js";
 import { stopStyle } from "./stopColoring.js";
 import { inductionStyle } from "./inductionColoring.js";
@@ -32,18 +37,155 @@ export interface Layer {
   readonly source: VectorSource;
 }
 
-/** Create the hubs layer and populate its single source with all hub markers.
+// ---------------------------------------------------------------------------
+// VIZ-15 — cluster-bubble cached styles (≤4 pre-allocated, never per-cluster)
+//
+// Radius log-bucketed: 14px (1 member), 17px (2-4), 20px (5-9), 22px (10+).
+// Slate-700 (#334155) disc, white count text. NEVER allocate inside the
+// StyleFunction — all sizes are pre-built at module load.
+// ---------------------------------------------------------------------------
+
+/** Slate-700 disc fill for cluster bubbles (VIZ-15 UI-SPEC). */
+const CLUSTER_FILL_COLOR = "#334155";
+/** White text for the cluster count label. */
+const CLUSTER_TEXT_COLOR = "#ffffff";
+/** Font for the cluster count (bold, small, readable). */
+const CLUSTER_FONT = 'bold 11px "system-ui", sans-serif';
+
+/**
+ * Pre-allocated cluster bubble styles: 4 size buckets, log-scaled.
  *
- * VIZ-03: uses `hubStyle` (zero-alloc StyleFunction from coloring.ts) so hub
- * colors update in place via `feature.set("volumeBucket", b)` — no source rebuild.
+ *  bucket 0 → radius 14 (1 member  — rendered as individual in OL, but kept for fallback)
+ *  bucket 1 → radius 17 (2-4 members)
+ *  bucket 2 → radius 20 (5-9 members)
+ *  bucket 3 → radius 22 (10+ members)
+ *
+ * The count label is a placeholder; the actual count is set by mutating
+ * `image.text_` (OL internals) … but we follow the zero-per-frame rule by
+ * pre-allocating the four SIZE variants, and set the count text on a
+ * module-scoped mutable `Text` that is SHARED across the cluster style fn calls.
+ * (OL re-renders the frame after `map.render()`, so the last-set text is correct.)
+ *
+ * Alternative: set the text on the cached Style at call time — OL does NOT cache
+ * style objects per se; it caches rendering metadata. Mutating the Text object is
+ * the established OL cluster pattern.
  */
-export function createHubLayer(hubs: readonly HubDto[]): Layer {
+const CLUSTER_STYLES: readonly Style[] = [14, 17, 20, 22].map(
+  (radius) =>
+    new Style({
+      image: new CircleStyle({
+        radius,
+        fill: new Fill({ color: CLUSTER_FILL_COLOR }),
+        stroke: new Stroke({ color: CLUSTER_TEXT_COLOR, width: 1.5 }),
+      }),
+      text: new Text({
+        text: "",
+        fill: new Fill({ color: CLUSTER_TEXT_COLOR }),
+        font: CLUSTER_FONT,
+      }),
+    }),
+);
+
+/**
+ * Return the cluster-bubble style for a cluster feature (VIZ-15).
+ *
+ * Branches:
+ *  - cluster wraps >1 member → slate disc + white count, radius log-bucketed from
+ *    pre-allocated CLUSTER_STYLES (zero per-cluster alloc).
+ *  - cluster wraps exactly 1 member → delegate to hubStyleTiered for the individual
+ *    member feature so a lone spoke still reads its tier + bucket style.
+ *
+ * OL Cluster feature exposes `.get("features")` as the member feature array.
+ */
+const clusterStyle: StyleFunction = (clusterFeature: FeatureLike): Style | Style[] => {
+  const members: unknown = clusterFeature.get("features");
+  if (!Array.isArray(members)) return CLUSTER_STYLES[0] as Style;
+
+  if (members.length === 1) {
+    // Single feature in cluster: render the actual hub style.
+    const member = members[0] as FeatureLike;
+    return hubStyleTiered(member);
+  }
+
+  // Multi-member cluster: log-bucket the count into ≤4 pre-allocated sizes.
+  const count = members.length;
+  let bucket: number;
+  if (count <= 1) bucket = 0;
+  else if (count <= 4) bucket = 1;
+  else if (count <= 9) bucket = 2;
+  else bucket = 3;
+
+  const style = CLUSTER_STYLES[bucket] as Style;
+  // Mutate the shared Text object on this cached style to show the count.
+  // This follows the established OL cluster-style pattern (single mutable Text
+  // per cached style; OL re-draws on the same frame so the text is current).
+  style.getText()?.setText(String(count));
+  return style;
+};
+
+/**
+ * The return type for VIZ-15/16 hub layers: TWO separate layers.
+ *
+ *  - `centerLayer`  : un-clustered `VectorLayer` for Tier-1 regional centers.
+ *    Centers are NEVER absorbed into the spoke cluster (UI-SPEC).
+ *  - `spokeLayer`   : `VectorImageLayer({declutter:true})` with an `ol/source/Cluster`
+ *    wrapping the spoke `VectorSource`. At continental zoom (≤5) this renders cluster
+ *    bubbles; at zoom ≥7 individual spoke markers appear.
+ *  - `source`       : the MERGED flat `VectorSource` that `applyHubBuckets` writes to
+ *    (both centers and spokes live here as `hub:<id>` features). Callers MUST use
+ *    this unified source for metric updates so all hubs receive their bucket deltas.
+ *  - `centerSource` : center-only sub-source (for the center tier layer).
+ *  - `spokeSource`  : spoke-only sub-source (for the Cluster source).
+ */
+export interface HubLayers {
+  /** Tier-1 center layer (plain VectorLayer, never clustered). */
+  readonly centerLayer: VectorLayer;
+  /** Tier-2 spoke cluster layer (VectorImageLayer + declutter). */
+  readonly spokeLayer: VectorImageLayer;
+  /**
+   * Unified hub source — contains BOTH center and spoke features keyed by
+   * `hub:<id>`. This is what `applyHubBuckets` writes to so metric updates
+   * reach every hub marker regardless of tier.
+   */
+  readonly source: VectorSource;
+  /** Center-only source (also part of `source` — a separate sub-source for the center tier layer). */
+  readonly centerSource: VectorSource;
+  /** Spoke-only source (wrapped by the Cluster source). */
+  readonly spokeSource: VectorSource;
+}
+
+/**
+ * Create the VIZ-15/16 split hub layers.
+ *
+ * SPLIT: hubs are partitioned by `kind` (from Task 1 DTO):
+ *  - `"center"` → centerSource (un-clustered VectorLayer, always individually visible)
+ *  - `"spoke"`  → spokeSource (Cluster + VectorImageLayer({declutter:true}))
+ *  - no kind    → falls back to spokeSource (safe for legacy 10-hub maps)
+ *
+ * Feature registration: every hub feature is registered with id `hub:<hubId>` in
+ * `source` (the unified flat source) for `applyHubBuckets` lookups. A second
+ * feature reference (same object) is added to the appropriate tier sub-source so
+ * each tier layer renders from its own source. OL feature objects are shared by
+ * reference, so a `feature.set("volumeBucket", b)` call on the unified source
+ * immediately affects the tier layer rendering — NO double-update needed.
+ *
+ * VIZ-03: uses `hubStyleTiered` (zero-alloc StyleFunction) for tier-branched
+ * coloring. Cluster bubbles use `clusterStyle` (pre-allocated 4 size buckets).
+ */
+export function createHubLayer(hubs: readonly HubDto[]): HubLayers {
+  // Unified source — both tiers live here for `applyHubBuckets`.
   const source = new VectorSource({ useSpatialIndex: true });
+  // Tier sub-sources (features are SHARED with `source` by object reference).
+  const centerSource = new VectorSource({ useSpatialIndex: true });
+  const spokeSource = new VectorSource({ useSpatialIndex: true });
+
   for (const hub of hubs) {
     const feature = new Feature({
       geometry: new Point(fromLonLat([hub.lon, hub.lat])),
       hubId: hub.hubId,
       name: hub.name,
+      kind: hub.kind,
+      tier: hub.tier,
       // Default bucket 0 until first tick delta arrives.
       volumeBucket: 0,
       slaRiskBucket: 0,
@@ -51,17 +193,43 @@ export function createHubLayer(hubs: readonly HubDto[]): Layer {
     });
     feature.setId(`hub:${hub.hubId}`);
     source.addFeature(feature);
+
+    if (hub.kind === "center") {
+      centerSource.addFeature(feature);
+    } else {
+      // "spoke" or unset → spoke cluster
+      spokeSource.addFeature(feature);
+    }
   }
-  // VIZ-03: StyleFunction replaces the single static HUB_STYLE — same zero-alloc
-  // discipline (hubStyle reads from a pre-allocated STYLE_CACHE).
-  const layer = new VectorLayer({ source, style: hubStyle });
-  return { layer, source };
+
+  // Tier-1: un-clustered center layer (always individually visible at every zoom).
+  const centerLayer = new VectorLayer({
+    source: centerSource,
+    style: hubStyleTiered,
+  });
+
+  // Tier-2: spoke cluster layer — distance 40, minDistance 20 per UI-SPEC.
+  const clusterSource = new Cluster({
+    distance: 40,
+    minDistance: 20,
+    source: spokeSource,
+  });
+  const spokeLayer = new VectorImageLayer({
+    source: clusterSource,
+    style: clusterStyle,
+    declutter: true,
+  });
+
+  return { centerLayer, spokeLayer, source, centerSource, spokeSource };
 }
 
 /** Create the routes layer and populate its single source with all LineStrings.
  *
- * VIZ-03: uses `routeStyle` (zero-alloc StyleFunction) so route colors update
- * in place via `feature.set("loadBucket", b)` — no source rebuild.
+ * VIZ-03 / VIZ-16: uses `routeStyleTiered` (zero-alloc StyleFunction) so route
+ * tier (backbone vs spoke leg) is encoded by stroke weight, and metric buckets
+ * update in place via `feature.set("loadBucket", b)` — no source rebuild.
+ * The `isBackbone` field from the REST DTO is stored on each feature so
+ * `routeStyleTiered` can branch correctly.
  */
 export function createRouteLayer(routes: readonly RouteDto[]): Layer {
   const source = new VectorSource({ useSpatialIndex: true });
@@ -70,6 +238,7 @@ export function createRouteLayer(routes: readonly RouteDto[]): Layer {
     const feature = new Feature({
       geometry: new LineString(coords),
       routeId: route.routeId,
+      isBackbone: route.isBackbone,
       // Default bucket 0 until first tick delta arrives.
       loadBucket: 0,
       slaRiskBucket: 0,
@@ -77,7 +246,7 @@ export function createRouteLayer(routes: readonly RouteDto[]): Layer {
     feature.setId(`route:${route.routeId}`);
     source.addFeature(feature);
   }
-  const layer = new VectorLayer({ source, style: routeStyle });
+  const layer = new VectorLayer({ source, style: routeStyleTiered });
   return { layer, source };
 }
 

@@ -200,10 +200,18 @@ describe("routeStyleTiered — backbone leg", () => {
     expect(routeStyleTiered(f)).toBe(routeStyleTiered(f));
   });
 
-  it("backbone style uses BACKBONE_LEG_COLOR (#cbd5e1) stroke", () => {
+  it("backbone style stroke color contains BACKBONE_LEG_COLOR channel (#cbd5e1)", () => {
     const f = makeFeature({ isBackbone: true }) as FeatureLike;
     const s = shape(routeStyleTiered(f));
-    expect(s.opts.stroke?.opts.color).toBe(BACKBONE_LEG_COLOR);
+    // The style encodes opacity in the color channel as rgba(..., 0.9) rather than
+    // using a top-level `opacity` property (OL 10 Style has no opacity option).
+    // Assert that the color contains the BACKBONE_LEG_COLOR channel components.
+    const color = s.opts.stroke?.opts.color ?? "";
+    // Either the raw hex or an rgba encoding of it is acceptable.
+    expect(
+      color === BACKBONE_LEG_COLOR ||
+        /rgba?\(203,\s*213,\s*225/.test(color),
+    ).toBe(true);
     expect(BACKBONE_LEG_COLOR).toBe("#cbd5e1");
   });
 

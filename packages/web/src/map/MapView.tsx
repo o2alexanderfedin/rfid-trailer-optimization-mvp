@@ -26,6 +26,7 @@ import {
   removeTrailerFeature,
   applyHubBuckets,
   applyRouteBuckets,
+  type HubLayers,
 } from "./layers.js";
 import {
   makeEntityMaps,
@@ -280,15 +281,20 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
           hubLonLatRef.current.set(h.hubId, [h.lon, h.lat]);
         }
 
-        const hubLayer = createHubLayer(hubs);
+        const hubLayers: HubLayers = createHubLayer(hubs);
         const routeLayer = createRouteLayer(routes);
-        hubSourceRef.current = hubLayer.source;
+        // VIZ-15/16: use the unified source for metric bucket updates.
+        // Both center and spoke features live in hubLayers.source (keyed hub:<id>).
+        hubSourceRef.current = hubLayers.source;
         routeSourceRef.current = routeLayer.source;
 
-        // Routes beneath hubs beneath trailers (trailers stay top-most).
+        // Layer insertion order: routes → spoke cluster → center tier → trailers.
+        // Centers (tier 1) are inserted ABOVE the spoke cluster so they are always
+        // visible and never obscured by cluster bubbles.
         map.getLayers().insertAt(1, routeLayer.layer);
-        map.getLayers().insertAt(2, hubLayer.layer);
-        setAttr("data-hub-count", hubLayer.source.getFeatures().length);
+        map.getLayers().insertAt(2, hubLayers.spokeLayer as unknown as VectorLayer);
+        map.getLayers().insertAt(3, hubLayers.centerLayer);
+        setAttr("data-hub-count", hubLayers.source.getFeatures().length);
         setAttr("data-route-count", routeLayer.source.getFeatures().length);
       } catch {
         /* a stubbed/failed geo fetch leaves the basemap + live trailers usable */
