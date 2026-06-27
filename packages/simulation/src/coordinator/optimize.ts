@@ -165,23 +165,27 @@ export function buildCenterTwinFromFold(slice: CenterFoldSlice, nowMin: number):
  * route geometry. The optimizer's CHOSEN next hub for a trailer is therefore read
  * from the SAME `twin` the epoch planned over: each trailer's route HEAD — the first
  * stop by unload order (`route[0].hubId`, which `buildCenterTwinFromFold` already
- * sorted by `stopIndex`). A reroute is emitted for a trailer iff ALL hold:
+ * sorted by `stopIndex`). With the Phase-27 pin-removal (P27-A), the route head is
+ * no longer statically pinned to the center — it is the LEAST-CONGESTED relief spoke
+ * chosen per trailer in `optimizerRerouteFor`. A reroute is emitted for a trailer iff
+ * ALL three gates hold:
  *  1. the epoch produced an ACTIONABLE recommendation for it — `feasible === true`
  *     AND `frozen === false` (the optimizer endorsed it proceeding; a frozen or
- *     infeasible trailer is left untouched — anti-P7 thrash),
+ *     infeasible trailer — e.g. over-capacity or window-infeasible — is left
+ *     untouched, making the optimizer DECLINE that reroute — anti-P7 thrash),
  *  2. the trailer HAS a current next hub in `currentNextHubByTrailer` (it is mid-trip
  *     — there is a status-quo to differ from; a between-legs trailer yields none), and
  *  3. the optimizer next hub DIFFERS from that current next hub (no churn on a
- *     no-change plan).
+ *     no-change plan — includes the case where the relief hub equals the congested hub).
  *
- * The reroute's `toHubId` is the optimizer next hub; `targetAgentId` is the trailer.
- * The output is sorted by `targetAgentId` (byte-stable) and is a PURE function of
- * `(result, twin, currentNextHubByTrailer)` — no `Date.now`/`Math.random`/async, so
- * the same inputs ⇒ deep-equal + byte-identical list (DET-03).
+ * The reroute's `toHubId` is the optimizer's chosen route head; `targetAgentId` is
+ * the trailer. The output is sorted by `targetAgentId` (byte-stable) and is a PURE
+ * function of `(result, twin, currentNextHubByTrailer)` — no `Date.now`/`Math.random`
+ * /async, so the same inputs ⇒ deep-equal + byte-identical list (DET-03).
  *
- * @param result                   the pure epoch result (recommendations drive the gate)
+ * @param result                   the pure epoch result (recommendations drive gate 1)
  * @param twin                     the twin the epoch planned over (source of route heads)
- * @param currentNextHubByTrailer  each in-region trailer's CURRENT next hub (the status quo)
+ * @param currentNextHubByTrailer  each in-region trailer's CURRENT next hub (status quo)
  */
 export function epochResultToRerouteSuggestions(
   result: EpochResult,
@@ -190,6 +194,8 @@ export function epochResultToRerouteSuggestions(
 ): readonly CoordinatorSuggestion[] {
   // Index each trailer's optimizer-implied next hub = its twin route head (stopIndex
   // 0). `buildCenterTwinFromFold` already sorted the route, so route[0] is the head.
+  // After P27-A the head is the LEAST-CONGESTED relief spoke chosen per trailer (not
+  // always obs.centerId) — so the map now carries genuinely varied destinations.
   const optimizerNextHubByTrailer = new Map<string, string>();
   for (const trailer of twin.trailers) {
     const head = trailer.route[0];

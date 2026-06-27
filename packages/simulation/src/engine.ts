@@ -2459,9 +2459,31 @@ export function runToHorizon(
       }
 
       // 4. Build the per-center fold slice (FROM the frozen fold state, NOT a scan)
-      //    bounded to the partitioned slice's trailers. Each in-scope trailer's
-      //    twin route head is THIS center (stopIndex 0) — the cross-dock relief
-      //    destination the optimizer plans toward; the translator reads route[0].
+      //    bounded to the partitioned slice's trailers.
+      //
+      //    PIN 2 REMOVED: departureOffsetMin is now derived from the real leg transit
+      //    median + spoke dwell median (from transitByLeg + timingConfig) — a per-leg
+      //    integer approximation, not the always-actionable FREEZE+1 constant.
+      //    Mid-trip trailers have a next departure well after the freeze window, so
+      //    they remain actionable; the values now reflect real leg distances.
+      //
+      //    PIN 1 REMOVED: each trailer's route head (stopIndex 0) is now the LEAST-
+      //    CONGESTED relief hub from obs.spokes (sorted by inbound queue depth asc,
+      //    then hubId for deterministic tie-break — no RNG/clock). The optimizer can
+      //    choose a genuinely different destination from the congested current next hub.
+      //
+      //    PIN 3 REMOVED: real block volume sourced from inboundDepthByHub at the
+      //    congested next hub (the proxy for this truck's expected load). This lets
+      //    the optimizer DECLINE an over-capacity reroute (volume > trailer capacity)
+      //    and endorse feasible ones. Per-leg travelMin/distanceMiles sourced from
+      //    transitByLeg / legMilesFor (same distance basis as the sim odometer).
+
+      // Pre-rank this center's spokes by inbound queue depth (asc) then hubId (for
+      // tie-break). Deterministic: reads only the frozen inboundDepthByHub snapshot.
+      const reliefHubsByDepth: readonly { hubId: string; depth: number }[] = obs.spokes
+        .map((s) => ({ hubId: s.hubId, depth: inboundDepthByHub.get(s.hubId) ?? 0 }))
+        .sort((a, b) => a.depth !== b.depth ? a.depth - b.depth : (a.hubId < b.hubId ? -1 : 1));
+
       const inScopeTrailers = new Set(slice.trailerIds);
       const trailers: CenterFoldTrailer[] = [];
       const currentNextHubByTrailer = new Map<string, string>();
@@ -2470,43 +2492,94 @@ export function runToHorizon(
         const trip = activeTripByTrailer.get(truck.trailerId);
         if (trip === undefined) continue; // mid-trip trucks only (have a current leg)
         currentNextHubByTrailer.set(truck.trailerId, trip.toHubId);
+
+        // PIN 2 REMOVED: real departure offset — median transit for the current outbound
+        // leg + median spoke dwell, both integer-rounded. Derived from transitByLeg
+        // (geography-based per-leg params) and timingConfig (the shared engine config).
+        // These are always > FREEZE_WINDOW_MIN for typical legs, so mid-trip trailers
+        // remain actionable; the values vary by leg geography (no more constant 16).
+        const legParams = transitByLeg.get(routeId(trip.fromHubId, trip.toHubId));
+        const transitMedian = legParams !== undefined
+          ? Math.round(legParams.median)
+          : COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN;
+        const departureOffsetMin = transitMedian + Math.round(timingConfig.dwellSpoke.median);
+
+        // PIN 3 REMOVED: real block volume — use the congested next hub's inbound
+        // queue depth as a proxy for this trailer's expected load (packages destined
+        // for trip.toHubId). NOT capped at capacity so the optimizer can observe an
+        // over-capacity state and DECLINE the reroute (demand > trailer.capacity gate).
+        const blockVolume = inboundDepthByHub.get(trip.toHubId) ?? 0;
+        const blocks = blockVolume > 0
+          ? [{ blockId: `blk-${truck.trailerId}-${tick}`, nextUnloadHubId: trip.toHubId, volume: blockVolume }]
+          : [];
+
+        // PIN 1 REMOVED: real destination choice — the LEAST-CONGESTED relief spoke
+        // from reliefHubsByDepth (the pre-ranked spoke list). Prefer a spoke that is
+        // DIFFERENT from the current congested next hub; fall back to obs.centerId if
+        // no other spoke is available (single-spoke edge case or all spokes equally
+        // loaded). Falls back through the translator's gate 3 (no-change filter) when
+        // candidateDestHubId === trip.toHubId (the congested hub IS already the best).
+        const reliefEntry = reliefHubsByDepth.find((r) => r.hubId !== trip.toHubId);
+        const candidateDestHubId = reliefEntry !== undefined ? reliefEntry.hubId : obs.centerId;
+
         trailers.push({
           trailerId: truck.trailerId,
           currentHubId: trip.fromHubId,
-          departureOffsetMin: COORDINATOR_OPTIMIZER_FREEZE_WINDOW_MIN + 1, // past freeze ⇒ actionable
+          departureOffsetMin,
           capacity: COORDINATOR_OPTIMIZER_TRAILER_CAPACITY,
-          // Route head = this center (the cross-dock relief target the optimizer
-          // endorses); a second stop at the (congested) current next hub keeps the
-          // route well-formed without changing the head the translator reads.
+          // Route: candidate relief hub first (stopIndex 0), current next hub second
+          // (stopIndex 1). When candidateDestHubId === toHubId the optimizer endorses
+          // the status quo and gate 3 in the translator suppresses the no-change
+          // suggestion (anti-churn). When they differ, real capacity/blocks determine
+          // whether the optimizer ENDORSES (feasible ⇒ reroute to candidateDestHubId)
+          // or DECLINES (infeasible ⇒ no suggestion, blocks or capacity violation).
           routeStops: [
-            { hubId: obs.centerId, stopIndex: 0 },
+            { hubId: candidateDestHubId, stopIndex: 0 },
             { hubId: trip.toHubId, stopIndex: 1 },
           ],
-          blocks: [],
+          blocks,
         });
       }
       // No mid-trip in-scope trailers ⇒ nothing for the optimizer to reroute.
       if (trailers.length === 0) return { suggestions: [], usedOptimizer: true };
 
-      // The in-scope route legs: this center ⇄ each named next hub (sorted, deduped),
-      // so the twin is self-consistent (every trailer stop has a leg).
-      const legHubs = [...new Set(trailers.map((t) => t.routeStops[1]!.hubId))].sort();
-      const routeLegs: CenterFoldRouteLeg[] = legHubs.flatMap((hubId) => [
-        {
-          routeId: `coord-leg-${obs.centerId}-${hubId}`,
-          fromHubId: obs.centerId,
-          toHubId: hubId,
-          travelMin: COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN,
-          capacity: COORDINATOR_OPTIMIZER_ROUTE_CAPACITY,
-        },
-        {
-          routeId: `coord-leg-${hubId}-${obs.centerId}`,
-          fromHubId: hubId,
-          toHubId: obs.centerId,
-          travelMin: COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN,
-          capacity: COORDINATOR_OPTIMIZER_ROUTE_CAPACITY,
-        },
-      ]);
+      // The in-scope route legs: cover every hub named in any trailer's route stops
+      // (deduped + sorted — self-consistency requirement), using REAL per-leg travelMin
+      // (from transitByLeg) and distanceMiles (from legMilesFor) instead of the
+      // previous constants. PIN 3 REMOVED: legs now carry real topology data.
+      const allLegHubs = [...new Set(
+        trailers.flatMap((t) => t.routeStops.map((s) => s.hubId)),
+      )].sort();
+      const routeLegs: CenterFoldRouteLeg[] = allLegHubs.flatMap((hubId) => {
+        // Skip a leg from centerId to itself (self-loops are never valid route legs).
+        if (hubId === obs.centerId) return [];
+        const fromCenterParams = transitByLeg.get(routeId(obs.centerId, hubId));
+        const toCenterParams = transitByLeg.get(routeId(hubId, obs.centerId));
+        const fromCenterDist = legMilesFor(obs.centerId, hubId);
+        const toCenterDist = legMilesFor(hubId, obs.centerId);
+        return [
+          {
+            routeId: `coord-leg-${obs.centerId}-${hubId}`,
+            fromHubId: obs.centerId,
+            toHubId: hubId,
+            travelMin: fromCenterParams !== undefined
+              ? Math.round(fromCenterParams.median)
+              : COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN,
+            capacity: COORDINATOR_OPTIMIZER_ROUTE_CAPACITY,
+            ...(fromCenterDist > 0 ? { distanceMiles: fromCenterDist } : {}),
+          },
+          {
+            routeId: `coord-leg-${hubId}-${obs.centerId}`,
+            fromHubId: hubId,
+            toHubId: obs.centerId,
+            travelMin: toCenterParams !== undefined
+              ? Math.round(toCenterParams.median)
+              : COORDINATOR_OPTIMIZER_LEG_TRAVEL_MIN,
+            capacity: COORDINATOR_OPTIMIZER_ROUTE_CAPACITY,
+            ...(toCenterDist > 0 ? { distanceMiles: toCenterDist } : {}),
+          },
+        ];
+      });
 
       const foldSlice: CenterFoldSlice = {
         centerId: obs.centerId,
