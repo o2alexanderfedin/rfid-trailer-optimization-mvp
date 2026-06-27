@@ -4,14 +4,14 @@ milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
 stopped_at: "Completed 27-03: VIZ-15/VIZ-16 scale viz (cluster + tier styles)"
-last_updated: "2026-06-27T07:46:52.686Z"
+last_updated: "2026-06-27T08:04:12.224Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 24
-  completed_plans: 22
-  percent: 92
+  completed_plans: 23
+  percent: 96
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-26)
 ## Current Position
 
 Phase: 27 (Perf + Plumbing + Scale Viz) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-06-27
 
@@ -61,6 +61,7 @@ Last activity: 2026-06-27
 | Phase 27-perf-plumbing-scale-viz P02 | 6 | 3 tasks | 6 files |
 | Phase 27-perf-plumbing-scale-viz P03 | 50m | 3 tasks | 9 files |
 | Phase 27-perf-plumbing-scale-viz P05 | 65 | 3 tasks | 4 files |
+| Phase 27-perf-plumbing-scale-viz P04 | 75 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,7 @@ Recent decisions affecting v3.0:
 - [Phase ?]: OL 10 Style Options has no opacity property — encode per-style opacity in rgba() color string alpha channel
 - [Phase ?]: HubLayers interface: unified source for metric delta application + tier sources for per-tier OL layer styling
 - [Phase ?]: Static topology fields (hub kind/tier, route isBackbone) sent REST-only — never on ws tick payloads
+- [Phase ?]: P27-04 optimizerRerouteFor 3 pins removed; NEW golden 162efbd8
 
 ### Pending Todos
 
@@ -121,7 +123,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T07:46:52.680Z
+Last session: 2026-06-27T08:04:12.216Z
 Stopped at: Completed 27-03: VIZ-15/VIZ-16 scale viz (cluster + tier styles)
 Resume file: None
 
