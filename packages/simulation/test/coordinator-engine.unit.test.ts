@@ -48,7 +48,15 @@ describe("stepCoordinators emits rule-based ActionSuggested (COORD-01/02)", () =
     expect(suggestions.length).toBeGreaterThan(50);
   });
 
-  it("generates ALL FOUR suggestion kinds (reroute / hold / consolidate / dispatch)", () => {
+  it("emits the SUSTAINED suggestion kinds that survive the COORD-04 hysteresis dead-band", () => {
+    // The pure GENERATION layer emits all four kinds (proven in
+    // coordinator.unit.test.ts). At the ENGINE level the COORD-04 hysteresis
+    // dead-band (GUARD 1) now suppresses transient breaches that do not persist
+    // ≥ HYSTERESIS_DWELL_SIM_MS (~3 coordinator passes), so only the SUSTAINED
+    // kinds reach emit. In the seed-42 all-on stack the sustained breaches are
+    // hold + reroute + consolidate (congestion/dock pressure persists), while the
+    // rare dispatch breach is short-lived and correctly damped — the
+    // anti-oscillation contract, not a generation gap.
     const kinds = new Set(
       suggestions.map((s) =>
         s.event.type === "ActionSuggested" ? s.event.payload.kind : "",
@@ -57,7 +65,10 @@ describe("stepCoordinators emits rule-based ActionSuggested (COORD-01/02)", () =
     expect(kinds.has("reroute")).toBe(true);
     expect(kinds.has("hold")).toBe(true);
     expect(kinds.has("consolidate")).toBe(true);
-    expect(kinds.has("dispatch")).toBe(true);
+    // Every emitted kind is one of the four closed kinds (no spurious kind).
+    for (const k of kinds) {
+      expect(["reroute", "hold", "consolidate", "dispatch"]).toContain(k);
+    }
   });
 
   it("every ActionSuggested passes the domain validateEvent boundary", () => {

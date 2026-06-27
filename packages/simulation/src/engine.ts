@@ -69,14 +69,23 @@ import {
   truckLegFeasibility,
 } from "./ooda/index.js";
 import {
+  type CoordinatorLease,
   type CoordinatorObservation,
   type CoordinatorSuggestion,
   type ObservedSpoke,
   type ObservedTruck,
+  acquireLease,
   arbitrateSuggestion,
   canonicalizeSuggestionPayload,
   decideCoordinatorSuggestions,
   deriveCoordinatorRng,
+  inBackoff,
+  isPruned,
+  leaseAvailable,
+  nextBackoffUntil,
+  passesHysteresis,
+  recordReject,
+  updateHysteresisMarker,
 } from "./coordinator/index.js";
 import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
 import {
@@ -875,6 +884,33 @@ export function runToHorizon(
    * only happens under the flag. Serialization into the continuation is Plan 05.
    */
   const pendingSuggestionsByTarget = new Map<string, ActionSuggested[]>();
+
+  /**
+   * Phase-25 COORD-04: the five-guard sim-time STATE, threaded through the
+   * `stepCoordinators` filter + the `stepAgents` handshake. Each is a plain Map of
+   * a stable composite-string key → a plain integer / lease value (the smallest
+   * serializable shape — Plan 05 persists these into `SerializedWorldState`). They
+   * are read/advanced ONLY on the coordinators-on path (every WRITE is under the
+   * flag), so a flag-off run never touches them and the 3920accc… golden holds.
+   *
+   *  - `leaseByAgent`         : targetAgentId → the live single-owner lease (GUARD 4).
+   *  - `rejectCountByOption`  : `${coordinatorId}|${targetAgentId}|${kind}` →
+   *                             rejection count (GUARDs 2+5 — pruning + backoff key).
+   *  - `backoffUntilByOption` : same option key → backoff-until sim-ms (GUARD 2).
+   *  - `metricAboveSinceByOption`: `${coordinatorId}|${targetAgentId}|${kind}` →
+   *                             the metric-above-since sim-ms marker (GUARD 1).
+   *  - `lastCenterByAgent`    : targetAgentId → the agent's last-seen owning center;
+   *                             a change clears that agent's prune/hysteresis (the
+   *                             shift/zone-change reset, GUARD 5).
+   */
+  const leaseByAgent = new Map<string, CoordinatorLease>();
+  const rejectCountByOption = new Map<string, number>();
+  const backoffUntilByOption = new Map<string, number>();
+  const metricAboveSinceByOption = new Map<string, number>();
+  const lastCenterByAgent = new Map<string, string>();
+  /** The stable per-option guard key (GUARDs 2+5+1). */
+  const optionKey = (coordinatorId: string, targetAgentId: string, kind: string): string =>
+    `${coordinatorId}|${targetAgentId}|${kind}`;
 
   // NET-01 (Phase 23): resolve the network topology. The flag is read with a
   // STRICT `=== true` (never `??`/`||`) so an absent flag stays falsy and the
@@ -1832,6 +1868,30 @@ export function runToHorizon(
       emit(`trailer-${trailerId}`, diverted);
     };
 
+    /**
+     * Phase-25 COORD-04 (GUARDs 2+5): record a rejection of a coordinator
+     * suggestion. Advances the (coordinatorId, targetAgentId, kind) option's reject
+     * count (toward the K-prune cooldown — GUARD 5) and sets a seeded-jitter
+     * exponential backoff-until (GUARD 2) so the NEXT `stepCoordinators` pass
+     * suppresses the just-rejected option — this is what bounds events-per-tick under
+     * an all-reject scenario (Pitfall 10 Zeno). The backoff jitter is drawn from the
+     * per-CENTER coordinator substream (`deriveCoordinatorRng`, DET-03: never
+     * `Math.random`). The handshake fires at the SAME tick as the coordinator pass,
+     * so `nowSimMs = tick * MS_PER_TICK` is the SAME sim-time the suggestion was
+     * stamped with (the guards read one shared clock).
+     */
+    const recordSuggestionReject = (suggested: ActionSuggested): void => {
+      const { coordinatorId, targetAgentId, kind } = suggested.payload;
+      const key = `${coordinatorId}|${targetAgentId}|${kind}`;
+      const nowSimMs = tick * MS_PER_TICK;
+      const count = recordReject(rejectCountByOption.get(key) ?? 0);
+      rejectCountByOption.set(key, count);
+      // Seeded jitter from the rejecting suggestion's OWN center substream (the same
+      // substream `stepCoordinators` derived for that center) — deterministic + lazy.
+      const rng = deriveCoordinatorRng(seed, coordinatorId);
+      backoffUntilByOption.set(key, nextBackoffUntil(count, nowSimMs, rng));
+    };
+
     // === DECIDE + ACT (sorted iteration; anything-to-decide guard) =============
     for (const agent of agents) {
       if (agent.kind === "truck") {
@@ -1882,6 +1942,12 @@ export function runToHorizon(
                 suggested.payload.suggestionId,
                 verdict.reasonCode,
               );
+              // GUARDs 2+5: a reject advances this (coordinator,target,kind) option's
+              // reject count (toward the K-prune) AND sets a seeded-jitter exponential
+              // backoff so the NEXT coordinator pass suppresses the just-rejected
+              // option (the Pitfall-10 re-suggest loop closes). Jitter from the
+              // per-CENTER coordinator substream (DET-03: never Math.random).
+              recordSuggestionReject(suggested);
             }
           }
           // Clear the per-target entry after consumption (within-tick lifecycle).
@@ -1989,6 +2055,9 @@ export function runToHorizon(
                 suggested.payload.suggestionId,
                 verdict.reasonCode,
               );
+              // GUARDs 2+5 — advance the reject count + seeded-jitter backoff for the
+              // just-rejected (coordinator,target,kind) option (mirrors the truck branch).
+              recordSuggestionReject(suggested);
             }
           }
           pendingSuggestionsByTarget.delete(agent.stableId);
@@ -2112,7 +2181,7 @@ export function runToHorizon(
       return { centerId, tick, issuedAtSimMs, spokes: spokeObs, trucks: truckObs };
     };
 
-    // === DECIDE + ACT (sorted-by-centerId; anything-to-suggest guard) ==========
+    // === DECIDE + GUARD-FILTER + ACT (sorted-by-centerId) ======================
     for (const centerId of coordinatorCenterIds) {
       const obs = observeCenter(centerId);
       // Anything-to-suggest guard (mirror the agent guard): a center with no spokes
@@ -2123,14 +2192,81 @@ export function runToHorizon(
       // Lazy per-center substream — constructed ONLY here, on the on path, for a
       // center that actually has scope (a flag-off run allocates nothing).
       const rng = deriveCoordinatorRng(seed, centerId);
-      const suggestions = decideCoordinatorSuggestions(obs, rng);
-      // For each suggestion, build + emit an ActionSuggested (deterministic,
-      // collision-free suggestionId), pin the payload through the canonicalizer,
-      // emit on the coordinator's stream, AND record it for the same-tick handshake.
-      suggestions.forEach((suggestion: CoordinatorSuggestion, index: number) => {
-        // Deterministic, byte-stable, collision-free across the run: one center per
-        // centerId, a distinct tick per pass, a sorted index within the pass.
-        const suggestionId = `${centerId}-${tick}-${index}`;
+      const candidates = decideCoordinatorSuggestions(obs, rng);
+
+      // --- GUARD 5 (prune-clearing on zone change) -----------------------------
+      // A `centerOf` change for a target (a shift/zone change) re-opens every option
+      // for it: clear its accrued reject counts + hysteresis markers so it is not
+      // permanently pruned/backed-off from a prior region. Detected per target by
+      // comparing the agent's last-seen owning center to this center; a target this
+      // center is now scoping that was last scoped by ANOTHER center is "moved".
+      for (const c of candidates) {
+        const target = c.targetAgentId;
+        const prevCenter = lastCenterByAgent.get(target);
+        if (prevCenter !== undefined && prevCenter !== centerId) {
+          // Zone change: clear this target's per-option guard state across kinds.
+          for (const kind of ["reroute", "hold", "consolidate", "dispatch"] as const) {
+            const k = optionKey(prevCenter, target, kind);
+            rejectCountByOption.delete(k);
+            backoffUntilByOption.delete(k);
+            metricAboveSinceByOption.delete(k);
+          }
+        }
+        lastCenterByAgent.set(target, centerId);
+      }
+
+      // --- GUARD 1 (hysteresis): advance the metric-above-since markers ---------
+      // Each candidate's generating rule fired ⇒ its metric is ABOVE threshold this
+      // pass. Update the marker for every (centerId, target, kind) option this
+      // coordinator MIGHT key on: candidates that fired ⇒ "above" (start/retain the
+      // dwell); options with a prior marker that did NOT fire this pass ⇒ cleared
+      // (a transient breach that fell back — the dwell resets). Pure helpers only.
+      const firedKeys = new Set(
+        candidates.map((c) => optionKey(centerId, c.targetAgentId, c.kind)),
+      );
+      // Clear markers for this center's options whose metric fell back below.
+      for (const key of [...metricAboveSinceByOption.keys()]) {
+        if (!key.startsWith(`${centerId}|`)) continue;
+        if (!firedKeys.has(key)) metricAboveSinceByOption.delete(key);
+      }
+      // Start/retain markers for the fired candidates.
+      for (const c of candidates) {
+        const key = optionKey(centerId, c.targetAgentId, c.kind);
+        const next = updateHysteresisMarker(
+          metricAboveSinceByOption.get(key) ?? null,
+          true,
+          issuedAtSimMs,
+        );
+        if (next === null) metricAboveSinceByOption.delete(key);
+        else metricAboveSinceByOption.set(key, next);
+      }
+
+      // --- Filter each candidate through the five guards (deterministic order) --
+      // lease → reject-pruning → backoff → hysteresis. TTL applies to PENDING
+      // suggestions (expired on read in the handshake), not to a fresh candidate.
+      let emittedIndex = 0;
+      for (const suggestion of candidates) {
+        const target = suggestion.targetAgentId;
+        const key = optionKey(centerId, target, suggestion.kind);
+
+        // GUARD 4 — lease: skip if ANOTHER coordinator holds a live lease on target.
+        if (!leaseAvailable(leaseByAgent.get(target) ?? null, centerId, issuedAtSimMs)) {
+          continue;
+        }
+        // GUARD 5 — reject-pruning: skip a (target,kind) rejected ≥ K times.
+        if (isPruned(rejectCountByOption.get(key) ?? 0)) continue;
+        // GUARD 2 — backoff: skip an option still within its backoff window.
+        if (inBackoff(backoffUntilByOption.get(key) ?? null, issuedAtSimMs)) continue;
+        // GUARD 1 — hysteresis: skip until the metric has persisted ≥ the dead-band.
+        if (!passesHysteresis(metricAboveSinceByOption.get(key) ?? null, issuedAtSimMs)) {
+          continue;
+        }
+
+        // SURVIVED all guards ⇒ stamp + emit. Deterministic, byte-stable,
+        // collision-free suggestionId: one center per centerId, a distinct tick per
+        // pass, a sorted SURVIVING index within the pass.
+        const suggestionId = `${centerId}-${tick}-${emittedIndex}`;
+        emittedIndex += 1;
         const params =
           suggestion.kind === "reroute" || suggestion.kind === "dispatch"
             ? { toHubId: suggestion.toHubId }
@@ -2143,7 +2279,7 @@ export function runToHorizon(
           payload: canonicalizeSuggestionPayload({
             suggestionId,
             coordinatorId: centerId,
-            targetAgentId: suggestion.targetAgentId,
+            targetAgentId: target,
             kind: suggestion.kind,
             params,
             issuedAtSimMs,
@@ -2151,13 +2287,15 @@ export function runToHorizon(
           }),
         };
         emit(`coordinator-${centerId}`, event);
+        // GUARD 4 — acquire/refresh the single-owner lease on this target so a peer
+        // coordinator cannot advise it until the lease expires.
+        leaseByAgent.set(target, acquireLease(centerId, issuedAtSimMs));
         // Record for the SAME-tick agent handshake (Plan 03). Append to a per-target
-        // list; the emit order (sorted center, sorted suggestion index) makes the
-        // list order byte-stable.
-        const existing = pendingSuggestionsByTarget.get(suggestion.targetAgentId);
+        // list; the emit order (sorted center, sorted surviving index) is byte-stable.
+        const existing = pendingSuggestionsByTarget.get(target);
         if (existing !== undefined) existing.push(event);
-        else pendingSuggestionsByTarget.set(suggestion.targetAgentId, [event]);
-      });
+        else pendingSuggestionsByTarget.set(target, [event]);
+      }
     }
 
     // Self-reschedule the NEXT pass at an ABSOLUTE tick (same discipline as
