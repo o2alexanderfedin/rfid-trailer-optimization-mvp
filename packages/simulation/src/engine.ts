@@ -80,6 +80,7 @@ import {
   decideCoordinatorSuggestions,
   deriveCoordinatorRng,
   inBackoff,
+  isExpired,
   isPruned,
   leaseAvailable,
   nextBackoffUntil,
@@ -1971,8 +1972,24 @@ export function runToHorizon(
         // (deterministic precedence — no double-emit, T-25-12).
         const pendingTruck = pendingSuggestionsByTarget.get(agent.stableId);
         let truckSuggestionAccepted = false;
+        // The shared sim-time clock for the TTL guard (GUARD 3) + the reject-path
+        // backoff: the handshake fires at the SAME tick the coordinator stamped, so
+        // `nowSimMs = tick × MS_PER_TICK` is the one virtual clock both read (DET-03:
+        // never `Date.now`).
+        const nowSimMs = tick * MS_PER_TICK;
         if (pendingTruck !== undefined) {
           for (const suggested of pendingTruck) {
+            // GUARD 3 (sim-time TTL): a pending suggestion that survived to a LATER
+            // tick (a cross-tick entry restored from a serialized continuation, never
+            // drained in its issuing tick) self-destructs once `nowSimMs` passes
+            // `issuedAtSimMs + ttlSimMs` — it is DROPPED, never acted on (no
+            // accept/reject/binding event, no reject-path counter advance; T-25-17).
+            // In the strictly-within-tick handshake `issuedAtSimMs == nowSimMs`, so a
+            // fresh suggestion is NEVER expired ⇒ this is a no-op on that path and the
+            // goldens are unchanged.
+            if (isExpired(suggested.payload.issuedAtSimMs, nowSimMs, suggested.payload.ttlSimMs)) {
+              continue;
+            }
             const suggestion = suggestedToCoordinatorSuggestion(suggested);
             const verdict = arbitrateSuggestion(suggestion, truckVerdict);
             if (verdict.accepted) {
@@ -2084,8 +2101,16 @@ export function runToHorizon(
         const hubVerdict = hubDockFeasibility(obs);
         const pendingHub = pendingSuggestionsByTarget.get(agent.stableId);
         let hubSuggestionAccepted = false;
+        // The shared sim-time clock for the TTL guard (mirrors the truck branch).
+        const nowSimMs = tick * MS_PER_TICK;
         if (pendingHub !== undefined) {
           for (const suggested of pendingHub) {
+            // GUARD 3 (sim-time TTL): drop a cross-tick EXPIRED pending suggestion —
+            // no accept/reject/binding event, no counter advance (T-25-17). Within-tick
+            // (`issuedAtSimMs == nowSimMs`) it never fires ⇒ no golden change.
+            if (isExpired(suggested.payload.issuedAtSimMs, nowSimMs, suggested.payload.ttlSimMs)) {
+              continue;
+            }
             const suggestion = suggestedToCoordinatorSuggestion(suggested);
             const verdict = arbitrateSuggestion(suggestion, hubVerdict);
             if (verdict.accepted) {
