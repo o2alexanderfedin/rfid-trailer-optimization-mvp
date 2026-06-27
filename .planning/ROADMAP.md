@@ -158,7 +158,15 @@ Plans:
   2. `@alexanderfedin/async-queue` is wired into **runtime plumbing only** (worker↔optimizer handoff, DB write-batching, ws backpressure), with the vendored `dist/` resolved and `vendor/*` in the workspace; an ESLint `no-restricted-imports` rule **bans it from the deterministic core**, and an append-order==generation-order test proves the queue never reorders the event stream
   3. The map renders 100+ hubs **without clutter** via OpenLayers `Cluster` + `declutter` + `VectorImageLayer`: static topology is sent **once**, per-tick deltas carry only trailers + transient suggestions (per-tick payload bytes stay bounded as hub count grows), regional centers + the near-full-mesh backbone render as a distinct visual tier (centers vs spokes vs backbone), and an opt-in/decluttered advisory-suggestion overlay (accept-green / reject-red) is available
   4. A **sustained continental-run** at ~80–130 hubs holds a target sim-min/wall-sec without the freeze/stall failure mode (PERF-04), demonstrable live end-to-end
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+- [ ] 27-01-PLAN.md — PERF-02 incremental cursor-fold twin-snapshot (trailer_fuel + induction_deadline projections; read-side, no golden; rebuild-equivalence + cost-invariance)
+- [ ] 27-02-PLAN.md — PERF-03 foundation: vendor async-queue build/link + vendor/* workspace + DET-03 ESLint full-core ban + append-order==generation-order FIFO test
+- [ ] 27-03-PLAN.md — VIZ-15/16 scale rendering: Cluster + declutter + VectorImageLayer spoke field, separate center tier, kind/tier + isBackbone DTO fields, tier-branched cached styles + legend
+- [ ] 27-04-PLAN.md — P27-A optimizer-divergent reroute (remove 3 pins) + NEW optimizer-on golden (reproducibility-first, EQUALS→DIFFERS flip; 3 prior goldens intact)
+- [ ] 27-05-PLAN.md — PERF-03 seams: bounded worker↔optimizer handoff + coalesced event-store inserts + per-client ws backpressure queue
+- [ ] 27-06-PLAN.md — P27-B continental demo-config live HOS/fuel reject (COORD-03, demo-config-only) + VIZ-17 opt-in suggestion overlay + Advisory Suggestions feed
+- [ ] 27-07-PLAN.md — PERF-04 sustained continental-run validation (flat per-epoch cost + held throughput, no freeze/stall)
 **UI hint**: yes
 
 ### Phase 28: Continental Hardening
@@ -179,7 +187,7 @@ Plans:
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
 | 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
 | 26. Coordinator ↔ Optimizer | 3/3 | Complete   | 2026-06-27 |
-| 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
+| 27. Perf + Plumbing + Scale Viz | 0/7 | Not started | - |
 | 28. Continental Hardening | 0/TBD | Not started | - |
 
 | Milestone | Phases | Status | Shipped |
