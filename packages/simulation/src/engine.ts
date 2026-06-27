@@ -64,6 +64,15 @@ import {
   deriveAgentRng,
   sortAgentsByStableId,
 } from "./ooda/index.js";
+import {
+  type CoordinatorObservation,
+  type CoordinatorSuggestion,
+  type ObservedSpoke,
+  type ObservedTruck,
+  canonicalizeSuggestionPayload,
+  decideCoordinatorSuggestions,
+  deriveCoordinatorRng,
+} from "./coordinator/index.js";
 import { EPOCH_ISO, MS_PER_TICK } from "./epoch.js";
 import {
   isContinuation,
@@ -488,6 +497,14 @@ const COORDINATOR_INTERVAL_TICKS = 5;
  * arbitrate the suggestions in the same tick (the same-tick handshake, Plan 03).
  */
 const COORDINATOR_START_TICK = 1;
+/**
+ * COORD-04: the sim-time TTL stamped on every `ActionSuggested` (~6 sim-minutes).
+ * An unaccepted suggestion self-destructs after this window (the Plan-04 TTL
+ * guard owns the expiry/enforcement; this plan just STAMPS it from a named
+ * constant so the value is reproducible + baked into the Plan-05 coordinator-on
+ * golden). 6 ticks × `MS_PER_TICK` (1 tick = 1 sim-minute) = 360_000 sim-ms.
+ */
+const COORDINATOR_TTL_SIM_MS = 6 * MS_PER_TICK;
 /** SLA classes in a fixed order (the induction RNG picks an index). */
 const SLA_CLASSES: readonly SlaClass[] = [
   "express",
@@ -853,7 +870,6 @@ export function runToHorizon(
    * only happens under the flag. Serialization into the continuation is Plan 05.
    */
   const pendingSuggestionsByTarget = new Map<string, ActionSuggested[]>();
-  void pendingSuggestionsByTarget; // populated in Task 3 (the pass body)
 
   // NET-01 (Phase 23): resolve the network topology. The flag is read with a
   // STRICT `=== true` (never `??`/`||`) so an absent flag stays falsy and the
@@ -1837,19 +1853,138 @@ export function runToHorizon(
    * NO emit, NO `pendingSuggestionsByTarget` write, NO reschedule ever happens when
    * the flag is off (the determinism keystone — the off path is provably inert).
    *
-   * SKELETON (Task 2): the empty-but-self-rescheduling foundation. The full pass
-   * body (frozen per-center observe at pass entry, sorted-by-centerId iteration over
-   * the bounded per-center scope, lazy `deriveCoordinatorRng`, rule-based
-   * `decideCoordinatorSuggestions`, `ActionSuggested` emit +
-   * `pendingSuggestionsByTarget` record) lands in Task 3. Until then this stub keeps
-   * the OFF path byte-identical to 3920accc… while the SimTask variant, the
-   * dispatch case, and the bootstrap seed are wired.
+   * ON path: build the FROZEN per-center observations ONCE at pass entry from the
+   * fold maps (the Decide loop NEVER re-reads them — the order-independence
+   * witness, Pitfall 4). Iterate the regional centers in SORTED-by-centerId
+   * (codepoint) order. For each center, build its BOUNDED observation (ONLY that
+   * center's spokes + in-region trucks — never another center's, COORD-01 scaling
+   * thesis), skip a center with nothing to suggest (the anything-to-suggest guard),
+   * lazily derive the per-center substream, generate rule-based suggestions, and for
+   * each emit an `ActionSuggested` (payload pinned through
+   * `canonicalizeSuggestionPayload`) on `coordinator-<centerId>` AND record it in
+   * `pendingSuggestionsByTarget` keyed by `targetAgentId` (the same-tick handshake,
+   * consumed by `stepAgents` in Plan 03). The coordinator pass fires one queue-seq
+   * BEFORE `stepAgents` at a shared tick, so the suggestions are present when the
+   * agents run.
    */
   const stepCoordinators = (tick: number): void => {
     if (!coordinatorsEnabled) return; // never runs when off (the determinism keystone)
 
-    // Task 3 fills the pass body here. Self-reschedule the NEXT pass at an ABSOLUTE
-    // tick (same discipline as `stepAgents`/`inductPackage`).
+    // === OBSERVE: build the FROZEN snapshot of the fold maps at pass ENTRY ======
+    // Read each fold map ONCE here into plain-data per-hub integers; the per-center
+    // Decide below reads ONLY these frozen maps (never the live fold maps), so a
+    // peer center's pass can't couple another center's suggestions to iteration
+    // order (the order-shuffle witness, Pitfall 4).
+    const inboundDepthByHub = new Map<string, number>();
+    for (const [hubId, ids] of pendingBySpoke) inboundDepthByHub.set(hubId, ids.length);
+    const consolidationDepthByHub = new Map<string, number>();
+    for (const [hubId, ids] of pendingAtSpoke) consolidationDepthByHub.set(hubId, ids.length);
+    // A spoke's single dock is "busy" once its inbound queue reaches this depth — a
+    // deterministic integer proxy for dock occupancy (mirrors the stepAgents
+    // DOCK_BUSY_QUEUE proxy; no live dock fold map exists).
+    const DOCK_BUSY_QUEUE = 8;
+    const dockAvailableForHub = (hubId: string): boolean =>
+      (inboundDepthByHub.get(hubId) ?? 0) < DOCK_BUSY_QUEUE;
+
+    // The set of regional centers the coordinators run for: the continental center
+    // ids when the topology is on, else the single legacy center (`hubs[0]`) so a
+    // coordinator always exists for the demo/test even on the legacy star.
+    const coordinatorCenterIds: readonly string[] = (
+      centerIds.size > 0 ? [...centerIds] : [center.hubId]
+    )
+      .slice()
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+    // Sim-time milliseconds since epoch at this frame (non-negative integer; the
+    // COORD-04 sim-time TTL substrate). Derived from the tick clock — NEVER
+    // `Date.now()` (DET-03).
+    const issuedAtSimMs = tick * MS_PER_TICK;
+
+    // Build the FROZEN bounded observation for ONE center: ONLY its own spokes (the
+    // spokes whose `centerOf === this center`) and its in-region trucks. Spokes are
+    // sorted by hubId and trucks by trailerId so the suggestion order is a pure
+    // function of the stable ids (never Map/array insertion order).
+    const observeCenter = (centerId: string): CoordinatorObservation => {
+      const spokeObs: ObservedSpoke[] = spokes
+        .filter((s) => centerOf(s.hubId).hubId === centerId)
+        .map((s) => s.hubId)
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+        .map((hubId) => ({
+          hubId,
+          inboundQueueDepth: inboundDepthByHub.get(hubId) ?? 0,
+          pendingConsolidationCount: consolidationDepthByHub.get(hubId) ?? 0,
+          dockAvailable: dockAvailableForHub(hubId),
+        }));
+      const truckObs: ObservedTruck[] = trailerRoster
+        .filter((entry) => centerOf(entry.spoke.hubId).hubId === centerId)
+        .slice()
+        .sort((a, b) =>
+          a.trailerId < b.trailerId ? -1 : a.trailerId > b.trailerId ? 1 : 0,
+        )
+        .map((entry) => {
+          const trip = activeTripByTrailer.get(entry.trailerId);
+          const nextHubId = trip?.toHubId ?? null;
+          return {
+            trailerId: entry.trailerId,
+            nextHubId,
+            nextHubQueueDepth:
+              nextHubId !== null ? inboundDepthByHub.get(nextHubId) ?? 0 : 0,
+          };
+        });
+      return { centerId, tick, issuedAtSimMs, spokes: spokeObs, trucks: truckObs };
+    };
+
+    // === DECIDE + ACT (sorted-by-centerId; anything-to-suggest guard) ==========
+    for (const centerId of coordinatorCenterIds) {
+      const obs = observeCenter(centerId);
+      // Anything-to-suggest guard (mirror the agent guard): a center with no spokes
+      // and no trucks in scope is SKIPPED (never a substream construction). This
+      // also makes the lazy-substream contract observable — a center that suggests
+      // nothing constructs no `deriveCoordinatorRng`.
+      if (obs.spokes.length === 0 && obs.trucks.length === 0) continue;
+      // Lazy per-center substream — constructed ONLY here, on the on path, for a
+      // center that actually has scope (a flag-off run allocates nothing).
+      const rng = deriveCoordinatorRng(seed, centerId);
+      const suggestions = decideCoordinatorSuggestions(obs, rng);
+      // For each suggestion, build + emit an ActionSuggested (deterministic,
+      // collision-free suggestionId), pin the payload through the canonicalizer,
+      // emit on the coordinator's stream, AND record it for the same-tick handshake.
+      suggestions.forEach((suggestion: CoordinatorSuggestion, index: number) => {
+        // Deterministic, byte-stable, collision-free across the run: one center per
+        // centerId, a distinct tick per pass, a sorted index within the pass.
+        const suggestionId = `${centerId}-${tick}-${index}`;
+        const params =
+          suggestion.kind === "reroute" || suggestion.kind === "dispatch"
+            ? { toHubId: suggestion.toHubId }
+            : {};
+        const event: ActionSuggested = {
+          type: "ActionSuggested",
+          schemaVersion: 1,
+          // DET-03 (Pitfall 7): route the coordinator-decided payload through the ONE
+          // canonicalizer so its hashed key order is byte-stable.
+          payload: canonicalizeSuggestionPayload({
+            suggestionId,
+            coordinatorId: centerId,
+            targetAgentId: suggestion.targetAgentId,
+            kind: suggestion.kind,
+            params,
+            issuedAtSimMs,
+            ttlSimMs: COORDINATOR_TTL_SIM_MS,
+          }),
+        };
+        emit(`coordinator-${centerId}`, event);
+        // Record for the SAME-tick agent handshake (Plan 03). Append to a per-target
+        // list; the emit order (sorted center, sorted suggestion index) makes the
+        // list order byte-stable.
+        const existing = pendingSuggestionsByTarget.get(suggestion.targetAgentId);
+        if (existing !== undefined) existing.push(event);
+        else pendingSuggestionsByTarget.set(suggestion.targetAgentId, [event]);
+      });
+    }
+
+    // Self-reschedule the NEXT pass at an ABSOLUTE tick (same discipline as
+    // `stepAgents`/`inductPackage`). `scheduleNext` RETAINS the task on the
+    // resumable path or DROPS it past the horizon (finite path).
     const nextTick = tick + COORDINATOR_INTERVAL_TICKS;
     scheduleNext(nextTick, { kind: "stepCoordinators", tick: nextTick });
   };
