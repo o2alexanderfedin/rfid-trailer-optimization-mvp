@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
-stopped_at: Completed 25-02-PLAN.md
-last_updated: "2026-06-27T05:21:31.090Z"
+stopped_at: Phase 27 UI-SPEC approved
+last_updated: "2026-06-27T06:18:56.536Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 6
@@ -115,9 +115,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T05:21:10.912Z
-Stopped at: Completed 25-02-PLAN.md
-Resume file: None
+Last session: 2026-06-27T06:18:56.494Z
+Stopped at: Phase 27 UI-SPEC approved
+Resume file: .planning/phases/27-perf-plumbing-scale-viz/27-UI-SPEC.md
 
 ## Operator Next Steps
 
