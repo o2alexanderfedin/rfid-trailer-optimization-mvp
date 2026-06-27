@@ -18,6 +18,8 @@ import type {
   PackageScanned,
   SizeClass,
   SlaClass,
+  SuggestionAccepted,
+  SuggestionRejected,
   TrailerArrivedAtHub,
   TrailerDeparted,
   TrailerDiverted,
@@ -62,13 +64,16 @@ import {
   decideHub,
   decideTruck,
   deriveAgentRng,
+  hubDockFeasibility,
   sortAgentsByStableId,
+  truckLegFeasibility,
 } from "./ooda/index.js";
 import {
   type CoordinatorObservation,
   type CoordinatorSuggestion,
   type ObservedSpoke,
   type ObservedTruck,
+  arbitrateSuggestion,
   canonicalizeSuggestionPayload,
   decideCoordinatorSuggestions,
   deriveCoordinatorRng,
@@ -1269,6 +1274,39 @@ export function runToHorizon(
     emit(`trailer-${trailerId}`, event);
   };
 
+  /**
+   * Phase-25 COORD-02 (consume half): emit the agent's accept/reject verdict on a
+   * coordinator's `ActionSuggested`. Both fire on the TARGET agent's OWN stream
+   * (`trailer-<id>` / `hub-<id>`) — the agent is the author of record (the un-
+   * overridable contract: the agent, not the coordinator, decides). `occurredAt` is
+   * the virtual clock (DET-03: never `Date.now()`); only the `suggestionId` (+ the
+   * closed `reasonCode` on a reject) is carried, so no new hashed payload shape
+   * needs a canonicalizer this plan.
+   */
+  const emitSuggestionAccepted = (
+    targetStreamId: string,
+    suggestionId: string,
+  ): void => {
+    const event: SuggestionAccepted = {
+      type: "SuggestionAccepted",
+      schemaVersion: 1,
+      payload: { suggestionId, occurredAt: clock.nowIso() },
+    };
+    emit(targetStreamId, event);
+  };
+  const emitSuggestionRejected = (
+    targetStreamId: string,
+    suggestionId: string,
+    reasonCode: SuggestionRejected["payload"]["reasonCode"],
+  ): void => {
+    const event: SuggestionRejected = {
+      type: "SuggestionRejected",
+      schemaVersion: 1,
+      payload: { suggestionId, reasonCode, occurredAt: clock.nowIso() },
+    };
+    emit(targetStreamId, event);
+  };
+
   // Plan 19-08: the bootstrap (hub/route registration + driver-pool seeding +
   // initial schedule) runs ONLY on a FRESH run. A resumed chunk restores all of
   // that state from the continuation, so re-running the bootstrap would
@@ -1744,21 +1782,127 @@ export function runToHorizon(
       ...hubAgents.map((a) => ({ kind: "hub" as const, ...a })),
     ]);
 
+    /**
+     * Phase-25 COORD-02 (consume half): reconstruct the pure `CoordinatorSuggestion`
+     * arbitration input from a recorded `ActionSuggested` event. `arbitrateSuggestion`
+     * keys on `kind` (+ `toHubId` for reroute/dispatch) only — this is a thin, total,
+     * deterministic adapter (no engine read, no clock, no RNG).
+     */
+    const suggestedToCoordinatorSuggestion = (
+      suggested: ActionSuggested,
+    ): CoordinatorSuggestion => {
+      const { kind, targetAgentId, params } = suggested.payload;
+      switch (kind) {
+        case "reroute":
+          return { kind, targetAgentId, toHubId: params.toHubId ?? "" };
+        case "dispatch":
+          return { kind, targetAgentId, toHubId: params.toHubId ?? "" };
+        case "hold":
+          return { kind, targetAgentId };
+        case "consolidate":
+          return { kind, targetAgentId };
+      }
+    };
+
+    /**
+     * Phase-25 COORD-02/COORD-03: helper to emit the EXISTING `TrailerDiverted`
+     * binding event for an accepted reroute, REUSING the exact same payload
+     * construction (+ canonicalizer) the autonomous divert uses — there is NO new
+     * binding path. `toHubId` comes from the accepted suggestion's params.
+     */
+    const emitAcceptedDivert = (
+      trailerId: string,
+      trip: { readonly tripId: string; readonly fromHubId: string },
+      toHubId: string,
+    ): void => {
+      const diverted: TrailerDiverted = {
+        type: "TrailerDiverted",
+        schemaVersion: 1,
+        payload: canonicalizeOodaPayload({
+          trailerId,
+          tripId: trip.tripId,
+          fromHubId: trip.fromHubId,
+          // A coordinator-accepted reroute reuses the OODA divert reason vocabulary
+          // (the destination is congested-relief, same as an autonomous divert).
+          toHubId,
+          reason: "next-hub-congested",
+          occurredAt: clock.nowIso(),
+        }),
+      };
+      emit(`trailer-${trailerId}`, diverted);
+    };
+
     // === DECIDE + ACT (sorted iteration; anything-to-decide guard) =============
     for (const agent of agents) {
       if (agent.kind === "truck") {
         const obs = observeTruck(agent.entry);
         const trip = activeTripByTrailer.get(agent.stableId);
-        // "anything-to-decide?" guard (T-24-05): a truck only runs Decide/Act when
-        // its FROZEN observation shows a pending decision — a binding HOS/fuel
-        // trigger or a congested next hub. A mid-leg truck with nothing to choose
-        // (or no active trip) is SKIPPED (never a blanket per-tick sweep).
+
+        // --- Phase-25 SAME-TICK HANDSHAKE (COORD-02 consume / COORD-03) ----------
+        // BINDING LOCAL FEASIBILITY (24-03): the agent's OWN verdict — the un-
+        // overridable basis a coordinator cannot override. Computed once here from
+        // the SAME shared HOS limits + fuel threshold + virtual-clock epoch-minute
+        // the autonomous Decide uses (DRY). `now` is the frozen clock (DET-03).
+        const nowMin = isoToEpochMinutes(clock.nowIso());
+        const truckVerdict = truckLegFeasibility(
+          obs,
+          hosLimits,
+          {
+            // Fuel OFF ⇒ an unreachable threshold so `mustRefuel` never fires (no
+            // fuel-driven reject in a fuel-off run); ON ⇒ the SAME engine threshold.
+            refuelThresholdMiles: fuelOn
+              ? fuelConfig.refuelThresholdMiles
+              : Number.MAX_SAFE_INTEGER,
+          },
+          nowMin,
+        );
+        // Drain THIS agent's pending suggestions in their stable-ordered list (the
+        // coordinator pass appended them in sorted center / sorted index order). For
+        // each: arbitrate against the agent's own verdict, then accept (→
+        // SuggestionAccepted + the binding event) or reject (→ SuggestionRejected +
+        // reasonCode). An accepted suggestion SUPPRESSES the autonomous Act this tick
+        // (deterministic precedence — no double-emit, T-25-12).
+        const pendingTruck = pendingSuggestionsByTarget.get(agent.stableId);
+        let truckSuggestionAccepted = false;
+        if (pendingTruck !== undefined) {
+          for (const suggested of pendingTruck) {
+            const suggestion = suggestedToCoordinatorSuggestion(suggested);
+            const verdict = arbitrateSuggestion(suggestion, truckVerdict);
+            if (verdict.accepted) {
+              emitSuggestionAccepted(`trailer-${agent.stableId}`, suggested.payload.suggestionId);
+              // The only truck binding kind is `divert`; `hold`/`none` emit no event.
+              if (verdict.bindingKind === "divert" && trip !== undefined) {
+                const toHubId = suggested.payload.params.toHubId;
+                if (toHubId !== undefined) emitAcceptedDivert(agent.stableId, trip, toHubId);
+              }
+              truckSuggestionAccepted = true;
+            } else {
+              emitSuggestionRejected(
+                `trailer-${agent.stableId}`,
+                suggested.payload.suggestionId,
+                verdict.reasonCode,
+              );
+            }
+          }
+          // Clear the per-target entry after consumption (within-tick lifecycle).
+          pendingSuggestionsByTarget.delete(agent.stableId);
+        }
+
+        // "anything-to-decide?" guard (T-24-05): a truck only runs the AUTONOMOUS
+        // Decide/Act when its FROZEN observation shows a pending decision — a binding
+        // HOS/fuel trigger or a congested next hub. A mid-leg truck with nothing to
+        // choose (or no active trip) is SKIPPED. An accepted suggestion already Acted
+        // this tick, so the autonomous Act is suppressed (precedence; no double-emit).
         const hosTrigger =
           obs.remainingLegalDriveMinutes <= 0 || obs.minutesSinceLastBreak >= 8 * 60;
         const fuelTrigger = fuelOn && obs.odometerMiles >= fuelConfig.refuelThresholdMiles;
         const divertTrigger = obs.nextHubId !== null && obs.nextHubQueueDepth > 50;
-        if (trip === undefined || (!hosTrigger && !fuelTrigger && !divertTrigger)) {
-          continue; // nothing to decide — skip (the guard short-circuit)
+        if (
+          truckSuggestionAccepted ||
+          trip === undefined ||
+          (!hosTrigger && !fuelTrigger && !divertTrigger)
+        ) {
+          continue; // nothing to decide (or a suggestion already Acted) — skip
         }
         // Lazy per-agent substream — constructed ONLY here, on the on path, for an
         // agent that actually decides (flag-off allocates nothing).
@@ -1779,7 +1923,7 @@ export function runToHorizon(
               ? fuelConfig.refuelThresholdMiles
               : Number.MAX_SAFE_INTEGER,
           },
-          now: isoToEpochMinutes(clock.nowIso()),
+          now: nowMin,
         });
         // ACT: route each outcome through the EXISTING emit helpers (+ the new
         // TrailerDiverted). proceed/hold are no-ops (no event).
@@ -1818,13 +1962,47 @@ export function runToHorizon(
         }
       } else {
         const obs = observeHub(agent.hub);
+
+        // --- Phase-25 SAME-TICK HANDSHAKE (COORD-02 consume / COORD-03) ----------
+        // The hub's OWN binding dock feasibility verdict (24-03) — a coordinator
+        // cannot force a consolidate/dispatch onto a full dock. Drain + arbitrate
+        // this hub's pending suggestions BEFORE the autonomous guard so a hub with
+        // empty queues still consumes (and honestly rejects) a coordinator advice.
+        const hubVerdict = hubDockFeasibility(obs);
+        const pendingHub = pendingSuggestionsByTarget.get(agent.stableId);
+        let hubSuggestionAccepted = false;
+        if (pendingHub !== undefined) {
+          for (const suggested of pendingHub) {
+            const suggestion = suggestedToCoordinatorSuggestion(suggested);
+            const verdict = arbitrateSuggestion(suggestion, hubVerdict);
+            if (verdict.accepted) {
+              emitSuggestionAccepted(`hub-${agent.stableId}`, suggested.payload.suggestionId);
+              // consolidate/dispatch ⇒ the existing consolidation departure; hold ⇒
+              // no binding event (the feasible no-op). REUSE — no new binding path.
+              if (verdict.bindingKind === "consolidate" || verdict.bindingKind === "dispatch") {
+                dispatchHubConsolidation(agent.hub);
+              }
+              hubSuggestionAccepted = true;
+            } else {
+              emitSuggestionRejected(
+                `hub-${agent.stableId}`,
+                suggested.payload.suggestionId,
+                verdict.reasonCode,
+              );
+            }
+          }
+          pendingSuggestionsByTarget.delete(agent.stableId);
+        }
+
         // "anything-to-decide?" guard for hubs: skip a hub with empty inbound +
         // outbound queues AND no pending consolidation (nothing to dispatch/hold/
-        // consolidate beyond the no-op default).
+        // consolidate beyond the no-op default). An accepted suggestion already Acted
+        // this tick ⇒ suppress the autonomous Act (precedence; no double-emit).
         if (
-          obs.inboundQueueDepth === 0 &&
-          obs.outboundQueueDepth === 0 &&
-          obs.pendingConsolidationCount === 0
+          hubSuggestionAccepted ||
+          (obs.inboundQueueDepth === 0 &&
+            obs.outboundQueueDepth === 0 &&
+            obs.pendingConsolidationCount === 0)
         ) {
           continue;
         }

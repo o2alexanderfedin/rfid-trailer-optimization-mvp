@@ -33,6 +33,12 @@ type Stream = ReturnType<typeof simulate>;
 
 const suggestionsOf = (stream: Stream) =>
   stream.filter((e) => e.event.type === "ActionSuggested");
+const acceptedOf = (stream: Stream) =>
+  stream.filter((e) => e.event.type === "SuggestionAccepted");
+const rejectedOf = (stream: Stream) =>
+  stream.filter((e) => e.event.type === "SuggestionRejected");
+
+const CLOSED_REASON_CODES = new Set(["hos", "fuel", "dock", "infeasible"]);
 
 describe("stepCoordinators emits rule-based ActionSuggested (COORD-01/02)", () => {
   const stream = simulate(ALL_ON);
@@ -127,6 +133,82 @@ describe("stepCoordinators is reproducible + bounded per center (COORD-01)", () 
       if (target.startsWith("T")) continue; // trailer target
       expect(hubIds.has(target)).toBe(true);
     }
+  });
+});
+
+describe("stepAgents same-tick accept/reject handshake (COORD-02 consume / COORD-03)", () => {
+  const stream = simulate(ALL_ON);
+  const suggestions = suggestionsOf(stream);
+  const accepted = acceptedOf(stream);
+  const rejected = rejectedOf(stream);
+
+  it("consumes EVERY ActionSuggested in the same tick: accepted + rejected === suggested", () => {
+    // The handshake drains pendingSuggestionsByTarget every coordinator-on tick —
+    // no suggestion is ever left unconsumed (the within-tick lifecycle).
+    expect(suggestions.length).toBeGreaterThan(50);
+    expect(accepted.length + rejected.length).toBe(suggestions.length);
+  });
+
+  it("emits a NON-TRIVIAL mix of SuggestionAccepted AND SuggestionRejected", () => {
+    expect(accepted.length).toBeGreaterThan(0);
+    expect(rejected.length).toBeGreaterThan(0);
+  });
+
+  it("every SuggestionRejected carries a CLOSED reasonCode (hos|fuel|dock|infeasible)", () => {
+    for (const r of rejected) {
+      if (r.event.type !== "SuggestionRejected") continue;
+      expect(CLOSED_REASON_CODES.has(r.event.payload.reasonCode)).toBe(true);
+    }
+  });
+
+  it("every accept/reject is validated by the domain boundary + streamed on the TARGET's own stream", () => {
+    for (const e of [...accepted, ...rejected]) {
+      expect(() => validateEvent(e.event)).not.toThrow();
+      // The agent (trailer-<id> / hub-<id>) is the author of record — never the
+      // coordinator (the un-overridable contract: the agent decides).
+      expect(
+        e.streamId.startsWith("trailer-") || e.streamId.startsWith("hub-"),
+      ).toBe(true);
+    }
+  });
+
+  it("correlates each accept/reject to a real ActionSuggested via suggestionId", () => {
+    const suggestedIds = new Set(
+      suggestions.flatMap((s) =>
+        s.event.type === "ActionSuggested" ? [s.event.payload.suggestionId] : [],
+      ),
+    );
+    for (const e of [...accepted, ...rejected]) {
+      if (e.event.type === "SuggestionAccepted" || e.event.type === "SuggestionRejected") {
+        expect(suggestedIds.has(e.event.payload.suggestionId)).toBe(true);
+      }
+    }
+    // And every suggestionId is resolved exactly once (no double-consume).
+    const resolved = [...accepted, ...rejected].flatMap((e) =>
+      e.event.type === "SuggestionAccepted" || e.event.type === "SuggestionRejected"
+        ? [e.event.payload.suggestionId]
+        : [],
+    );
+    expect(new Set(resolved).size).toBe(resolved.length);
+  });
+
+  it("NEVER double-emits: at most ONE TrailerDiverted per (trailer, instant)", () => {
+    // An accepted reroute's binding TrailerDiverted REPLACES the autonomous Act that
+    // tick (deterministic precedence, T-25-12) — so a trailer never diverts twice in
+    // the same virtual instant.
+    const perInstant = new Map<string, number>();
+    for (const e of stream) {
+      if (e.event.type !== "TrailerDiverted") continue;
+      const key = `${e.event.payload.trailerId}|${e.event.payload.occurredAt}`;
+      perInstant.set(key, (perInstant.get(key) ?? 0) + 1);
+    }
+    for (const count of perInstant.values()) expect(count).toBeLessThanOrEqual(1);
+  });
+
+  it("same seed ⇒ byte-identical accept/reject stream (the handshake is reproducible)", () => {
+    const a = JSON.stringify(simulate(ALL_ON));
+    const b = JSON.stringify(simulate(ALL_ON));
+    expect(b).toBe(a);
   });
 });
 
