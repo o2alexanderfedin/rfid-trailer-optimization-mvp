@@ -4,13 +4,13 @@ milestone: v3.0
 milestone_name: Continental OODA Network
 status: executing
 stopped_at: Completed 25-02-PLAN.md
-last_updated: "2026-06-27T04:53:10.015Z"
+last_updated: "2026-06-27T05:21:31.090Z"
 last_activity: 2026-06-27
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 17
+  completed_plans: 18
   percent: 100
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-26)
 ## Current Position
 
 Phase: 26 (Coordinator Optimizer) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-06-27
 
@@ -57,6 +57,7 @@ Last activity: 2026-06-27
 | Phase 25 P25-01 | 13 | 3 tasks | 23 files |
 | Phase 25 P25-02 | 12min | 3 tasks | 8 files |
 | Phase 26 P26-02 | 14min | 3 tasks | 5 files |
+| Phase 26 P26-03 | 70min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,7 @@ Recent decisions affecting v3.0:
 - [Phase 25-02 COORD-01/02]: in-fold `stepCoordinators` SimTask — one coordinator per center, sorted by centerId, bounded per-center scope, self-rescheduling (mirrors stepAgents). Rule-based `decideCoordinatorSuggestions` (pure, integer/string-only) for all 4 kinds into `pendingSuggestionsByTarget` (consumed P25-03, serialized P25-05). COORDINATOR_RNG_SALT=0x1c6ea54b (9th salt, pairwise-distinct, lazy `deriveCoordinatorRng` in pure coordinator/rng.ts leaf). Coordinator cadence==OODA cadence (5/1) + bootstrap-seeded BEFORE stepAgents ⇒ same-tick handshake. suggestionId=`centerId-tick-index` (byte-stable, collision-free); issuedAtSimMs=tick*MS_PER_TICK, ttlSimMs=6*MS_PER_TICK (TTL enforcement is P25-04). reroute needs activeTripByTrailer (OODA-on); all 4 kinds appear under all-on stack (hold/reroute/consolidate/dispatch). `coordinatorsEnabled` OFF (strict ===true) ⇒ no task/substream/emit, golden 3920accc + OODA-on 94689f99 byte-identical (two-part gate added).
 - [Phase ?]: 26-02: stepCoordinators reroute sourced from per-center pure runEpoch under coordinatorUsesOptimizer sub-flag; hold/consolidate/dispatch stay rule-based (COORD-06)
 - [Phase ?]: 26-02: partitionScopeByCenter (NET-05) wired LIVE as the per-center epoch scope; deterministic scope-size cap falls back to rule-based; global RollingLoop disabled under the flag (no double-plan)
+- [Phase ?]: [Phase 26-03 COORD-06]: optimizer-on golden captured reproducibility-first = edfa5a6d (DOCUMENTED-EQUAL to the Phase-25 coordinator golden, planner-truth #2 amended/Option A): the optimizer is genuinely invoked (instrumented: 2000 runEpoch epochs / 9663 pre-guard reroutes / 0 fallbacks) but on the center-headed/always-feasible per-center twin it only ENDORSES the same reroute the rule-based heuristic makes => byte-identical on every config. coordinatorUsesOptimizer two-part flags-off gate (false===absent + absent=>edfa5a6d, 3920accc/94689f99 intact); continuation-equivalence chunked==all-at-once 1/7/23/500 with NO new SerializedWorldState field. No production change. Phase-27 carry-over: make the optimizer reroute genuinely route-aware-divergent + reject-with-reason continental tuning.
 
 ### Pending Todos
 
@@ -91,7 +93,9 @@ Recent decisions affecting v3.0:
 
 ### Blockers/Concerns
 
-None blocking roadmap approval. Top risk carried into execution: **determinism keystone** — every phase must hold the two-part flags-off gate; the `applyHubInventory` O(n²) freeze (P1-BLOCKING, Phase 23) and the per-center coordinator oscillation/deadlock modes (Phase 25) are the first-class blockers flagged by PITFALLS.
+blocking roadmap approval. Top risk carried into execution: **determinism keystone** — every phase must hold the two-part flags-off gate; the `applyHubInventory` O(n²) freeze (P1-BLOCKING, Phase 23) and the per-center coordinator oscillation/deadlock modes (Phase 25) are the first-class blockers flagged by PITFALLS.
+
+- 26-03 Task 2: optimizer-backed coordinator golden is byte-identical to the Phase-25 edfa5a6d golden on EVERY config (single-center, continental, fleet 2/4/8). Verified via instrumentation: runEpoch IS invoked (2000 epochs, 9663 reroutes, 0 fallbacks) but endorses the exact same reroute set as the rule-based path. Root cause in Plan-02 wiring: the optimizer twin route head is structurally pinned to obs.centerId (same target the rule-based heuristic picks) AND the twin is built always-feasible/unfrozen so the optimizer never declines a reroute the rule flags. Plan truth #2 (!= edfa5a6d) is unachievable without changing Plan-02 production reroute semantics — Rule-4 architectural decision required.
 
 ### Quick Tasks Completed
 
@@ -111,7 +115,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-27T04:52:43.468Z
+Last session: 2026-06-27T05:21:10.912Z
 Stopped at: Completed 25-02-PLAN.md
 Resume file: None
 
