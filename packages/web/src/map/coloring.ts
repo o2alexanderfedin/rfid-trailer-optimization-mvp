@@ -31,8 +31,18 @@ export const HUB_EMOJI = "🏭";
 /** Glyph drawn on every trailer marker. */
 export const TRAILER_EMOJI = "🚛";
 
-/** Disc radius (px) for hub + trailer markers. */
+/** Disc radius (px) for hub + trailer markers (legacy default). */
 const MARKER_RADIUS = 16;
+
+// ---------------------------------------------------------------------------
+// VIZ-16 — tier-specific marker radii (size encodes tier, NOT hue)
+// ---------------------------------------------------------------------------
+
+/** Tier 1 (regional center) disc radius — dominates at continental zoom. */
+export const CENTER_MARKER_RADIUS = 20;
+/** Tier 2 (spoke hub) disc radius — recedes so 80–130 spoke field reads cleanly. */
+export const SPOKE_MARKER_RADIUS = 12;
+
 /** Emoji font — sized comparably to the size-16 (32px) disc. */
 const EMOJI_FONT =
   '24px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
@@ -86,6 +96,103 @@ const HUB_STYLE_DEFAULT = new Style({
 });
 
 // ---------------------------------------------------------------------------
+// VIZ-16 — tier-branched cached style caches (center vs spoke tier)
+//
+// Tier is encoded by SIZE + RING, NOT HUE (hue is owned by the volume/duty ramps).
+//
+//  - Center (tier 1): radius 20 + amber #f59e0b 3px ring.
+//  - Spoke  (tier 2): radius 12 + white  #ffffff 2px ring.
+//
+// ONE cached Style per (tier × bucket) cell, pre-allocated at module load so
+// hubStyleTiered() allocates NOTHING per frame (same zero-alloc discipline as
+// the base volume cache). The style fn branches tier-first, then falls through
+// to the volume/duty bucket logic — same precedence as the base hubStyle().
+// ---------------------------------------------------------------------------
+
+/** Amber ring color for tier-1 (regional center) markers (VIZ-16 UI-SPEC). */
+export const CENTER_RING_COLOR = "#f59e0b";
+
+/**
+ * Hub tier labels — parallel to `HUB_COLORS`/`HUB_BUCKET_LABELS` for the Legend
+ * single-source-of-truth pattern. Two entries: index 0 = center, index 1 = spoke.
+ */
+export const HUB_TIER_LABELS: readonly string[] = ["Regional center", "Spoke hub"];
+/** Tier ring colors for the Legend swatch (matches the ring, not the fill ramp). */
+export const HUB_TIER_RING_COLORS: readonly string[] = [CENTER_RING_COLOR, "#ffffff"];
+
+/** Pre-allocate center-tier styles per volume bucket (radius 20, amber ring). */
+const CENTER_STYLE_CACHE: readonly Style[] = HUB_COLORS.map(
+  (color) =>
+    new Style({
+      image: new CircleStyle({
+        radius: CENTER_MARKER_RADIUS,
+        fill: new Fill({ color }),
+        stroke: new Stroke({ color: CENTER_RING_COLOR, width: 3 }),
+      }),
+      text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+    }),
+);
+
+/** Default center-tier style (radius 20, amber ring, grey fill). */
+const CENTER_STYLE_DEFAULT = new Style({
+  image: new CircleStyle({
+    radius: CENTER_MARKER_RADIUS,
+    fill: new Fill({ color: "#9aa0a6" }),
+    stroke: new Stroke({ color: CENTER_RING_COLOR, width: 3 }),
+  }),
+  text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+});
+
+/** Pre-allocate spoke-tier styles per volume bucket (radius 12, white ring). */
+const SPOKE_STYLE_CACHE: readonly Style[] = HUB_COLORS.map(
+  (color) =>
+    new Style({
+      image: new CircleStyle({
+        radius: SPOKE_MARKER_RADIUS,
+        fill: new Fill({ color }),
+        stroke: new Stroke({ color: "#ffffff", width: 2 }),
+      }),
+      text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+    }),
+);
+
+/** Default spoke-tier style (radius 12, white ring, grey fill). */
+const SPOKE_STYLE_DEFAULT = new Style({
+  image: new CircleStyle({
+    radius: SPOKE_MARKER_RADIUS,
+    fill: new Fill({ color: "#9aa0a6" }),
+    stroke: new Stroke({ color: "#ffffff", width: 2 }),
+  }),
+  text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+});
+
+/** Pre-allocate center-tier duty styles (radius 20, amber ring, duty fill). */
+const CENTER_DUTY_STYLE_CACHE: readonly Style[] = DUTY_COLORS.map(
+  (color) =>
+    new Style({
+      image: new CircleStyle({
+        radius: CENTER_MARKER_RADIUS,
+        fill: new Fill({ color }),
+        stroke: new Stroke({ color: CENTER_RING_COLOR, width: 3 }),
+      }),
+      text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+    }),
+);
+
+/** Pre-allocate spoke-tier duty styles (radius 12, white ring, duty fill). */
+const SPOKE_DUTY_STYLE_CACHE: readonly Style[] = DUTY_COLORS.map(
+  (color) =>
+    new Style({
+      image: new CircleStyle({
+        radius: SPOKE_MARKER_RADIUS,
+        fill: new Fill({ color }),
+        stroke: new Stroke({ color: "#ffffff", width: 2 }),
+      }),
+      text: new Text({ text: HUB_EMOJI, font: EMOJI_FONT }),
+    }),
+);
+
+// ---------------------------------------------------------------------------
 // VIZ-11 — driver-duty hub overlay
 //
 // `dutyBucket` (0..3, driven by `classifyDutyBucket` over the ws HubState driver
@@ -109,7 +216,7 @@ const HUB_DUTY_STYLE_CACHE: readonly Style[] = DUTY_COLORS.map(
 );
 
 /**
- * Zero-allocation `StyleFunction` for hub features.
+ * Zero-allocation `StyleFunction` for hub features (base — no tier).
  *
  * VIZ-11: a hub with a `dutyBucket` (driver-duty distribution) is colored from
  * `HUB_DUTY_STYLE_CACHE` so the driver-availability signal is visible; otherwise
@@ -130,6 +237,53 @@ export function hubStyle(feature: FeatureLike): Style {
     return HUB_STYLE_CACHE[b] as Style;
   }
   return HUB_STYLE_DEFAULT;
+}
+
+/**
+ * Zero-allocation `StyleFunction` for VIZ-16 tier-aware hub features.
+ *
+ * Precedence (same pattern as hubStyle but with tier as the outermost branch):
+ *  1. tier === "center" → CENTER caches (radius 20, amber ring)
+ *  2. tier === "spoke"  → SPOKE caches  (radius 12, white ring)
+ *  3. no tier / unknown → falls through to base hubStyle (radius 16, legacy)
+ *
+ * Within each tier: duty bucket → volume bucket → tier default.
+ * No `new Style()` is allocated — every path returns a pre-allocated cached reference.
+ */
+export function hubStyleTiered(feature: FeatureLike): Style {
+  const tier: unknown = feature.get("kind");
+  if (tier === "center") {
+    const duty: unknown = feature.get("dutyBucket");
+    if (
+      typeof duty === "number" &&
+      duty >= 0 &&
+      duty < CENTER_DUTY_STYLE_CACHE.length
+    ) {
+      return CENTER_DUTY_STYLE_CACHE[duty] as Style;
+    }
+    const b: unknown = feature.get("volumeBucket");
+    if (typeof b === "number" && b >= 0 && b < CENTER_STYLE_CACHE.length) {
+      return CENTER_STYLE_CACHE[b] as Style;
+    }
+    return CENTER_STYLE_DEFAULT;
+  }
+  if (tier === "spoke") {
+    const duty: unknown = feature.get("dutyBucket");
+    if (
+      typeof duty === "number" &&
+      duty >= 0 &&
+      duty < SPOKE_DUTY_STYLE_CACHE.length
+    ) {
+      return SPOKE_DUTY_STYLE_CACHE[duty] as Style;
+    }
+    const b: unknown = feature.get("volumeBucket");
+    if (typeof b === "number" && b >= 0 && b < SPOKE_STYLE_CACHE.length) {
+      return SPOKE_STYLE_CACHE[b] as Style;
+    }
+    return SPOKE_STYLE_DEFAULT;
+  }
+  // No tier set → fall through to base hub style (legacy 10-hub path).
+  return hubStyle(feature);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +370,65 @@ export function routeStyle(feature: FeatureLike): Style {
     return ROUTE_STYLE_CACHE[b] as Style;
   }
   return ROUTE_STYLE_DEFAULT;
+}
+
+// ---------------------------------------------------------------------------
+// VIZ-16 — backbone vs spoke leg tier styles
+//
+// Tier separation for routes (UI-SPEC):
+//  - Backbone leg (inter-center): slate-300 #cbd5e1, 4px width, opacity 0.9
+//  - Spoke leg    (center↔spoke): existing 2px default, opacity 0.55
+//
+// ONE pre-allocated Style per tier at module load — no per-frame alloc.
+// `routeStyleTiered()` branches on `feature.get("isBackbone")` FIRST, then
+// falls through to the existing risk/load/default precedence.
+// ---------------------------------------------------------------------------
+
+/** Backbone leg stroke color (slate-300, VIZ-16 UI-SPEC). */
+export const BACKBONE_LEG_COLOR = "#cbd5e1";
+/** Backbone leg stroke width (px). */
+export const BACKBONE_LEG_WIDTH = 4;
+/** Spoke leg stroke opacity (dims the spoke field behind backbone + trailers). */
+export const SPOKE_LEG_OPACITY = 0.55;
+
+/**
+ * Leg tier labels for the Legend (two entries: index 0 = backbone, index 1 = spoke).
+ * Derived from the same constants used in the tier style fns — single source of truth.
+ */
+export const LEG_TIER_LABELS: readonly string[] = ["Backbone", "Spoke leg"];
+/** Leg tier swatch colors for the Legend. */
+export const LEG_TIER_COLORS: readonly string[] = [BACKBONE_LEG_COLOR, "#94a3b8"];
+
+/** Pre-allocated backbone-leg style (4px, slate-300, 0.9 opacity). */
+const BACKBONE_LEG_STYLE = new Style({
+  stroke: new Stroke({ color: BACKBONE_LEG_COLOR, width: BACKBONE_LEG_WIDTH }),
+  opacity: 0.9,
+});
+
+/** Pre-allocated spoke-leg style (2px, slate-400, 0.55 opacity). */
+const SPOKE_LEG_STYLE = new Style({
+  stroke: new Stroke({ color: "#94a3b8", width: 2 }),
+  opacity: SPOKE_LEG_OPACITY,
+});
+
+/**
+ * Zero-allocation `StyleFunction` for VIZ-16 tier-aware route features.
+ *
+ * Branches on `feature.get("isBackbone")` FIRST:
+ *  - `true`  → backbone style (slate-300, 4px, opacity 0.9)
+ *  - `false` → spoke-leg style (slate-400, 2px, opacity 0.55)
+ *
+ * When `isBackbone` is not set, falls through to the base `routeStyle` which
+ * applies the risk/load/default precedence (legacy path / non-continental runs).
+ *
+ * No `new Style()` allocated — both branches return pre-allocated cached references.
+ */
+export function routeStyleTiered(feature: FeatureLike): Style {
+  const isBackbone: unknown = feature.get("isBackbone");
+  if (isBackbone === true) return BACKBONE_LEG_STYLE;
+  if (isBackbone === false) return SPOKE_LEG_STYLE;
+  // isBackbone not set → fall through to existing risk/load/default style.
+  return routeStyle(feature);
 }
 
 // ---------------------------------------------------------------------------
