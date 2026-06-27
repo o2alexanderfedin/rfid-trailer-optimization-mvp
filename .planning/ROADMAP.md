@@ -161,7 +161,7 @@ Plans:
 **Plans**: 7 plans
 Plans:
 - [x] 27-01-PLAN.md — PERF-02 incremental cursor-fold twin-snapshot (trailer_fuel + induction_deadline projections; read-side, no golden; rebuild-equivalence + cost-invariance)
-- [ ] 27-02-PLAN.md — PERF-03 foundation: vendor async-queue build/link + vendor/* workspace + DET-03 ESLint full-core ban + append-order==generation-order FIFO test
+- [x] 27-02-PLAN.md — PERF-03 foundation: vendor async-queue build/link + vendor/* workspace + DET-03 ESLint full-core ban + append-order==generation-order FIFO test
 - [ ] 27-03-PLAN.md — VIZ-15/16 scale rendering: Cluster + declutter + VectorImageLayer spoke field, separate center tier, kind/tier + isBackbone DTO fields, tier-branched cached styles + legend
 - [ ] 27-04-PLAN.md — P27-A optimizer-divergent reroute (remove 3 pins) + NEW optimizer-on golden (reproducibility-first, EQUALS→DIFFERS flip; 3 prior goldens intact)
 - [ ] 27-05-PLAN.md — PERF-03 seams: bounded worker↔optimizer handoff + coalesced event-store inserts + per-client ws backpressure queue
@@ -187,7 +187,7 @@ Plans:
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
 | 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
 | 26. Coordinator ↔ Optimizer | 3/3 | Complete   | 2026-06-27 |
-| 27. Perf + Plumbing + Scale Viz | 1/7 | In Progress|  |
+| 27. Perf + Plumbing + Scale Viz | 2/7 | In Progress|  |
 | 28. Continental Hardening | 0/TBD | Not started | - |
 
 | Milestone | Phases | Status | Shipped |
