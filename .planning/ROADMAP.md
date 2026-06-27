@@ -129,7 +129,7 @@ Plans:
 Plans:
 - [x] 25-01-PLAN.md — 3 advisory events (ActionSuggested/Accepted/Rejected) through the closed union + zod + every exhaustive switch + scope-neutral + canonicalize (COORD-02 substrate)
 - [x] 25-02-PLAN.md — stepCoordinators in-fold SimTask (one per center, sorted by centerId) + rule-based 4-kind suggestion generation + ninth RNG salt + pendingSuggestionsByTarget (COORD-01, COORD-02)
-- [ ] 25-03-PLAN.md — same-tick accept/reject handshake in stepAgents on the agent's binding feasibility + visible reject-with-reason in the alert feed + audit timeline (COORD-02, COORD-03)
+- [x] 25-03-PLAN.md — same-tick accept/reject handshake in stepAgents on the agent's binding feasibility + visible reject-with-reason in the alert feed + audit timeline (COORD-02, COORD-03)
 - [ ] 25-04-PLAN.md — the five anti-oscillation/anti-deadlock guards + anti-livelock convergence + bounded-events-per-tick stability tests (COORD-04, COORD-05)
 - [ ] 25-05-PLAN.md — determinism keystone: two-part flags-off gate + serialized guard-state continuation-equivalence + reproducibility-first coordinator-on golden + salt-collision + coordinator/** DET-03 ESLint guard (COORD-04 determinism facet)
 **UI hint**: yes
@@ -173,7 +173,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
 | 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
-| 25. Coordination Centers | 2/5 | In Progress|  |
+| 25. Coordination Centers | 3/5 | In Progress|  |
 | 26. Coordinator ↔ Optimizer | 0/TBD | Not started | - |
 | 27. Perf + Plumbing + Scale Viz | 0/TBD | Not started | - |
 | 28. Continental Hardening | 0/TBD | Not started | - |
