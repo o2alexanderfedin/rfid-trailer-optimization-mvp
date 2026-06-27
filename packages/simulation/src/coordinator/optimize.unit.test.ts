@@ -1,8 +1,10 @@
-import type { TwinSnapshot } from "@mm/optimizer";
+import type { EpochRecommendation, EpochResult, TwinSnapshot, TwinTrailer } from "@mm/optimizer";
 import { describe, expect, it } from "vitest";
 
+import type { CoordinatorSuggestion } from "./coordinator.js";
 import {
   buildCenterTwinFromFold,
+  epochResultToRerouteSuggestions,
   type CenterFoldSlice,
 } from "./optimize.js";
 
@@ -144,5 +146,153 @@ describe("buildCenterTwinFromFold — per-center TwinSnapshot from a fold slice"
     expect(twin.hubs).toEqual(["AUS", "DFW", "OKC"]);
     expect(twin.routes).toHaveLength(1);
     expect(twin.centerHubId).toBe("DFW");
+  });
+});
+
+/**
+ * Phase-26 COORD-06 (Plan 01, Task 2) — `epochResultToRerouteSuggestions` translates
+ * a pure `EpochResult` into reroute-only `CoordinatorSuggestion[]`.
+ *
+ * The `EpochResult` payload carries only ids/cost/feasibility/frozen flags — NO route
+ * geometry — so the optimizer's chosen NEXT hub for a trailer is read from the SAME
+ * twin the epoch planned over (each trailer's route head, the first stop by unload
+ * order). A reroute fires ONLY when that optimizer next hub differs from the trailer's
+ * CURRENT next hub (`currentNextHubByTrailer`) AND the trailer's recommendation is
+ * actionable (feasible + not frozen). Same-or-frozen ⇒ no churn (anti-P7); a trailer
+ * with no current next hub ⇒ none (nothing to differ from). Output is sorted by
+ * targetAgentId and is a pure function of (result, twin, map).
+ */
+
+/** Build a minimal twin whose trailers carry the route heads the translator reads. */
+function twinWithRouteHeads(
+  heads: readonly { readonly trailerId: string; readonly nextHubId: string }[],
+): TwinSnapshot {
+  const trailers: readonly TwinTrailer[] = heads.map((h) => ({
+    trailerId: h.trailerId,
+    currentHubId: "DFW",
+    departureMin: 1_030,
+    capacity: 50,
+    // route head (stopIndex 0) = the optimizer-implied next hub
+    route: [
+      { hubId: h.nextHubId, stopIndex: 0 },
+      { hubId: "ZZZ", stopIndex: 1 },
+    ],
+    blocks: [],
+  }));
+  return { hubs: ["DFW"], centerHubId: "DFW", routes: [], trailers };
+}
+
+/** A recommendation for a trailer with the given feasible/frozen flags. */
+function rec(
+  trailerId: string,
+  opts: { readonly feasible: boolean; readonly frozen: boolean },
+): EpochRecommendation {
+  return {
+    trailerId,
+    planId: `PLAN-${trailerId}`,
+    feasible: opts.feasible,
+    objectiveCost: 100,
+    breakdown: {} as EpochRecommendation["breakdown"],
+    frozen: opts.frozen,
+  };
+}
+
+/** An EpochResult carrying the given recommendations (other fields are inert here). */
+function resultWith(recommendations: readonly EpochRecommendation[]): EpochResult {
+  return {
+    epochId: "E1",
+    scopeHash: "HASH",
+    generated: null,
+    accepted: null,
+    recommendations,
+    freightAssignment: { assignments: [], flowCost: 0, feasible: true },
+  };
+}
+
+describe("epochResultToRerouteSuggestions — EpochResult ⇒ reroute CoordinatorSuggestions", () => {
+  it("optimizer next hub differs from current ⇒ exactly one reroute (string params only)", () => {
+    const twin = twinWithRouteHeads([{ trailerId: "T001", nextHubId: "OKC" }]);
+    const result = resultWith([rec("T001", { feasible: true, frozen: false })]);
+    const current = new Map<string, string>([["T001", "AUS"]]); // currently heading AUS
+
+    const out = epochResultToRerouteSuggestions(result, twin, current);
+
+    expect(out).toEqual([{ kind: "reroute", targetAgentId: "T001", toHubId: "OKC" }]);
+    // params are string-only (no float, no RNG)
+    expect(typeof out[0]!.targetAgentId).toBe("string");
+  });
+
+  it("frozen / optimizer-next == current ⇒ NO suggestion (anti-P7 no churn)", () => {
+    const twin = twinWithRouteHeads([
+      { trailerId: "T001", nextHubId: "AUS" }, // SAME as current ⇒ no churn
+      { trailerId: "T002", nextHubId: "OKC" }, // differs, but FROZEN ⇒ no churn
+    ]);
+    const result = resultWith([
+      rec("T001", { feasible: true, frozen: false }),
+      rec("T002", { feasible: true, frozen: true }),
+    ]);
+    const current = new Map<string, string>([
+      ["T001", "AUS"],
+      ["T002", "AUS"],
+    ]);
+
+    expect(epochResultToRerouteSuggestions(result, twin, current)).toEqual([]);
+  });
+
+  it("trailer not in currentNextHubByTrailer (between legs) ⇒ NO reroute", () => {
+    const twin = twinWithRouteHeads([{ trailerId: "T001", nextHubId: "OKC" }]);
+    const result = resultWith([rec("T001", { feasible: true, frozen: false })]);
+    const current = new Map<string, string>(); // no current next hub for T001
+
+    expect(epochResultToRerouteSuggestions(result, twin, current)).toEqual([]);
+  });
+
+  it("output is sorted by targetAgentId and is pure (deep-equal + byte-identical)", () => {
+    // recommendations intentionally out of id order to prove the output is sorted
+    const twin = twinWithRouteHeads([
+      { trailerId: "T003", nextHubId: "OKC" },
+      { trailerId: "T001", nextHubId: "LAX" },
+      { trailerId: "T002", nextHubId: "SEA" },
+    ]);
+    const result = resultWith([
+      rec("T003", { feasible: true, frozen: false }),
+      rec("T001", { feasible: true, frozen: false }),
+      rec("T002", { feasible: true, frozen: false }),
+    ]);
+    const current = new Map<string, string>([
+      ["T003", "DFW"],
+      ["T001", "DFW"],
+      ["T002", "DFW"],
+    ]);
+
+    const a = epochResultToRerouteSuggestions(result, twin, current);
+    const b = epochResultToRerouteSuggestions(result, twin, current);
+
+    expect(a.map((s) => s.targetAgentId)).toEqual(["T001", "T002", "T003"]);
+    expect(a).toEqual(b);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    // only the reroute kind is ever produced (hold/consolidate/dispatch stay rule-based)
+    for (const s of a) expect(s.kind).toBe("reroute");
+  });
+
+  it("empty-scope EpochResult (no recommendations) ⇒ [] (the fallback substrate)", () => {
+    const twin = twinWithRouteHeads([{ trailerId: "T001", nextHubId: "OKC" }]);
+    const result = resultWith([]);
+    const current = new Map<string, string>([["T001", "AUS"]]);
+
+    const out: readonly CoordinatorSuggestion[] = epochResultToRerouteSuggestions(
+      result,
+      twin,
+      current,
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("an infeasible trailer ⇒ NO reroute (the optimizer did not endorse proceeding)", () => {
+    const twin = twinWithRouteHeads([{ trailerId: "T001", nextHubId: "OKC" }]);
+    const result = resultWith([rec("T001", { feasible: false, frozen: false })]);
+    const current = new Map<string, string>([["T001", "AUS"]]);
+
+    expect(epochResultToRerouteSuggestions(result, twin, current)).toEqual([]);
   });
 });

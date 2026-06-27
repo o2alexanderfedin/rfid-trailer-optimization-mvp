@@ -1,4 +1,6 @@
-import type { TwinRoute, TwinSnapshot, TwinStop, TwinTrailer } from "@mm/optimizer";
+import type { EpochResult, TwinRoute, TwinSnapshot, TwinStop, TwinTrailer } from "@mm/optimizer";
+
+import type { CoordinatorSuggestion } from "./coordinator.js";
 
 /**
  * Phase-26 COORD-06 (Plan 01) — the PURE in-fold adapter between one center's
@@ -149,4 +151,13 @@ export function buildCenterTwinFromFold(slice: CenterFoldSlice, nowMin: number):
   });
 
   return { hubs, centerHubId: slice.centerId, routes, trailers };
+}
+
+export function epochResultToRerouteSuggestions(
+  _result: EpochResult,
+  _twin: TwinSnapshot,
+  _currentNextHubByTrailer: ReadonlyMap<string, string>,
+): readonly CoordinatorSuggestion[] {
+  // RED stub — intentionally empty; the GREEN implementation follows.
+  return [];
 }
