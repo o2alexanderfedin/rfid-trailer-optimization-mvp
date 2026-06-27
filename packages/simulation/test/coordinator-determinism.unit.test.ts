@@ -13,6 +13,11 @@ import {
 } from "../src/engine.js";
 import { OODA_RNG_SALT } from "../src/ooda/index.js";
 import { COORDINATOR_RNG_SALT } from "../src/coordinator/index.js";
+import {
+  FLAGS_OFF_GOLDEN_SHA256,
+  OODA_ON_GOLDEN_SHA256,
+  COORDINATOR_ON_GOLDEN_SHA256,
+} from "./goldens.js";
 
 /**
  * Phase-25 COORD-04 + DET-03 — THE COORDINATOR DETERMINISM GOLDENS (the milestone
@@ -97,23 +102,9 @@ const COORDINATOR_ON_OPTS = {
   consolidationEnabled: true,
 } as const;
 
-// Captured reproducibility-first from COORDINATOR_ON_OPTS on arm64 (darwin), 61128
-// events: run twice in-process ⇒ identical, AND across two separate test-process
-// invocations ⇒ identical, BEFORE baking the literal (PITFALLS: never commit a
-// non-reproducible golden). It differs from the flags-off 3920accc… AND the OODA-on
-// 94689f99… (the coordinator advise/accept/reject handshake changed the decisions).
-//
-// Cross-arch contingency (RESEARCH VQ#9 / Pitfall 3): the prior goldens were captured
-// on x86_64; this hash was captured on arm64 (the flags-off 3920accc… and OODA-on
-// 94689f99… verify GREEN on this arm64 host, so the float path is arch-stable here).
-// If a multi-arch CI run produces a different hash, the contingency is the integer
-// lookup-table sampler swap (do NOT do this unless the hash actually fails on CI).
-const COORDINATOR_ON_GOLDEN_SHA256 =
-  "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc";
-const FLAGS_OFF_GOLDEN_SHA256 =
-  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
-const OODA_ON_GOLDEN_SHA256 =
-  "94689f9989c0019edff27134dad0ef4cfb07c15c9c308ef4b40c38e848f4e608";
+// See goldens.ts for COORDINATOR_ON_GOLDEN_SHA256, FLAGS_OFF_GOLDEN_SHA256, and
+// OODA_ON_GOLDEN_SHA256 — captured reproducibility-first, 61128 events (COORDINATOR_ON)
+// on arm64 darwin. Cross-arch provenance and LUT contingency are documented there.
 
 describe("coordinator-on 10k golden (COORD-04, reproducibility-first)", () => {
   it("simulate(seed 42, 10k, coordinatorsEnabled + all-on) hashes to the committed SHA-256", () => {

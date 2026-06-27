@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateEvent, type FuelConfig } from "@mm/domain";
 import { simulate } from "../src/engine.js";
+import {
+  FLAGS_OFF_GOLDEN_SHA256,
+  OODA_ON_GOLDEN_SHA256,
+  COORDINATOR_ON_GOLDEN_SHA256,
+} from "./goldens.js";
 
 /**
  * SIM-02 — THE DETERMINISM KEYSTONE.
@@ -120,16 +125,14 @@ describe("deterministic event stream (SIM-02)", () => {
  * to replace the log-normal sampler with an integer lookup table (do NOT do this
  * unless the hash actually fails on CI).
  */
-// Captured from simulate({ seed: 42, durationTicks: 10000 }) on x86_64 (darwin),
-// 6172 events. This is the TRUE hash of the long-run stream (plan-03 GREEN).
-const LONG_RUN_GOLDEN_SHA256 =
-  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
+// See goldens.ts for the canonical FLAGS_OFF_GOLDEN_SHA256 constant and its full
+// capture provenance (x86_64 darwin, 6172 events, reproducibility-first protocol).
 
 describe("10k-tick determinism golden (DET-02)", () => {
   it("simulate({ seed: 42, durationTicks: 10000 }) produces a committed SHA-256 hash", () => {
     const stream = simulate({ seed: 42, durationTicks: 10000 });
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
-    expect(hash).toBe(LONG_RUN_GOLDEN_SHA256);
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // Plan 19-08 Task D (folded from p19-r2): in-process reproducibility — two
@@ -145,7 +148,7 @@ describe("10k-tick determinism golden (DET-02)", () => {
       .update(JSON.stringify(simulate({ seed: 42, durationTicks: 10000 })))
       .digest("hex");
     expect(b).toBe(a);
-    expect(a).toBe(LONG_RUN_GOLDEN_SHA256);
+    expect(a).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 });
 
@@ -238,9 +241,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     const hash = createHash("sha256")
       .update(JSON.stringify(stream))
       .digest("hex");
-    expect(hash).toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
-    );
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // ...and the EXPLICIT false 10k-tick run is byte-identical to the absent run.
@@ -276,7 +277,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     const stream = simulate({ seed: 42, durationTicks: 10000 });
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
     expect(hash).toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
+      FLAGS_OFF_GOLDEN_SHA256,
     );
   });
 
@@ -314,7 +315,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     const stream = simulate({ seed: 42, durationTicks: 10000 });
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
     expect(hash).toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
+      FLAGS_OFF_GOLDEN_SHA256,
     );
   });
 
@@ -354,9 +355,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
   it("coordinatorsEnabled ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
     const stream = simulate({ seed: 42, durationTicks: 10000 });
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
-    expect(hash).toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
-    );
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // (c) ...and the EXPLICIT false 10k-tick coordinator run is byte-identical to absent.
@@ -410,10 +409,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     inductionEnabled: true,
     consolidationEnabled: true,
   } as const;
-  const COORDINATOR_ON_GOLDEN_SHA256 =
-    "edfa5a6d40b36e3774797b60d7bd99b5a8af7cce97adb1e775bad0b56b514adc";
-  const OODA_ON_GOLDEN_SHA256 =
-    "94689f9989c0019edff27134dad0ef4cfb07c15c9c308ef4b40c38e848f4e608";
+  // COORDINATOR_ON_GOLDEN_SHA256 and OODA_ON_GOLDEN_SHA256 imported from goldens.ts
 
   // (a) explicit false === absent over a short run.
   it("explicit coordinatorUsesOptimizer: false is byte-identical to the flag being absent", () => {
@@ -459,9 +455,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     const hash = createHash("sha256")
       .update(JSON.stringify(explicitFalse))
       .digest("hex");
-    expect(hash).toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
-    );
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // (c, OODA arm) the OODA-on golden 94689f99… stays intact alongside the new sub-flag

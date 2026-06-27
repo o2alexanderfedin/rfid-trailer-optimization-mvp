@@ -19,6 +19,7 @@ import {
   sortAgentsByStableId,
   type AgentObservation,
 } from "../src/ooda/index.js";
+import { FLAGS_OFF_GOLDEN_SHA256, OODA_ON_GOLDEN_SHA256 } from "./goldens.js";
 
 /**
  * Phase-24 OODA-04 + DET-03 — THE OODA DETERMINISM GOLDENS (the keystone gate).
@@ -198,14 +199,9 @@ const OODA_ON_OPTS = {
   consolidationEnabled: true,
 } as const;
 
-// Captured reproducibility-first from OODA_ON_OPTS on x86_64 (darwin), 9170 events:
-// run twice in-process ⇒ identical, AND across separate test processes ⇒ identical,
-// BEFORE baking the literal (PITFALLS: never commit a non-reproducible golden). It
-// differs from the flags-off 3920accc… (the OODA model changed the decisions).
-const OODA_ON_GOLDEN_SHA256 =
-  "94689f9989c0019edff27134dad0ef4cfb07c15c9c308ef4b40c38e848f4e608";
-const FLAGS_OFF_GOLDEN_SHA256 =
-  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
+// See goldens.ts for OODA_ON_GOLDEN_SHA256 and FLAGS_OFF_GOLDEN_SHA256 — captured
+// reproducibility-first on x86_64 (darwin), 9170 events (OODA_ON), 6172 events
+// (FLAGS_OFF). Full provenance in the canonical goldens module.
 
 describe("OODA-on 10k golden (OODA-04, reproducibility-first)", () => {
   it("simulate(seed 42, 10k, oodaAgentsEnabled) hashes to the committed SHA-256", () => {

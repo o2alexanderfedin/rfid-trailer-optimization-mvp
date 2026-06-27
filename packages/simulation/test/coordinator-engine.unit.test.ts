@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateEvent } from "@mm/domain";
 import { simulate } from "../src/engine.js";
+import { FLAGS_OFF_GOLDEN_SHA256 } from "./goldens.js";
 
 /**
  * Phase-25 COORD-01/COORD-02 — the in-fold `stepCoordinators` pass (engine wiring).
@@ -225,8 +226,7 @@ describe("stepAgents same-tick accept/reject handshake (COORD-02 consume / COORD
 
 describe("COORD-01 two-part flags-off gate (coordinatorsEnabled)", () => {
   const FLAGS_OFF_OPTS = { seed: 42, durationTicks: 500 } as const;
-  const GOLDEN =
-    "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
+  // FLAGS_OFF_GOLDEN_SHA256 imported from goldens.ts
 
   // (a) explicit false === absent over a short run.
   it("explicit coordinatorsEnabled: false is byte-identical to the flag being absent", () => {
@@ -242,7 +242,7 @@ describe("COORD-01 two-part flags-off gate (coordinatorsEnabled)", () => {
   it("coordinatorsEnabled ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
     const stream = simulate({ seed: 42, durationTicks: 10000 });
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
-    expect(hash).toBe(GOLDEN);
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // ...and the EXPLICIT false 10k-tick run is byte-identical to absent (no
