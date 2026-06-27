@@ -37,6 +37,15 @@ export type SimTask =
   // successor. The absolute `fireTick` is captured by SerializedScheduled, so a
   // resume between two OODA passes never loses/reorders it (continuation-safe).
   | { readonly kind: "stepAgents"; readonly tick: number }
+  // Phase-25 COORD-01/02: the per-center coordinator process-manager pass — a
+  // self-rescheduling task with the SAME tick-based shape as `stepAgents`. Seeded
+  // ONLY when `coordinatorsEnabled` (the off path schedules none, so the golden is
+  // byte-identical to 3920accc…); on every fire it re-enqueues its
+  // `+COORDINATOR_INTERVAL_TICKS` successor. The absolute `fireTick` is captured by
+  // SerializedScheduled, so a resume between two coordinator passes never
+  // loses/reorders it (continuation-safe). Fires in the SAME tick as `stepAgents`
+  // so the suggestion handshake is same-tick (Plan 03 consumes it).
+  | { readonly kind: "stepCoordinators"; readonly tick: number }
   | { readonly kind: "departTrailer"; readonly trailerId: string; readonly spokeHubId: string; readonly departTick: number }
   | {
       readonly kind: "arriveTrailer";

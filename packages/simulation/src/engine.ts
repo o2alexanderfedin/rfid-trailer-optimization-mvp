@@ -1,4 +1,5 @@
 import type {
+  ActionSuggested,
   DomainEvent,
   DriverAssignedToTrip,
   DriverDutyStateChanged,
@@ -401,6 +402,32 @@ export interface SimulateOptions {
    * byte-identical); capturing the full OODA-on golden is plan 24-04.
    */
   readonly oodaAgentsEnabled?: boolean;
+
+  /**
+   * COORD-01/02 (Phase 25): OPT-IN per-center advisory coordination process-
+   * managers. **DEFAULT FALSE — the determinism keystone.** When absent or
+   * `false`, the engine schedules NO `stepCoordinators` task, constructs ZERO
+   * per-center coordinator substreams, emits NO `ActionSuggested`, and populates NO
+   * `pendingSuggestionsByTarget` ⇒ the seed-42 10k golden is BYTE-IDENTICAL to
+   * `3920accc…` (the two-part flags-off gate, like `oodaAgentsEnabled`). It is
+   * checked with a STRICT `=== true` comparison (never `??`/`||`, which would make
+   * an absent flag accidentally truthy and perturb the golden).
+   *
+   * When `true`, a self-rescheduling `stepCoordinators` EventQueue task fires at a
+   * fixed `COORDINATOR_INTERVAL_TICKS` cadence (mirroring `stepAgents`). Each pass
+   * builds a FROZEN per-center observation at pass entry, iterates the regional
+   * centers in sorted-by-centerId order over a BOUNDED per-center scope, generates
+   * RULE-BASED advisory suggestions for all four kinds (reroute / hold /
+   * consolidate / dispatch) via the pure 25-02 `decideCoordinatorSuggestions`, and
+   * emits each as an `ActionSuggested` (on `coordinator-<centerId>`, payload pinned
+   * through `canonicalizeSuggestionPayload`) AND records it in an in-engine
+   * `pendingSuggestionsByTarget` map for the SAME-tick agent handshake (consumed by
+   * the Phase-24 `stepAgents` step in Plan 03). Per-center coordinator substreams
+   * are constructed LAZILY (only on the on path, only for a center that suggests).
+   * A flag-on run is REPRODUCIBLE per seed (same seed twice ⇒ byte-identical);
+   * capturing the full coordinator-on golden is Plan 05.
+   */
+  readonly coordinatorsEnabled?: boolean;
 }
 
 /** Options for the store-driven run. */
@@ -443,6 +470,24 @@ const INDUCTION_START_TICK = 1;
 const OODA_INTERVAL_TICKS = 5;
 /** First `stepAgents` pass fires at tick 1 (deterministic, fixed offset; off by default). */
 const OODA_START_TICK = 1;
+/**
+ * COORD-01: ticks between successive `stepCoordinators` passes. SAME cadence as
+ * `OODA_INTERVAL_TICKS` so a coordinator pass ALWAYS lands on the same tick as an
+ * agent pass — the precondition for the SAME-TICK suggestion handshake (Plan 03
+ * consumes `pendingSuggestionsByTarget` in `stepAgents`). The cadence is PART of
+ * the coordinator model, so it is baked into the coordinator-on golden (captured in
+ * Plan 05). OFF by default ⇒ no pass is ever scheduled, so this never affects the
+ * flags-off golden.
+ */
+const COORDINATOR_INTERVAL_TICKS = 5;
+/**
+ * First `stepCoordinators` pass fires at the SAME start tick as `stepAgents`
+ * (deterministic, fixed offset; off by default). The bootstrap seeds the
+ * coordinator task BEFORE the agent task at this tick, so it claims a LOWER queue
+ * seq and dispatches FIRST within the tick — coordinators emit, then the agents
+ * arbitrate the suggestions in the same tick (the same-tick handshake, Plan 03).
+ */
+const COORDINATOR_START_TICK = 1;
 /** SLA classes in a fixed order (the induction RNG picks an index). */
 const SLA_CLASSES: readonly SlaClass[] = [
   "express",
@@ -665,6 +710,15 @@ export function runToHorizon(
   // the centralized code for those points is bypassed (no double-decision).
   const oodaAgentsEnabled = opts.oodaAgentsEnabled === true;
 
+  // Phase-25 COORD-01/02: the per-center advisory coordinators are OPT-IN and
+  // DEFAULT OFF. Absent/false ⇒ the engine schedules NO `stepCoordinators` task,
+  // constructs ZERO per-center coordinator substreams, emits NO `ActionSuggested`,
+  // and populates NO `pendingSuggestionsByTarget`, so all existing goldens are
+  // byte-identical to 3920accc… (the determinism keystone). STRICT `=== true` —
+  // never `??`/`||` (an absent flag must stay falsy). When ON, one coordinator per
+  // center generates rule-based advisory suggestions in-fold (Task 3 body).
+  const coordinatorsEnabled = opts.coordinatorsEnabled === true;
+
   // SIM-03: RFID is OPT-IN. Absent ⇒ the engine emits the exact pre-Phase-3
   // stream (no RfidObserved, rng never drawn for reads) so goldens stay green.
   const rfidEnabled = rfid !== undefined;
@@ -785,6 +839,21 @@ export function runToHorizon(
     }
   }
   const timingConfig: TimingConfig = timing ?? DEFAULT_TIMING_CONFIG;
+
+  /**
+   * Phase-25 COORD-01/02: the in-engine same-tick suggestion handshake substrate.
+   * Each `ActionSuggested` the in-fold `stepCoordinators` pass emits is ALSO
+   * recorded here, keyed by `targetAgentId`, so the SAME tick's `stepAgents` pass
+   * (Plan 03) can consume the pending suggestions and accept/reject them. Populated
+   * ONLY on the coordinators-on path (Task 3); on the off path NO entry is ever
+   * written (no coordinator runs), so it stays empty and the flag-off stream is
+   * byte-identical to 3920accc… — the off-path inertness guarantee. The map is
+   * allocated unconditionally (an empty Map is semantically inert — it changes no
+   * draw/emit/ordering); what MUST be off-path-inert is any write into it, which
+   * only happens under the flag. Serialization into the continuation is Plan 05.
+   */
+  const pendingSuggestionsByTarget = new Map<string, ActionSuggested[]>();
+  void pendingSuggestionsByTarget; // populated in Task 3 (the pass body)
 
   // NET-01 (Phase 23): resolve the network topology. The flag is read with a
   // STRICT `=== true` (never `??`/`||`) so an absent flag stays falsy and the
@@ -1762,6 +1831,30 @@ export function runToHorizon(
   };
 
   /**
+   * Phase-25 COORD-01/02: the in-fold per-center coordinator process-manager pass
+   * (the structural mirror of `stepAgents`). Self-rescheduling on the
+   * `COORDINATOR_INTERVAL_TICKS` cadence; OFF path returns IMMEDIATELY so NO draw,
+   * NO emit, NO `pendingSuggestionsByTarget` write, NO reschedule ever happens when
+   * the flag is off (the determinism keystone — the off path is provably inert).
+   *
+   * SKELETON (Task 2): the empty-but-self-rescheduling foundation. The full pass
+   * body (frozen per-center observe at pass entry, sorted-by-centerId iteration over
+   * the bounded per-center scope, lazy `deriveCoordinatorRng`, rule-based
+   * `decideCoordinatorSuggestions`, `ActionSuggested` emit +
+   * `pendingSuggestionsByTarget` record) lands in Task 3. Until then this stub keeps
+   * the OFF path byte-identical to 3920accc… while the SimTask variant, the
+   * dispatch case, and the bootstrap seed are wired.
+   */
+  const stepCoordinators = (tick: number): void => {
+    if (!coordinatorsEnabled) return; // never runs when off (the determinism keystone)
+
+    // Task 3 fills the pass body here. Self-reschedule the NEXT pass at an ABSOLUTE
+    // tick (same discipline as `stepAgents`/`inductPackage`).
+    const nextTick = tick + COORDINATOR_INTERVAL_TICKS;
+    scheduleNext(nextTick, { kind: "stepCoordinators", tick: nextTick });
+  };
+
+  /**
    * OUT-01: the ONE-SHOT terminal delivery. Fired by a `deliverPackage` queue
    * task (scheduled at a DESTINATION-hub arrival after a seeded dwell >= 1 tick).
    * Emits `PackageDelivered` carrying the whole-minute-canonical `deliveredAt`
@@ -2568,6 +2661,13 @@ export function runToHorizon(
         // its successor (off path returns immediately, scheduling nothing).
         stepAgents(task.tick);
         return;
+      case "stepCoordinators":
+        // Phase-25 COORD-01/02: the in-fold per-center coordinator pass. Self-
+        // reschedules its successor (off path returns immediately, scheduling
+        // nothing). Seeded one queue-seq BEFORE `stepAgents` at the same start tick
+        // so it dispatches FIRST within a shared tick (the same-tick handshake).
+        stepCoordinators(task.tick);
+        return;
       case "departTrailer":
         departTrailer(task.trailerId, hubById.get(task.spokeHubId)!, task.departTick);
         return;
@@ -2634,6 +2734,20 @@ export function runToHorizon(
       schedule(INDUCTION_START_TICK, {
         kind: "inductPackage",
         tick: INDUCTION_START_TICK,
+      });
+    }
+    // Phase-25 COORD-01/02: seed the first coordinator step pass (off by default).
+    // SEEDED BEFORE `stepAgents` at the same start tick so it claims a STRICTLY
+    // LOWER queue seq and dispatches FIRST within the shared start tick — the
+    // coordinators emit `ActionSuggested` into `pendingSuggestionsByTarget`, then
+    // the agents arbitrate them in the SAME tick (the same-tick handshake, Plan 03).
+    // On a RESUME the pending stepCoordinators task is restored from the captured
+    // queue, so this is skipped — the self-rescheduling chain continues. OFF ⇒ no
+    // task scheduled, no substream constructed, golden byte-identical to 3920accc….
+    if (coordinatorsEnabled) {
+      schedule(COORDINATOR_START_TICK, {
+        kind: "stepCoordinators",
+        tick: COORDINATOR_START_TICK,
       });
     }
     // Phase-24 OODA-01/02: seed the first agent step pass (off by default). On a
