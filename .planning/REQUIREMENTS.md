@@ -54,7 +54,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 
 ### Determinism keystone (DET) — cross-cutting, every phase
 - [x] **DET-01**: Every v3.0 feature is **flag-gated**; per flag, BOTH `flag:false === absent` AND `absent ⇒ golden 3920accc…` (the two-part flags-off gate); the generalized multi-center `buildRoutes` produces the **identical `Route[]`** for the legacy 10-hub input.
-- [ ] **DET-02**: Each new model (topology, OODA agents, coordinators) **captures its own new golden**, with **agent-order-shuffle**, **N-agent-RNG-decorrelation**, and **continuation-equivalence** tests green.
+- [x] **DET-02**: Each new model (topology, OODA agents, coordinators) **captures its own new golden**, with **agent-order-shuffle**, **N-agent-RNG-decorrelation**, and **continuation-equivalence** tests green.
 - [x] **DET-03**: No `Date.now()` / `Math.random()` / `async-queue` in the decision core; all hashed payloads go through `canonicalize`; a CI/ESLint static guard fails on a violation.
 
 ---
@@ -115,6 +115,6 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | VIZ-15 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | VIZ-16 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | VIZ-17 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
-| DET-02 | Phase 28 — Continental Hardening (consolidated new-golden/order-shuffle/continuation audit) | Pending |
+| DET-02 | Phase 28 — Continental Hardening (consolidated new-golden/order-shuffle/continuation audit) | Complete |
 
 **Coverage: 31/31 requirements mapped to exactly one phase. No orphans, no duplicates.**
