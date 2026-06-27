@@ -28,8 +28,8 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 
 ### OODA step-agents (OODA) — Phase B
 - [x] **OODA-01**: Each **truck** runs a deterministic `step()` = Observe→Orient→Decide→Act that emits existing/new domain events, on a **per-N-tick cadence with an "anything-to-decide?" guard** (never per-tick-decide-for-all).
-- [ ] **OODA-02**: Each **hub** runs a deterministic `step()` emitting domain events (dispatch/hold/consolidate decisions).
-- [ ] **OODA-03**: Agents own **binding local feasibility** (fuel, HOS/rest, dock capacity) that a coordinator **cannot override** — the agent reuses the existing HOS/fuel/consolidation logic, it is not rebuilt.
+- [x] **OODA-02**: Each **hub** runs a deterministic `step()` emitting domain events (dispatch/hold/consolidate decisions).
+- [x] **OODA-03**: Agents own **binding local feasibility** (fuel, HOS/rest, dock capacity) that a coordinator **cannot override** — the agent reuses the existing HOS/fuel/consolidation logic, it is not rebuilt.
 - [x] **OODA-04**: Per-tick agent passes iterate a **sorted-by-stable-id** array, draw from a **stable-id-derived seeded substream**, and read a **frozen per-tick observation surface** (no mid-tick read-your-writes).
 - [x] **OODA-05**: Agent state serializes into the world state so a continued run is **byte-identical** to an uninterrupted run (continuation-equivalence).
 
@@ -37,8 +37,8 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 - [x] **COORD-01**: **One advisory coordination center per regional center** — an event-sourcing process-manager that runs **in-fold** (not as an async subscriber), with bounded per-center scope.
 - [x] **COORD-02**: Coordinators emit advisory **`ActionSuggested`** events (re-route / hold / consolidate / dispatch); the target agent **accepts** (`SuggestionAccepted` + the binding event) or **rejects** (`SuggestionRejected` + reason code) based on its local feasibility.
 - [ ] **COORD-03**: **Visible reject-with-reason** — a rejected suggestion (e.g. "won't divert: HOS/fuel") surfaces in the alert feed + audit timeline (the headline "smart and honest" demo moment).
-- [ ] **COORD-04**: Anti-oscillation / anti-conflict guards ship with the **first** coordinator: **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning**; `ActionSuggested`/`Accepted`/`Rejected` are classified **scope-neutral** (no re-plan feedback storm).
-- [ ] **COORD-05**: Every agent has a **feasible no-op default** so each tick always closes (no advisory-reject Zeno livelock).
+- [x] **COORD-04**: Anti-oscillation / anti-conflict guards ship with the **first** coordinator: **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning**; `ActionSuggested`/`Accepted`/`Rejected` are classified **scope-neutral** (no re-plan feedback storm).
+- [x] **COORD-05**: Every agent has a **feasible no-op default** so each tick always closes (no advisory-reject Zeno livelock).
 - [x] **COORD-06**: A coordinator **may invoke the existing optimizer** as a **scoped, pure `runEpoch` suggestion engine called synchronously in-fold** (not the async worker path); the global `RollingLoop` is disabled under the coordinator flag so the two never double-plan. *(Phase D; sub-flag with a heuristic fallback if profiling shows the in-fold call is too heavy.)*
 
 ### Performance & plumbing (PERF)
@@ -98,16 +98,16 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | PERF-01 | Phase 23 — Multi-Center Topology | Complete |
 | DET-01 | Phase 23 — Multi-Center Topology (re-asserted every phase) | Complete |
 | OODA-01 | Phase 24 — OODA Step-Agents | Complete |
-| OODA-02 | Phase 24 — OODA Step-Agents | Pending |
-| OODA-03 | Phase 24 — OODA Step-Agents | Pending |
+| OODA-02 | Phase 24 — OODA Step-Agents | Complete |
+| OODA-03 | Phase 24 — OODA Step-Agents | Complete |
 | OODA-04 | Phase 24 — OODA Step-Agents | Complete |
 | OODA-05 | Phase 24 — OODA Step-Agents | Complete |
 | DET-03 | Phase 24 — OODA Step-Agents (decision-core guard lands here) | Complete |
 | COORD-01 | Phase 25 — Coordination Centers | Complete |
 | COORD-02 | Phase 25 — Coordination Centers | Complete |
-| COORD-03 | Phase 25 — Coordination Centers | Pending |
-| COORD-04 | Phase 25 — Coordination Centers | Pending |
-| COORD-05 | Phase 25 — Coordination Centers | Pending |
+| COORD-03 | Phase 25 — Coordination Centers (machinery done; fires live via P27-B) | Pending |
+| COORD-04 | Phase 25 — Coordination Centers | Complete |
+| COORD-05 | Phase 25 — Coordination Centers | Complete |
 | COORD-06 | Phase 26 — Coordinator ↔ Optimizer | Complete |
 | PERF-02 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | PERF-03 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
