@@ -68,14 +68,21 @@ export interface AuditTimelineEntry {
   /** The scan type for a `PackageScanned` event, when applicable (else `null`). */
   readonly scanType: string | null;
   /**
-   * The captured system recommendation at the time of this decision event
-   * (`PlanGenerated` / `PlanAccepted`). `null` for all other event types.
+   * The captured system recommendation/rationale at the time of this decision
+   * event (`PlanGenerated` / `PlanAccepted`, and Phase-25 `SuggestionAccepted` /
+   * `SuggestionRejected`). `null` for all other event types.
    *
-   * Anti-repudiation (T-05-09): persisting the recommendation in the audit
-   * projection makes each optimizer decision attributable + replayable without
-   * re-running the optimizer.
+   * Anti-repudiation (T-05-09 / T-25-11): persisting the rationale in the audit
+   * projection makes each decision attributable + replayable without re-running
+   * the producer.
    */
   readonly recommendation: string | null;
+  /**
+   * Phase-25 COORD-03: the closed reject reasonCode (`hos|fuel|dock|infeasible`)
+   * for a `SuggestionRejected` audit row — the honest "won't divert" reason
+   * preserved in the audit trail. `null` for every other event type.
+   */
+  readonly reasonCode: string | null;
 }
 
 /**
@@ -108,6 +115,7 @@ export function auditTimelineReducer(
         hubId: event.payload.originHubId,
         scanType: null,
         recommendation: null,
+        reasonCode: null,
       };
     case "PackageScanned":
       return {
@@ -119,6 +127,7 @@ export function auditTimelineReducer(
         hubId: event.payload.hubId,
         scanType: event.payload.scanType,
         recommendation: null,
+        reasonCode: null,
       };
     case "PackageArrivedAtHub":
       return {
@@ -130,6 +139,7 @@ export function auditTimelineReducer(
         hubId: event.payload.hubId,
         scanType: null,
         recommendation: null,
+        reasonCode: null,
       };
 
     // -------------------------------------------------------------------------
@@ -145,6 +155,7 @@ export function auditTimelineReducer(
         hubId: event.payload.fromHubId,
         scanType: null,
         recommendation: null,
+        reasonCode: null,
       };
     case "TrailerArrivedAtHub":
       return {
@@ -156,6 +167,7 @@ export function auditTimelineReducer(
         hubId: event.payload.hubId,
         scanType: null,
         recommendation: null,
+        reasonCode: null,
       };
     case "TrailerDocked":
       return {
@@ -167,6 +179,7 @@ export function auditTimelineReducer(
         hubId: event.payload.hubId,
         scanType: null,
         recommendation: null,
+        reasonCode: null,
       };
 
     // -------------------------------------------------------------------------
@@ -183,6 +196,7 @@ export function auditTimelineReducer(
         hubId: null,
         scanType: null,
         recommendation: renderPlanGeneratedRecommendation(event.payload),
+        reasonCode: null,
       };
     case "PlanAccepted":
       return {
@@ -194,6 +208,7 @@ export function auditTimelineReducer(
         hubId: null,
         scanType: null,
         recommendation: renderPlanAcceptedRecommendation(event.payload),
+        reasonCode: null,
       };
 
     // -------------------------------------------------------------------------
@@ -220,10 +235,41 @@ export function auditTimelineReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery is not an audit-timeline entry
     case "TrailerDiverted": // Phase-24 OODA-01: no timeline row in this plan (24-02 may surface diverts)
-    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events add no timeline row (COORD-03 surfacing lands in Plan 03)
-    case "SuggestionAccepted":
-    case "SuggestionRejected":
+    case "ActionSuggested": // Phase-25 COORD-02: the advisory suggestion lives on the coordinator stream; the audit trail records the agent's DECISION (accept/reject below), not the advice
       return null;
+
+    // -------------------------------------------------------------------------
+    // Phase-25 COORD-03 — the agent's accept/reject DECISION on a coordinator
+    // suggestion. Each produces an audit row (anti-repudiation T-25-11): the
+    // honest "won't divert: <reason>" is preserved in the auditable trail. The
+    // agent identity (targetAgentId) lives on the event's stream, not the payload,
+    // so the row names no package/trailer; the suggestionId + reasonCode carry the
+    // correlation + reason. occurredAt comes from the payload, never a wall clock.
+    // -------------------------------------------------------------------------
+    case "SuggestionRejected":
+      return {
+        packageId: null,
+        trailerId: null,
+        globalSeq,
+        eventType: event.type,
+        occurredAt,
+        hubId: null,
+        scanType: null,
+        recommendation: renderSuggestionRejectedRecommendation(event.payload),
+        reasonCode: event.payload.reasonCode,
+      };
+    case "SuggestionAccepted":
+      return {
+        packageId: null,
+        trailerId: null,
+        globalSeq,
+        eventType: event.type,
+        occurredAt,
+        hubId: null,
+        scanType: null,
+        recommendation: renderSuggestionAcceptedRecommendation(event.payload),
+        reasonCode: null,
+      };
     default:
       return assertNeverAudit(event);
   }
@@ -269,6 +315,27 @@ function renderPlanAcceptedRecommendation(
     `Plan ${payload.planId} accepted for trailer ${payload.trailerId} ` +
     `(epoch ${payload.epochId}, scope ${payload.scopeHash.slice(0, 8)}).`
   );
+}
+
+/**
+ * Render the captured rationale for a `SuggestionRejected` audit row (COORD-03).
+ * Pure — derived entirely from the payload (no clock, no RNG) so the rebuild-from-
+ * log fold produces the same string as the live fold (FND-04).
+ */
+function renderSuggestionRejectedRecommendation(
+  payload: { readonly suggestionId: string; readonly reasonCode: string },
+): string {
+  return `Suggestion ${payload.suggestionId} rejected: ${payload.reasonCode}.`;
+}
+
+/**
+ * Render the captured rationale for a `SuggestionAccepted` audit row (COORD-03).
+ * Pure — derived entirely from the payload.
+ */
+function renderSuggestionAcceptedRecommendation(
+  payload: { readonly suggestionId: string },
+): string {
+  return `Suggestion ${payload.suggestionId} accepted.`;
 }
 
 function assertNeverAudit(event: never): never {

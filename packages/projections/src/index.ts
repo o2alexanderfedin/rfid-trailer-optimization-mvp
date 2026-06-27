@@ -93,13 +93,16 @@ export {
   zoneEstimateKey,
 } from "./reducers/zone-estimate.js";
 
-// --- SNS-04/05: open exceptions feed + false-positive-rate KPI ---------------
+// --- SNS-04/05: open exceptions feed + false-positive-rate KPI + COORD-03 ----
 export type {
+  CoordinationRejectReason,
   ExceptionKind,
   ExceptionsState,
   OpenException,
 } from "./reducers/exceptions.js";
 export {
+  COORDINATION_REJECT_LABELS,
+  coordinationRejectId,
   emptyExceptionsState,
   exceptionId,
   exceptionsReducer,

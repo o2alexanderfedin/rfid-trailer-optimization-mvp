@@ -17,6 +17,7 @@ import {
   type ExceptionKind,
   type ExceptionsState,
   exceptionId as exceptionIdKey,
+  coordinationRejectId,
   exceptionsReducer,
   emptyPackageLocationState,
   emptyTrailerStateMap,
@@ -747,6 +748,10 @@ function affectedExceptionId(event: DomainEvent): string | null {
         event.payload.trailerId,
         event.payload.hubId,
       );
+    // Phase-25 COORD-03: a coordination reject opens a `coordination-rejected` row
+    // keyed by suggestionId (mirrors `exceptionsReducer` / `coordinationRejectId`).
+    case "SuggestionRejected":
+      return coordinationRejectId(event.payload.suggestionId);
     default:
       return null;
   }
@@ -779,6 +784,15 @@ async function applyExceptions(
         recommendedAction: r.recommended_action,
         confidence: r.confidence,
         occurredAt: toIso(r.occurred_at),
+        // Phase-25 COORD-03: the rich reject-correlation fields are an in-memory-only
+        // enrichment in this plan (no DB migration). The DB-backed read path carries
+        // the kind + the `recommended_action` (= the label) — the rich fields are
+        // null here; the in-memory reducer (the live demo / event-stream path that
+        // surfaces the alert) carries them at full fidelity. The partial-load
+        // identity for the idempotency check depends only on `exception_id`.
+        reasonCode: null,
+        suggestionId: null,
+        label: null,
       },
     ]),
   );
@@ -1047,7 +1061,11 @@ function asDistribution(
   return { rear: value.rear ?? 0, middle: value.middle ?? 0, nose: value.nose ?? 0 };
 }
 
-const EXCEPTION_KINDS = new Set(["wrong-trailer", "missed-unload"]);
+const EXCEPTION_KINDS = new Set([
+  "wrong-trailer",
+  "missed-unload",
+  "coordination-rejected",
+]);
 function asExceptionKind(value: string): ExceptionKind {
   if (EXCEPTION_KINDS.has(value)) return value as ExceptionKind;
   throw new Error(`Unknown exception kind in projection row: ${value}`);
@@ -1082,6 +1100,11 @@ export async function readOpenExceptions(
     recommendedAction: r.recommended_action,
     confidence: r.confidence,
     occurredAt: toIso(r.occurred_at),
+    // Phase-25 COORD-03: rich reject fields are in-memory-only this plan (no DB
+    // column); the persisted row carries kind + recommended_action (the label).
+    reasonCode: null,
+    suggestionId: null,
+    label: null,
   }));
 }
 
