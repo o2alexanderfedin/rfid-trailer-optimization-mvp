@@ -123,8 +123,7 @@ export function packageLocationReducer(
     case "TruckRefueled":
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route does not relocate packages (no-op until 24-02 wires it)
-    // Phase-25 COORD-02: advisory suggestion events do not relocate packages.
-    case "ActionSuggested":
+    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events do not relocate packages
     case "SuggestionAccepted":
     case "SuggestionRejected":
       return state;

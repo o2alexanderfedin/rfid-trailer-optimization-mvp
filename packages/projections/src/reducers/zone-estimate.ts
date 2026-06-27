@@ -200,8 +200,7 @@ function applyEvent(
     case "PackageInducted": // v2.0 IND-01: external induction is a no-op here
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route carries no zone evidence
-    // Phase-25 COORD-02: advisory suggestion events carry no zone evidence.
-    case "ActionSuggested":
+    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events carry no zone evidence
     case "SuggestionAccepted":
     case "SuggestionRejected":
       return state;

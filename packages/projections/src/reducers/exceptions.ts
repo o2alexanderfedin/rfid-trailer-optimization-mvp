@@ -214,10 +214,7 @@ export function exceptionsReducer(
     case "PlanSuperseded": // FLOW-04: supersession is a hub-inventory-only concern
     case "PackageDelivered": // Phase-22 OUT-01: terminal delivery opens no exception
     case "TrailerDiverted": // Phase-24 OODA-01: a re-route is a planned decision, not an exception
-    // Phase-25 COORD-02: advisory suggestion events open no exception in THIS plan.
-    // The visible reject-with-reason surfacing (COORD-03) lands in Plan 03; here
-    // SuggestionRejected is a no-op so the flags-off golden stays byte-identical.
-    case "ActionSuggested":
+    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events open no exception here (COORD-03 reject surfacing is Plan 03)
     case "SuggestionAccepted":
     case "SuggestionRejected":
       return state;
