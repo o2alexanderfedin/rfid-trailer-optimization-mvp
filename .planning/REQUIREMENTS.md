@@ -36,7 +36,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 ### Coordination centers (COORD) — Phases C (rule-based) + D (optimizer-backed)
 - [x] **COORD-01**: **One advisory coordination center per regional center** — an event-sourcing process-manager that runs **in-fold** (not as an async subscriber), with bounded per-center scope.
 - [x] **COORD-02**: Coordinators emit advisory **`ActionSuggested`** events (re-route / hold / consolidate / dispatch); the target agent **accepts** (`SuggestionAccepted` + the binding event) or **rejects** (`SuggestionRejected` + reason code) based on its local feasibility.
-- [ ] **COORD-03**: **Visible reject-with-reason** — a rejected suggestion (e.g. "won't divert: HOS/fuel") surfaces in the alert feed + audit timeline (the headline "smart and honest" demo moment).
+- [x] **COORD-03**: **Visible reject-with-reason** — a rejected suggestion (e.g. "won't divert: HOS/fuel") surfaces in the alert feed + audit timeline (the headline "smart and honest" demo moment).
 - [x] **COORD-04**: Anti-oscillation / anti-conflict guards ship with the **first** coordinator: **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning**; `ActionSuggested`/`Accepted`/`Rejected` are classified **scope-neutral** (no re-plan feedback storm).
 - [x] **COORD-05**: Every agent has a **feasible no-op default** so each tick always closes (no advisory-reject Zeno livelock).
 - [x] **COORD-06**: A coordinator **may invoke the existing optimizer** as a **scoped, pure `runEpoch` suggestion engine called synchronously in-fold** (not the async worker path); the global `RollingLoop` is disabled under the coordinator flag so the two never double-plan. *(Phase D; sub-flag with a heuristic fallback if profiling shows the in-fold call is too heavy.)*
@@ -50,7 +50,7 @@ Detail + rationale: `.planning/research/SUMMARY.md` (+ STACK/FEATURES/ARCHITECTU
 ### Scale visualization (VIZ) — continues v2.0 numbering
 - [x] **VIZ-15**: 100+ hubs render **without clutter** via OpenLayers `Cluster` + `declutter` + `VectorImageLayer`; static topology is sent **once**, per-tick deltas carry only trailers + transient suggestions.
 - [x] **VIZ-16**: Regional centers + the near-full-mesh backbone render as a **distinct visual tier** (centers vs spokes vs backbone legs).
-- [ ] **VIZ-17**: An **advisory-suggestion overlay** (accept-green / reject-red) is opt-in / decluttered on the map.
+- [x] **VIZ-17**: An **advisory-suggestion overlay** (accept-green / reject-red) is opt-in / decluttered on the map.
 
 ### Determinism keystone (DET) — cross-cutting, every phase
 - [x] **DET-01**: Every v3.0 feature is **flag-gated**; per flag, BOTH `flag:false === absent` AND `absent ⇒ golden 3920accc…` (the two-part flags-off gate); the generalized multi-center `buildRoutes` produces the **identical `Route[]`** for the legacy 10-hub input.
@@ -105,7 +105,7 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | DET-03 | Phase 24 — OODA Step-Agents (decision-core guard lands here) | Complete |
 | COORD-01 | Phase 25 — Coordination Centers | Complete |
 | COORD-02 | Phase 25 — Coordination Centers | Complete |
-| COORD-03 | Phase 25 — Coordination Centers (machinery done; fires live via P27-B) | Pending |
+| COORD-03 | Phase 25 — Coordination Centers (machinery done; fires live via P27-B) | Complete |
 | COORD-04 | Phase 25 — Coordination Centers | Complete |
 | COORD-05 | Phase 25 — Coordination Centers | Complete |
 | COORD-06 | Phase 26 — Coordinator ↔ Optimizer | Complete |
@@ -114,7 +114,7 @@ determinism/golden home. Every phase additionally re-asserts the flags-off `3920
 | PERF-04 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
 | VIZ-15 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | VIZ-16 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
-| VIZ-17 | Phase 27 — Perf + Plumbing + Scale Viz | Pending |
+| VIZ-17 | Phase 27 — Perf + Plumbing + Scale Viz | Complete |
 | DET-02 | Phase 28 — Continental Hardening (consolidated new-golden/order-shuffle/continuation audit) | Pending |
 
 **Coverage: 31/31 requirements mapped to exactly one phase. No orphans, no duplicates.**
