@@ -4,7 +4,9 @@ import type { DomainEvent, LonLat } from "@mm/domain";
 import { appendToStream, readAll } from "@mm/event-store";
 import {
   type CatchupDb,
+  type ProjectionDb,
   type StoredEventLike,
+  applyTrailerFuel,
   rebuildCatchup,
   readAuditTimeline,
   readGeoKeyframes,
@@ -336,6 +338,42 @@ describe("CATCH-UP projections: audit timeline (FND-08) + geo-track", () => {
     const live = await serializeCatchup(db);
     await rebuildCatchup(db, replayReadAll);
     expect(await serializeCatchup(db)).toBe(live);
+  });
+
+  it("the arrival keyframe survives the inline fuel projection folding the arrival first", async () => {
+    // The live sim folds each tick's events through the INLINE projections
+    // (including trailer_fuel) BEFORE the catch-up pass. The inline fuel applier
+    // drops its own in-flight row on arrival; the geo-track catch-up must still
+    // resolve the trip's leg and place the arrival on the map.
+    const tag = `INL-${n}`;
+    const aaa = `${tag}-AAA`;
+    const zzz = `${tag}-ZZZ`;
+    const trailer = `${tag}-T1`;
+    const trip = `${tag}-TRIP1`;
+    const es = eventStoreView(fx.db);
+    const leg: LonLat[] = [
+      [-100, 40],
+      [-95, 38],
+    ];
+    const db = catchupView(fx.db);
+    const inline = fx.db as unknown as Kysely<ProjectionDb>;
+
+    await appendToStream(es, `route-${aaa}-${zzz}`, 0, [routeRegistered(aaa, zzz, leg)], at(0));
+    const before = (await readAll(es, 0n)).at(-1)!.globalSeq;
+    await appendToStream(es, `trailer-${trailer}`, 0, [departed(trailer, aaa, zzz, trip, [])], at(1_000));
+    for (const ev of await readAll(es, before)) await applyTrailerFuel(inline, ev);
+    await runCatchup(db, replayReadAll);
+
+    const afterDepart = (await readAll(es, 0n)).at(-1)!.globalSeq;
+    await appendToStream(es, `trailer-${trailer}`, 1, [trailerArrived(trailer, zzz, trip)], at(2_000));
+    for (const ev of await readAll(es, afterDepart)) await applyTrailerFuel(inline, ev);
+    await runCatchup(db, replayReadAll);
+
+    const arrive = (await readGeoKeyframes(db)).find(
+      (k) => k.trailerId === trailer && k.tripId === trip && k.kind === "arrive",
+    );
+    expect(arrive).toBeDefined();
+    expect([arrive!.lon, arrive!.lat]).toEqual(leg[leg.length - 1]);
   });
 
   it("rebuild (truncate + replay from 0) yields identical audit + geo state", async () => {

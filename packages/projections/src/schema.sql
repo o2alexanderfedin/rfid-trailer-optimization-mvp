@@ -196,6 +196,18 @@ CREATE TABLE IF NOT EXISTS geo_inflight_trip (
 
 ALTER TABLE geo_inflight_trip ADD COLUMN IF NOT EXISTS depart_at TIMESTAMPTZ;
 
+-- CATCH-UP geo-track's OWN in-flight trip -> leg index (same shape as
+-- geo_inflight_trip). geo_inflight_trip is also maintained by the INLINE
+-- trailer_fuel projection, which runs ahead of the catch-up pass in every sim
+-- tick and deletes a trip's row on arrival; sharing it made the catch-up miss
+-- the leg and drop every live arrival keyframe. Each runner owns its index.
+CREATE TABLE IF NOT EXISTS geo_track_inflight (
+  trip_id     TEXT PRIMARY KEY,
+  from_hub_id TEXT NOT NULL,
+  to_hub_id   TEXT NOT NULL,
+  depart_at   TIMESTAMPTZ
+);
+
 -- PERF-02: a trailer's miles-since-last-refuel (the optimizer's fuel-aware
 -- odometer), folded incrementally so twin-snapshot reads it bounded instead of
 -- re-scanning the log. One row per trailer that has reported fuel state.

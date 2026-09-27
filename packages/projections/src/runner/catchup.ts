@@ -171,13 +171,13 @@ async function runAuditTimeline(
 /**
  * Load the persisted geo-track fold state: the route geometry index (keyed by
  * directed hub pair) AND the in-flight trip -> leg index (M-4). Seeding `inflight`
- * from `geo_inflight_trip` lets the incremental catch-up resolve an arrival whose
+ * from `geo_track_inflight` (catch-up's own index) lets the incremental catch-up resolve an arrival whose
  * departure was folded in an earlier pass, identically to a full rebuild.
  */
 async function loadGeoTrackState(db: Kysely<CatchupDb>): Promise<GeoTrackState> {
   const [routeRows, inflightRows] = await Promise.all([
     db.selectFrom("geo_route").selectAll().execute(),
-    db.selectFrom("geo_inflight_trip").selectAll().execute(),
+    db.selectFrom("geo_track_inflight").selectAll().execute(),
   ]);
   const routes = new Map<string, readonly [number, number][]>();
   for (const r of routeRows) routes.set(legKey(r.from_hub_id, r.to_hub_id), r.geometry);
@@ -205,7 +205,7 @@ async function upsertInflightTrip(
   departAt: string,
 ): Promise<void> {
   await db
-    .insertInto("geo_inflight_trip")
+    .insertInto("geo_track_inflight")
     .values({ trip_id: tripId, from_hub_id: fromHubId, to_hub_id: toHubId, depart_at: departAt })
     .onConflict((oc) =>
       oc
@@ -217,7 +217,7 @@ async function upsertInflightTrip(
 
 /** Drop a completed trip from the in-flight index (M-4). */
 async function deleteInflightTrip(db: Kysely<CatchupDb>, tripId: string): Promise<void> {
-  await db.deleteFrom("geo_inflight_trip").where("trip_id", "=", tripId).execute();
+  await db.deleteFrom("geo_track_inflight").where("trip_id", "=", tripId).execute();
 }
 
 /** Idempotent upsert of one route geometry into the persisted index. */
@@ -311,7 +311,7 @@ export async function rebuildCatchup(
   db: Kysely<CatchupDb>,
   readAll: ReadAllEvents,
 ): Promise<CatchupResult> {
-  await sql`TRUNCATE TABLE audit_timeline, geo_route, geo_keyframe, geo_inflight_trip`.execute(
+  await sql`TRUNCATE TABLE audit_timeline, geo_route, geo_keyframe, geo_track_inflight`.execute(
     db,
   );
   for (const projection of CATCHUP_PROJECTIONS) {
