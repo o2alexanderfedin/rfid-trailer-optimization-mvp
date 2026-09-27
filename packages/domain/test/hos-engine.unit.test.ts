@@ -360,6 +360,51 @@ describe("applySleeperBerthPeriod — 7/3 and 8/2 splits (395.1(g))", () => {
     );
   });
 
+  it("a mid-shift sleeper period excludes only its own minutes, not the on-duty time before it", () => {
+    // On duty at 08:00, works 5h, then takes a 7h berth period at 13:00. Only the
+    // 7h berth is excluded from the 14h window, so the deadline moves from 22:00
+    // to 05:00 next day — not to 10:00 (which would also forgive the 5h worked).
+    const clock: HosClock = { ...freshClock(), driveTodayMin: 300, sinceLastBreakMin: 300 };
+    const periodAt = new Date((isoToEpochMinutes(FRESH_AT) + 300) * 60_000).toISOString();
+    const { clock: out } = applySleeperBerthPeriod(
+      clock,
+      DEFAULT_HOS_CONFIG,
+      DEFAULT_HOS_CONFIG.sleeperBerthLongMin, // 420 (7h)
+      periodAt,
+    );
+    expect(isoToEpochMinutes(out.dutyWindowStartAt)).toBe(isoToEpochMinutes(FRESH_AT) + 420);
+    // Back on duty at 20:00 with 9h of window left (14h − 5h worked), not 14h.
+    const backOnDuty = isoToEpochMinutes(periodAt) + 420;
+    expect(
+      isoToEpochMinutes(out.dutyWindowStartAt) + DEFAULT_HOS_CONFIG.dutyWindowMin - backOnDuty,
+    ).toBe(DEFAULT_HOS_CONFIG.dutyWindowMin - 300);
+  });
+
+  it("a completed 7/3 split leaves the window deadline at on-duty + 14h + both periods", () => {
+    // 08:00 on duty; 7h berth 08:00–15:00; 3h on duty; 3h period 18:00–21:00.
+    // Excluding both periods, the window closes 14h + 10h after 08:00 = 08:00 next day.
+    const first = applySleeperBerthPeriod(
+      freshClock(),
+      DEFAULT_HOS_CONFIG,
+      DEFAULT_HOS_CONFIG.sleeperBerthLongMin,
+      FRESH_AT,
+    );
+    const secondAt = new Date((isoToEpochMinutes(FRESH_AT) + 420 + 180) * 60_000).toISOString();
+    const second = applySleeperBerthPeriod(
+      first.clock,
+      DEFAULT_HOS_CONFIG,
+      DEFAULT_HOS_CONFIG.sleeperBerthShortMin,
+      secondAt,
+    );
+    expect(second.reset).toBe(true);
+    expect(isoToEpochMinutes(second.clock.dutyWindowStartAt) + DEFAULT_HOS_CONFIG.dutyWindowMin).toBe(
+      isoToEpochMinutes(FRESH_AT) + DEFAULT_HOS_CONFIG.dutyWindowMin + 420 + 180,
+    );
+    // The driver is back on duty when the 3h period ends (21:00), not at the
+    // shifted window start.
+    expect(isoToEpochMinutes(second.clock.comeOnDutyAt)).toBe(isoToEpochMinutes(secondAt) + 180);
+  });
+
   it("is deterministic — identical inputs yield identical output", () => {
     const clock: HosClock = { ...freshClock(), driveTodayMin: 400 };
     const a = applySleeperBerthPeriod(clock, DEFAULT_HOS_CONFIG, 420, FRESH_AT);
