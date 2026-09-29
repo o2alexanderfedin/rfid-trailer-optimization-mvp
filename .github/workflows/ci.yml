@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'bugfix/**', 'release/**', 'hotfix/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # Reads the pnpm version from package.json "packageManager".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Workspace packages (and vendor/async-queue) are consumed from dist/,
+      # so typecheck and lint need them built first.
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm exec vitest run --project unit
+
+      - name: UI tests (jsdom)
+        run: pnpm exec vitest run --project ui
+
+      # Each integration fixture starts its own postgres:17 container through
+      # Testcontainers, using the runner's Docker engine; no service needed.
+      - name: Integration tests (Postgres via Testcontainers)
+        run: pnpm exec vitest run --no-file-parallelism --project integration
