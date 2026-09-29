@@ -30,6 +30,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { render } from "vitest-browser-react";
 import VectorSource from "ol/source/Vector.js";
 import VectorLayer from "ol/layer/Vector.js";
+import BaseVectorLayer from "ol/layer/BaseVector.js";
+import Cluster from "ol/source/Cluster.js";
 import Point from "ol/geom/Point.js";
 import { fromLonLat } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
@@ -124,8 +126,11 @@ function findTrailerFeature(map: OlMap, trailerId: string): Point | null {
 /** Find the static hub feature by id across the captured map's layers (VIZ-07/11). */
 function findHubFeature(map: OlMap, hubId: string): Feature | null {
   for (const layer of map.getLayers().getArray()) {
-    if (!(layer instanceof VectorLayer)) continue;
-    const src: unknown = layer.getSource();
+    // Spoke hubs sit in a Cluster source under a VectorImageLayer (VIZ-15), so
+    // look through every vector-like layer and unwrap the cluster to reach them.
+    if (!(layer instanceof BaseVectorLayer)) continue;
+    let src: unknown = layer.getSource();
+    if (src instanceof Cluster) src = src.getSource();
     if (!(src instanceof VectorSource)) continue;
     const feature = src.getFeatureById(`hub:${hubId}`);
     if (feature !== null) return feature;
