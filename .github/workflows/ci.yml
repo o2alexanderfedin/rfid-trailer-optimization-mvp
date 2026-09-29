@@ -46,6 +46,15 @@ jobs:
       - name: UI tests (jsdom)
         run: pnpm exec vitest run --project ui
 
+      # Vitest browser mode drives the headless Chromium shell through Playwright.
+      # The screenshot test rewrites docs/screenshots/*.png in this checkout only;
+      # nothing is uploaded or committed.
+      - name: Install headless Chromium
+        run: pnpm --filter @mm/web exec playwright install --with-deps --only-shell chromium
+
+      - name: Browser tests (headless Chromium)
+        run: pnpm test:browser
+
       # Each integration fixture starts its own postgres:17 container through
       # Testcontainers, using the runner's Docker engine; no service needed.
       - name: Integration tests (Postgres via Testcontainers)
