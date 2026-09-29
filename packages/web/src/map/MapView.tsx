@@ -159,6 +159,8 @@ export function MapView({
   const mapDisposedRef = useRef(0);
   const trailerSourceInstancesRef = useRef(0);
   const snapshotCountRef = useRef(0);
+  /** Id of the trailer whose OL uid `data-trailer-uid` reports (leak guard). */
+  const probeTrailerIdRef = useRef<string | number | undefined>(undefined);
 
   /** Entity maps — off the React render path. */
   const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
@@ -499,9 +501,19 @@ export function MapView({
 
       setAttr("data-trailer-count", trailerSource.getFeatures().length);
 
-      // Leak guard: expose the OL uid of a stable trailer feature.
-      const probe = trailerSource.getFeatures()[0];
-      if (probe !== undefined) {
+      // Leak guard: expose the OL uid of ONE trailer, followed by its id. The
+      // uid changes only if that trailer's feature is recreated. Do not take
+      // `getFeatures()[0]`: the spatial index reorders features as trailers
+      // move, so "the first feature" is a different live trailer each tick.
+      let probe =
+        probeTrailerIdRef.current === undefined
+          ? null
+          : trailerSource.getFeatureById(probeTrailerIdRef.current);
+      if (probe === null) {
+        probe = trailerSource.getFeatures()[0] ?? null;
+        probeTrailerIdRef.current = probe?.getId();
+      }
+      if (probe !== null) {
         setAttr("data-trailer-uid", getUid(probe));
       }
 

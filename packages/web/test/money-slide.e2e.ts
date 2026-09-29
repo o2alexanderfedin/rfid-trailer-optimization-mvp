@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./offline.js";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
 /**
