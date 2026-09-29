@@ -110,7 +110,9 @@ export const OPTIMIZER_ON_GOLDEN_SHA256 =
  * This is NOT a simulate() run hash — it is the pure continental topology
  * artifact (centers + spoke→center assignment + near-full-mesh backbone +
  * Route[] + per-leg transit params).
- * Captured on x86_64 darwin, node v23.
+ * Non-integer numbers are rounded to 9 dp before hashing, because the route
+ * geometry's last bit differs between arm64 and x86_64. Same value on darwin
+ * arm64, linux arm64 and linux x86_64 (Node 22).
  */
 export const CONTINENTAL_GOLDEN_SHA256 =
-  "8f91b13f06e8481b5d80f0beb3c36b9307abad21242bdc1696b8769175db6644";
+  "0b42e0d1dd0c2092f33d6e4ce74d0c7f082325cdc840bbbfff856d75f9b2356d";

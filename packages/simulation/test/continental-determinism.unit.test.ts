@@ -28,7 +28,8 @@ import { FLAGS_OFF_GOLDEN_SHA256, CONTINENTAL_GOLDEN_SHA256 } from "./goldens.js
  * REPRODUCIBILITY-FIRST (T-23-12): the test asserts the SAME-SEED (here: same fixed
  * fixture) artifact hashes IDENTICALLY across two in-process derivations BEFORE the
  * golden constant is asserted — so a non-reproducible (flaky) hash can NEVER be
- * baked in. The golden was captured on x86_64 (darwin), node v23.
+ * baked in. Numbers are rounded to HASH_DECIMALS before hashing, so the golden is
+ * the same on arm64 and x86_64.
  *
  * Mirrors `consolidation-determinism.unit.test.ts` (a small fixed input + a
  * deterministic continental construction; off-path byte-identity lives in
@@ -67,12 +68,30 @@ function continentalArtifact(): {
   return { partition, routes, transit };
 }
 
+/**
+ * Decimal places kept for every non-integer number before hashing.
+ *
+ * The route geometry comes from Math.sin/asin/atan2, whose last bit differs by CPU:
+ * the same fixture yields e.g. 34.19070221325657 on arm64 and 34.19070221325658 on
+ * x86_64 (Node 22, Linux), which changed the hash. 9 dp (~0.1 mm of latitude) keeps
+ * every real change in the model visible while dropping that last-bit noise.
+ */
+const HASH_DECIMALS = 9;
+
+function canonicalNumber(_key: string, value: unknown): unknown {
+  return typeof value === "number" && !Number.isInteger(value)
+    ? Number(value.toFixed(HASH_DECIMALS))
+    : value;
+}
+
 function hashArtifact(): string {
-  return createHash("sha256").update(JSON.stringify(continentalArtifact())).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify(continentalArtifact(), canonicalNumber))
+    .digest("hex");
 }
 
 // See goldens.ts for CONTINENTAL_GOLDEN_SHA256 — captured from continentalArtifact()
-// over the fixed 14-hub fixture (centerCount=4) on x86_64 darwin, node v23.
+// over the fixed 14-hub fixture (centerCount=4), numbers rounded to HASH_DECIMALS.
 // Same-seed reproducibility is asserted BELOW before the golden is checked (T-23-12).
 
 describe("continental model golden (DET-01, small fixture)", () => {
