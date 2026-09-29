@@ -27,16 +27,18 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # Workspace packages (and vendor/async-queue) are consumed from dist/,
-      # so typecheck and lint need them built first.
-      - name: Build
-        run: pnpm build
-
+      # Typecheck and lint run BEFORE the build on purpose: they resolve every
+      # workspace package (and vendor/async-queue) to its source through the
+      # paths in tsconfig.eslint.json, so `pnpm check` works on a fresh clone.
+      # Running them first keeps that promise tested.
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint
+
+      - name: Build
+        run: pnpm build
 
       - name: Unit tests
         run: pnpm exec vitest run --project unit
