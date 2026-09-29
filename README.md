@@ -88,8 +88,10 @@ Prerequisites: Node 22+, pnpm 10, and **OrbStack** (the mandated Docker runtime;
 `docker context` must point at `orbstack`).
 
 ```bash
-# 1. Install workspace dependencies.
+# 1. Install workspace dependencies and build every package (the workspace
+#    packages, including vendor/async-queue, are consumed from their dist/).
 pnpm install
+pnpm build
 
 # 2. Start Postgres 17 (OrbStack).
 docker compose up -d
