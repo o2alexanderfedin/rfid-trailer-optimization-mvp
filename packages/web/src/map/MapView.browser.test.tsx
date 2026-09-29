@@ -36,6 +36,7 @@ import Point from "ol/geom/Point.js";
 import { fromLonLat } from "ol/proj.js";
 import type OlMap from "ol/Map.js";
 import type Feature from "ol/Feature.js";
+import { getUid } from "ol/util.js";
 import type { WsEnvelope } from "@mm/api";
 import type * as AnimateModule from "./animate.js";
 import { MapView } from "./MapView.js";
@@ -121,6 +122,17 @@ function findTrailerFeature(map: OlMap, trailerId: string): Point | null {
     return geom instanceof Point ? geom : null;
   }
   return null;
+}
+
+/** Find the live trailer source (the vector source holding `trailer:*` features). */
+function findTrailerSource(map: OlMap): VectorSource {
+  for (const layer of map.getLayers().getArray()) {
+    if (!(layer instanceof VectorLayer)) continue;
+    const src: unknown = layer.getSource();
+    if (!(src instanceof VectorSource)) continue;
+    if (src.getFeatures().some((f) => String(f.getId()).startsWith("trailer:"))) return src;
+  }
+  throw new Error("trailer source not found");
 }
 
 /** Find the static hub feature by id across the captured map's layers (VIZ-07/11). */
@@ -594,6 +606,79 @@ describe("MapView (browser behaviour)", () => {
     dispatchEnvelope(ctx, unknownTick);
     // Still exactly the one DFW marker (the ZZZ event added nothing).
     expect(findInductionFeatures(map)).toHaveLength(1);
+  });
+
+  it("leak-guard probe: data-trailer-uid follows one trailer even when the spatial index reorders features", async () => {
+    const host = makeHost();
+    const ctx = makeTestWsContext();
+
+    const screen = await render(
+      <WsContext.Provider value={ctx}>
+        <MapView />
+      </WsContext.Provider>,
+      { container: host },
+    );
+
+    const el = screen.getByTestId("map").element();
+    await vi.waitFor(() => {
+      expect(capturedMap).not.toBeNull();
+      expect(el.getAttribute("data-route-count")).toBe("2");
+    });
+    const map = capturedMap;
+    if (map === null) throw new Error("map not captured");
+
+    // Two trailers, so "the first feature" can be a different one.
+    const base = {
+      id: "T-100",
+      routeId: "R-LAX-DFW",
+      departMs: 8_000,
+      etaMs: 28_000,
+      state: "onTime",
+    } as const;
+    const trailers = [base, { ...base, id: "T-200", departMs: 13_000 }];
+    const twoTrailers: WsEnvelope = {
+      v: 1,
+      type: "snapshot",
+      seq: 1,
+      simMs: 10_000,
+      simDay: 0,
+      speed: WS_SNAPSHOT.speed,
+      payload: { trailers, hubs: [], routes: [], exceptionsOpen: [] },
+    };
+    dispatchEnvelope(ctx, twoTrailers);
+    expect(el.getAttribute("data-trailer-count")).toBe("2");
+    const earlyUid = el.getAttribute("data-trailer-uid");
+    expect(earlyUid).not.toBeNull();
+
+    const source = findTrailerSource(map);
+    const probed = source.getFeatures().find((f) => getUid(f) === earlyUid);
+    if (probed === undefined) throw new Error("probed trailer not in source");
+
+    // Move the probed trailer (as the animation does every frame). The spatial
+    // index re-inserts it, so it is no longer first in getFeatures(). Nothing is
+    // recreated: both feature objects stay the same.
+    if (source.getFeatures()[0] === probed) {
+      const geom = probed.getGeometry();
+      if (!(geom instanceof Point)) throw new Error("trailer geometry is not a Point");
+      geom.setCoordinates(fromLonLat([-70, 45]));
+    }
+    // Precondition: the order really changed, so a "first feature" probe would
+    // now report a different uid.
+    expect(source.getFeatures()[0]).not.toBe(probed);
+
+    // A tick updates both trailers in place.
+    const tick: WsEnvelope = {
+      v: 1,
+      type: "tick",
+      seq: 2,
+      simMs: 10_500,
+      simDay: 0,
+      speed: WS_SNAPSHOT.speed,
+      payload: { trailers },
+    };
+    dispatchEnvelope(ctx, tick);
+    expect(el.getAttribute("data-trailer-count")).toBe("2");
+    expect(el.getAttribute("data-trailer-uid")).toBe(earlyUid);
   });
 
   it("unmount teardown: disposes the live map so net-live (created − disposed) returns to 0", async () => {
