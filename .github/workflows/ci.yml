@@ -55,6 +55,13 @@ jobs:
       - name: Browser tests (headless Chromium)
         run: pnpm test:browser
 
+      # The hermetic Playwright e2e projects (prod bundle + dev StrictMode).
+      # Playwright builds and serves the web app itself; the API, ws channel and
+      # OpenStreetMap tiles are stubbed in the page, so nothing leaves the runner.
+      # The soak and real-backend projects are not run here.
+      - name: E2E tests (Playwright, offline)
+        run: pnpm --filter @mm/web exec playwright test --project=chromium --project=chromium-dev
+
       # Each integration fixture starts its own postgres:17 container through
       # Testcontainers, using the runner's Docker engine; no service needed.
       - name: Integration tests (Postgres via Testcontainers)
