@@ -20,6 +20,7 @@
     "demo": "tsx src/main.ts"
   },
   "dependencies": {
+    "@alexanderfedin/async-queue": "workspace:*",
     "@mm/aggregation": "workspace:*",
     "@mm/domain": "workspace:*",
     "@mm/event-store": "workspace:*",

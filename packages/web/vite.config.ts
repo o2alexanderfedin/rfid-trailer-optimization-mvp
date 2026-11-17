@@ -1,8 +1,11 @@
-import { defineConfig } from "vite";
+import { defineConfig, type PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
+  // Cast needed: duplicate @types/node versions (22 vs 24) make Vite's Plugin
+  // types structurally incompatible across the two resolution paths. Build
+  // behaviour is unchanged — this is purely a type-declaration artifact.
+  plugins: [react()] as PluginOption[],
   server: {
     port: 5173,
     // Proxy API calls to the Fastify server in dev so the web app uses a

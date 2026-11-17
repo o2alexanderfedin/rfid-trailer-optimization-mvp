@@ -97,6 +97,32 @@ function trailerArrived(trailerId: string, hubId: string, tripId: string): Domai
 function docked(trailerId: string, hubId: string, dockDoorId: string): DomainEvent {
   return { type: "TrailerDocked", schemaVersion: 1, payload: { trailerId, hubId, dockDoorId } };
 }
+function routeRegistered(
+  fromHubId: string,
+  toHubId: string,
+  geometry: [number, number][],
+): DomainEvent {
+  return {
+    type: "RouteRegistered",
+    schemaVersion: 1,
+    payload: { routeId: `${fromHubId}-${toHubId}`, fromHubId, toHubId, geometry },
+  };
+}
+function pkgInducted(packageId: string, inductionHubId: string, slaDeadlineIso: string): DomainEvent {
+  return {
+    type: "PackageInducted",
+    schemaVersion: 1,
+    payload: {
+      packageId,
+      inductionHubId,
+      destHubId: "HUB-LAX",
+      slaClass: "standard",
+      slaDeadlineIso,
+      externalOriginRef: `EXT-${packageId}`,
+      occurredAt: "2026-08-01T00:00:00.000Z",
+    },
+  };
+}
 
 interface Seed {
   readonly stream: string;
@@ -122,13 +148,20 @@ describe("GOLDEN REPLAY: live twin == rebuilt-from-log twin, byte-identical (FND
     // orders by global_seq and reducers read time only from occurredAt.
     const tag = "GR";
     const P = (s: string): string => `${tag}-${s}`;
+    // Two hubs with minimal geometry for the fuel reducer
+    const geomMemDfw: [number, number][] = [[-90.0, 35.15], [-97.0, 32.9]];
     const seeds: Seed[] = [
+      // PERF-02: RouteRegistered seeds geo_route (needed by applyTrailerFuel for leg miles)
+      { stream: "routes", offsetMs: 100, events: [routeRegistered(P("MEM"), P("DFW"), geomMemDfw)] },
       { stream: `package-${P("A")}`, offsetMs: 5_000, events: [pkgCreated(P("A"), P("MEM"), P("LAX")), arrived(P("A"), P("MEM")), scanned(P("A"), P("MEM"), "inbound")] },
       { stream: `package-${P("B")}`, offsetMs: 1_000, events: [pkgCreated(P("B"), P("MEM"), P("DFW")), scanned(P("B"), P("MEM"), "inbound"), scanned(P("B"), P("MEM"), "load")] },
       { stream: `package-${P("C")}`, offsetMs: 9_000, events: [pkgCreated(P("C"), P("DFW"), P("LAX")), arrived(P("C"), P("DFW")), scanned(P("C"), P("DFW"), "unload"), scanned(P("C"), P("DFW"), "outbound")] },
       { stream: `trailer-${P("T1")}`, offsetMs: 3_000, events: [departed(P("T1"), P("MEM"), P("DFW"), P("TRIP1"), [P("B"), P("A")]), trailerArrived(P("T1"), P("DFW"), P("TRIP1")), docked(P("T1"), P("DFW"), P("DOCK1"))] },
       { stream: `trailer-${P("T2")}`, offsetMs: 2_000, events: [departed(P("T2"), P("DFW"), P("LAX"), P("TRIP2"), [P("C")])] },
       { stream: `package-${P("A")}`, offsetMs: 7_000, events: [scanned(P("A"), P("DFW"), "unload")] },
+      // PERF-02: PackageInducted seeds induction_deadline
+      { stream: `package-${P("D")}`, offsetMs: 8_000, events: [pkgInducted(P("D"), P("MEM"), "2026-08-01T00:00:00.000Z")] },
+      { stream: `package-${P("E")}`, offsetMs: 8_500, events: [pkgInducted(P("E"), P("DFW"), "2026-08-15T00:00:00.000Z")] },
     ];
 
     const es = eventStoreView(fx.db);
@@ -164,6 +197,13 @@ describe("GOLDEN REPLAY: live twin == rebuilt-from-log twin, byte-identical (FND
     // decrements source-hub inventory from the manifest (M-3 / FND-07), leaving
     // DFW.outbound EMPTY (C physically left; it must not over-count at DFW).
     expect(liveTwin.hubInventory.get(P("DFW"))?.outbound).toEqual([]);
+    // PERF-02: trailer_fuel — T1 completed a trip (MEM→DFW), should have accrued miles
+    const t1Miles = liveTwin.trailerFuel.get(P("T1"));
+    expect(t1Miles).toBeDefined();
+    expect(t1Miles!).toBeGreaterThan(0);
+    // PERF-02: induction_deadline — two packages inducted with known deadlines
+    expect(liveTwin.inductionDeadline.get(P("D"))).toBeDefined();
+    expect(liveTwin.inductionDeadline.get(P("E"))).toBeDefined();
 
     // --- REBUILD: truncate + reset checkpoints + replay from global_seq=0 ----
     await rebuildProjections(proj, replayReadAll);
@@ -183,5 +223,90 @@ describe("GOLDEN REPLAY: live twin == rebuilt-from-log twin, byte-identical (FND
     await rebuildProjections(proj, replayReadAll);
     const b = serializeTwin(await readOperationalTwin(proj));
     expect(b).toBe(a);
+  });
+
+  /**
+   * CR-01 regression guard: rebuild over a DB that already has STALE rows in
+   * geo_route + geo_inflight_trip (rows from a prior live run that were NOT
+   * truncated by the old `rebuildProjections`). The fix adds both tables to the
+   * TRUNCATE statement. This test pre-seeds the stale rows, then rebuilds, then
+   * asserts the rebuilt twin is BYTE-IDENTICAL to the clean fold — which would
+   * fail if stale geo rows survived the rebuild (wrong-leg mileage / phantom
+   * inflight entries corrupt the fuel reducer).
+   */
+  it("CR-01: rebuild truncates geo_route + geo_inflight_trip (stale-rows regression)", async () => {
+    const proj = projectionView(fx.db);
+
+    // Capture the reference twin from a clean rebuild (the prior tests left a
+    // known-good DB state).
+    await rebuildProjections(proj, replayReadAll);
+    const reference = serializeTwin(await readOperationalTwin(proj));
+
+    // Inject STALE rows into geo_route and geo_inflight_trip — rows that would
+    // NOT exist if this DB had only been rebuilt from the current log.
+    await proj
+      .insertInto("geo_route")
+      .values({
+        from_hub_id: "STALE-HUB-X",
+        to_hub_id: "STALE-HUB-Y",
+        geometry: JSON.stringify([[0, 0], [1, 1]]),
+      })
+      .onConflict((oc) =>
+        oc.columns(["from_hub_id", "to_hub_id"]).doUpdateSet({
+          geometry: JSON.stringify([[0, 0], [1, 1]]),
+        }),
+      )
+      .execute();
+    await proj
+      .insertInto("geo_inflight_trip")
+      .values({
+        trip_id: "STALE-TRIP-999",
+        from_hub_id: "STALE-HUB-X",
+        to_hub_id: "STALE-HUB-Y",
+        depart_at: "2020-01-01T00:00:00.000Z",
+      })
+      .onConflict((oc) =>
+        oc.column("trip_id").doUpdateSet({
+          from_hub_id: "STALE-HUB-X",
+          to_hub_id: "STALE-HUB-Y",
+          depart_at: "2020-01-01T00:00:00.000Z",
+        }),
+      )
+      .execute();
+
+    // Verify the stale rows are present before the rebuild.
+    const staleGeoRoute = await proj
+      .selectFrom("geo_route")
+      .selectAll()
+      .where("from_hub_id", "=", "STALE-HUB-X")
+      .execute();
+    expect(staleGeoRoute).toHaveLength(1);
+    const staleInflight = await proj
+      .selectFrom("geo_inflight_trip")
+      .selectAll()
+      .where("trip_id", "=", "STALE-TRIP-999")
+      .execute();
+    expect(staleInflight).toHaveLength(1);
+
+    // Rebuild — must TRUNCATE geo_route + geo_inflight_trip before replay.
+    await rebuildProjections(proj, replayReadAll);
+
+    // Stale geo rows must be gone.
+    const afterGeoRoute = await proj
+      .selectFrom("geo_route")
+      .selectAll()
+      .where("from_hub_id", "=", "STALE-HUB-X")
+      .execute();
+    expect(afterGeoRoute).toHaveLength(0);
+    const afterInflight = await proj
+      .selectFrom("geo_inflight_trip")
+      .selectAll()
+      .where("trip_id", "=", "STALE-TRIP-999")
+      .execute();
+    expect(afterInflight).toHaveLength(0);
+
+    // The rebuilt twin must be byte-identical to the clean reference.
+    const afterTwin = serializeTwin(await readOperationalTwin(proj));
+    expect(afterTwin).toBe(reference);
   });
 });

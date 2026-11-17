@@ -35,6 +35,9 @@ function makeException(
     recommendedAction: "check",
     confidence: 0.85,
     occurredAt: "2026-01-01T00:00:00.000Z",
+    reasonCode: null,
+    suggestionId: null,
+    label: null,
   };
 }
 

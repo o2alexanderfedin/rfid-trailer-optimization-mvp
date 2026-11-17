@@ -1,34 +1,34 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Complete Simulation Model — Phases 19–22
-status: Awaiting next milestone
-stopped_at: context exhaustion at 75% (2026-06-25)
-last_updated: "2026-06-25T10:09:42.552Z"
-last_activity: 2026-06-25 — Milestone v2.0 completed and archived
+milestone: v3.0
+milestone_name: Continental OODA Network
+status: verifying
+stopped_at: "Completed 27-03: VIZ-15/VIZ-16 scale viz (cluster + tier styles)"
+last_updated: "2026-06-27T20:39:01.855Z"
+last_activity: 2026-06-27
 progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 29
-  completed_plans: 7
-  percent: 24
+  total_phases: 6
+  completed_phases: 6
+  total_plans: 28
+  completed_plans: 29
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-22)
+See: .planning/PROJECT.md (updated 2026-06-26)
 
 **Core value:** Generate route-aware, LIFO-correct trailer load plans that minimize blocked-freight rehandle and continuously repair them as conditions change — demonstrated live over a simulated USA hub network.
-**Current focus:** v2.0 Complete Simulation Model — Phase 19 ✅ complete (continuous operation + resumable engine + bounded retention). Phase 20 (External Induction) is next.
+**Current focus:** Phase 28 — Continental Hardening
 
 ## Current Position
 
-Phase: Milestone v2.0 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-25 — Milestone v2.0 completed and archived
+Phase: 28 (Continental Hardening) — EXECUTING
+Plan: 4 of 4
+Status: Phase complete — ready for verification
+Last activity: 2026-06-27
 
 ## Performance Metrics
 
@@ -50,32 +50,64 @@ Last activity: 2026-06-25 — Milestone v2.0 completed and archived
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 23 P04 | 50 | 3 tasks | 8 files |
+| Phase 23 P05 | 70min | 4 tasks | 6 files |
+| Phase 24 P24-01 | 13min | 3 tasks | 31 files |
+| Phase 24 P24-04 | 15min | 3 tasks | 8 files |
+| Phase 25 P25-01 | 13 | 3 tasks | 23 files |
+| Phase 25 P25-02 | 12min | 3 tasks | 8 files |
+| Phase 26 P26-02 | 14min | 3 tasks | 5 files |
+| Phase 26 P26-03 | 70min | 3 tasks | 3 files |
+| Phase 27-perf-plumbing-scale-viz P02 | 6 | 3 tasks | 6 files |
+| Phase 27-perf-plumbing-scale-viz P03 | 50m | 3 tasks | 9 files |
+| Phase 27-perf-plumbing-scale-viz P05 | 65 | 3 tasks | 4 files |
+| Phase 27-perf-plumbing-scale-viz P04 | 75 | 3 tasks | 3 files |
+| Phase 27-perf-plumbing-scale-viz P06 | 45 | 3 tasks | 13 files |
+| Phase 27-perf-plumbing-scale-viz P07 | 30 | 1 tasks | 1 files |
+| Phase 28-continental-hardening P01 | 5 | 2 tasks | 7 files |
+| Phase 28-continental-hardening P02 | 15 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
+Recent decisions affecting v3.0:
 
-- [Phase 2 ✅ 2026-06-19]: Load Planning COMPLETE. Delivered AGG-01..04, LOAD-01..10. New pure packages @mm/aggregation (load-block aggregation/split/priority) and @mm/load-planner (canonical LIFO invariant single-source, independent virtual-unload validator, greedy planner, partial-LIFO, rehandle+utilization scoring with FeasibilityResult≠ScoreResult P2 separation, FIFO baseline, explainable rationale) + @mm/api POST /plan. Keystone golden reversed-plan fixture + planner-vs-validator property test. Adversarial review fixed a latent Phase-1 turbo-build cycle (event-store↔api) + a splitBlock duplicate-id MEDIUM. Carried LOW debt (keyId separator, docstring) in 02-REVIEW.md.
-- [Lesson]: Gate runs MUST include turbo `pnpm build` (not just `pnpm -r build`) — the recursive build tolerated a workspace cycle that turbo rejects; caught only in Phase-2 review.
-- [Phase 1 ✅ 2026-06-19]: Operational Data Foundation + Live Map Spike COMPLETE. Delivered FND-01..08, SIM-01/02, VIZ-01. TS/Node monorepo (pnpm+Turborepo): @mm/domain (build-gated closed event union + zod), @mm/event-store (append-only + optimistic concurrency + gap-free global order), @mm/projections (pure reducers + FND-04 golden-replay keystone), @mm/simulation (10 US hubs, seeded deterministic stream), @mm/api (Fastify queries + catch-up projections + ws), @mm/web (OpenLayers+OSM live map). Built via rival subagents in worktrees + judge + adversarial review. Carried LOW debt documented in 01-REVIEW.md. M-1/M-2 readAll cursor: low-water-mark guard added now; revisit if Phase 4 optimizer becomes a concurrent writer.
-- [Roadmap]: 5-phase MVP — foundation → load planning → RFID validation → rolling optimizer → sim/viz wrapper.
-- [Phase 1]: Pull the simulation engine (SIM-01/02) and a thin geo-only map slice (VIZ-01) into Phase 1 — the sim is the only data source for everything, and the early map slice de-risks the OpenLayers centerpiece before the optimizer lands.
-- [Phase 2]: Load planner is the "if all else fails" deliverable; independent LIFO validator + naive baseline (LOAD-09) designed in here, sharing KPI plumbing for the eventual before/after "money slide."
-- [Phase 4]: Custom min-cost flow + VRPTW in TS (no maintained JS lib) with glpk.js held as a correctness oracle — concentrated engineering risk; flagged for /gsd-research-phase.
-- [v2.0 2026-06-24]: Three design decisions resolved: (1) PackageInducted COEXISTS with PackageCreated; (2) spoke→spoke freight routes via center hub; (3) optimizer picks up inducted freight automatically via hub_inventory projection. Zero new runtime dependencies.
+- [v3.0 Roadmap 2026-06-26]: 6-phase spine adopted from research SUMMARY (A→E + Hardening), continuing phase numbering from v2.0's Phase 22 → Phases **23–28**. Phase 23 Topology (FOUNDATION) → 24 OODA → 25 Coordinators (rule-based) → 26 Coordinator↔Optimizer → 27 Perf+Plumbing+Scale Viz → 28 Continental Hardening (consolidated DET-02 audit). Hard-sequenced: A before everything; B before C (agents must exist to arbitrate); D needs C; E independent (interleaves with 25/26). Every phase re-asserts the two-part flags-off gate (`flag:false===absent` AND `absent⇒3920accc…`); model-changing phases capture their own new golden.
+- [v3.0 Roadmap 2026-06-26]: **PERF-01 (`applyHubInventory` key-scoping) pulled into Phase 23 as P1-BLOCKING** — the rest of E's perf work is deferrable, but this one converts a latent O(events×hubs) freeze into an active one the moment hub count jumps to 100. It ships with the topology, not as hardening.
+- [v3.0 Roadmap 2026-06-26]: **Center count is parameterized and chosen empirically in Phase 23** (user deferred the exact number to Phase A). Research default ~5–6 on a near-full-mesh backbone (envelope ~4–8); the leg-length cap + anti-SPOF remove-any-center connectivity test are mandatory regardless; never collapse to a single primary.
+- [v3.0 Design (PROJECT.md Key Decisions)]: multi–regional-center topology · great-circle arcs (no per-leg ORS at scale) · OODA as event-emitting `step()` (not ABM) · coordinators as ES process-managers · advisory-first (agents arbitrate w/ local feasibility) · coordinators *may* use the optimizer · `async-queue` for runtime plumbing only (ESLint-banned from the core) · every feature flag-gated, new goldens, flags-off byte-identical to `3920accc…`.
+- [Phase 23-04 NET-01/NET-05]: `continentalTopology` flag (strict `=== true`, default off) generalizes `buildRoutes`/`buildTransitParamsByLeg` + the engine freight flow off the hard-wired Memphis center to a `centerOf(spoke)` model. OFF ⇒ `centerOf` collapses to `hubs[0]`, no new RNG substream is constructed, and the legacy single-center stream + the seed-42 10k golden `3920accc…` are byte-identical; ON ⇒ freight flows spoke → its center → backbone → dest center → dest spoke (the cross-center hop lives in `arriveConsolidationAtCenter`). `detectAffectedScope` gains an additive `partitionScopeByCenter(scope, centerOf, events)` so one center's epoch never pulls another's trailers. Empirical `centerCount` + the partition snapshot are deferred to plan 23-05.
+- [Phase 23]: Center count = 6 (empirical, NET-02): best fan-out balance + cheap 30-leg mesh + anti-SPOF + all spoke legs under cap; recorded in committed center-partition.snapshot.json (partitionChecksum=883c337b)
+- [Phase 23]: Continental golden 8f91b13f captured reproducibility-first on a 14-hub fixture; DET-01 two-part gate: continentalTopology:false===absent AND absent=>seed-42 10k golden 3920accc byte-identical
+- [Phase ?]: OODA_RNG_SALT = 0x7a9e3f1d (eighth substream salt, pairwise-distinct from the 7 engine salts)
+- [Phase ?]: TrailerDiverted payload = {trailerId, tripId, fromHubId, toHubId, reason, occurredAt} — ids + clock only, no geo/RNG
+- [Phase ?]: Truck Decide priority ladder: rest > refuel > divert > hold > proceed (binding feasibility first)
+- [Phase ?]: [Phase 24-04] OODA-05: activeTripByTrailer serialized into SerializedWorldState (present-only-when-on); per-agent RNG stateless re-derive so no new rng field; chunked OODA-on run byte-identical to all-at-once
+- [Phase ?]: [Phase 24-04] OODA-on golden 94689f99… (seed 42/10k, 9170 events) captured reproducibility-first, != flags-off 3920accc; DET-03 ESLint guard bans Date.now/Math.random/async-queue/kysely in ooda/** (proven); TrailerDiverted canonicalized
+- [Phase 25-01 COORD-02]: 3 advisory coordination events (ActionSuggested/SuggestionAccepted/SuggestionRejected) added to closed DomainEvent union + zod; all SCOPE-NEUTRAL in scope.ts; ActionSuggested pinned via canonicalizeSuggestionPayload (coordinator/canonical.ts). kind=reroute|hold|consolidate|dispatch, reasonCode=hos|fuel|dock|infeasible, integer/string-only params + integer sim-time ms (no RNG/float). Zero behavior change (flags-off golden 3920accc + OODA-on 94689f99 byte-identical); pnpm typecheck is the exhaustiveness proof (not vitest — esbuild strips types).
+- [Phase 25-02 COORD-01/02]: in-fold `stepCoordinators` SimTask — one coordinator per center, sorted by centerId, bounded per-center scope, self-rescheduling (mirrors stepAgents). Rule-based `decideCoordinatorSuggestions` (pure, integer/string-only) for all 4 kinds into `pendingSuggestionsByTarget` (consumed P25-03, serialized P25-05). COORDINATOR_RNG_SALT=0x1c6ea54b (9th salt, pairwise-distinct, lazy `deriveCoordinatorRng` in pure coordinator/rng.ts leaf). Coordinator cadence==OODA cadence (5/1) + bootstrap-seeded BEFORE stepAgents ⇒ same-tick handshake. suggestionId=`centerId-tick-index` (byte-stable, collision-free); issuedAtSimMs=tick*MS_PER_TICK, ttlSimMs=6*MS_PER_TICK (TTL enforcement is P25-04). reroute needs activeTripByTrailer (OODA-on); all 4 kinds appear under all-on stack (hold/reroute/consolidate/dispatch). `coordinatorsEnabled` OFF (strict ===true) ⇒ no task/substream/emit, golden 3920accc + OODA-on 94689f99 byte-identical (two-part gate added).
+- [Phase ?]: 26-02: stepCoordinators reroute sourced from per-center pure runEpoch under coordinatorUsesOptimizer sub-flag; hold/consolidate/dispatch stay rule-based (COORD-06)
+- [Phase ?]: 26-02: partitionScopeByCenter (NET-05) wired LIVE as the per-center epoch scope; deterministic scope-size cap falls back to rule-based; global RollingLoop disabled under the flag (no double-plan)
+- [Phase ?]: [Phase 26-03 COORD-06]: optimizer-on golden captured reproducibility-first = edfa5a6d (DOCUMENTED-EQUAL to the Phase-25 coordinator golden, planner-truth #2 amended/Option A): the optimizer is genuinely invoked (instrumented: 2000 runEpoch epochs / 9663 pre-guard reroutes / 0 fallbacks) but on the center-headed/always-feasible per-center twin it only ENDORSES the same reroute the rule-based heuristic makes => byte-identical on every config. coordinatorUsesOptimizer two-part flags-off gate (false===absent + absent=>edfa5a6d, 3920accc/94689f99 intact); continuation-equivalence chunked==all-at-once 1/7/23/500 with NO new SerializedWorldState field. No production change. Phase-27 carry-over: make the optimizer reroute genuinely route-aware-divergent + reject-with-reason continental tuning.
+- [Phase ?]: OL 10 Style Options has no opacity property — encode per-style opacity in rgba() color string alpha channel
+- [Phase ?]: HubLayers interface: unified source for metric delta application + tier sources for per-tier OL layer styling
+- [Phase ?]: Static topology fields (hub kind/tier, route isBackbone) sent REST-only — never on ws tick payloads
+- [Phase ?]: P27-04 optimizerRerouteFor 3 pins removed; NEW golden 162efbd8
 
 ### Pending Todos
 
-- [RESOLVED 2026-06-21] The `*.test.tsx`-never-run gap is FIXED (branch feature/test-coverage-90): added a jsdom (`ui`) + Browser-Mode (`browser`, Playwright/Chromium) Vitest project + RTL + MSW; `test:all` now runs the jsdom lane, `test:browser` runs the map. Plus the honest cross-package coverage fix (`pnpm coverage` + `vitest.coverage.config.ts` aliasing `@mm/*`→src). Result: 78%→**95.2% lines / 94.0% stmts / 95.5% fn**, every package ≥91.7%, web 19%→93.3%.
-- [optional follow-up] `wsClient.ts` raw-socket connect path still 56% (the WsProvider render test drives a test context, not a live socket), and overall **branch** coverage is 82% (lines/stmts/fn are 94–95%). A focused top-up would close both if a 90% *branch* bar is wanted.
-- [RESOLVED v1.1 2026-06-22] The "realistic time model" candidate shipped: (a) optimizer now consumes expected dwell/transit (OPT-09/10), (b) distinct center-hub re-dispatch dwell modeled (TIME-02 `dwellCenter`), (c) transit distance-derived from ORS `duration_s` (TIME-01).
+- [Phase 23 planning] Confirm dataset source (SimpleMaps vs `all-the-cities`) + attribution mechanics; cross-state-metro de-dup canonical-coordinate rules; confirm final center count (~5–6 default) + backbone density against a real continental run. (research/SUMMARY.md "Research Flags")
+- [Phase 25 planning] The five anti-oscillation guards are well-specified but their **sim-time constants** (hysteresis dwell ~15 min, TTL ~5–8 min, cooldown K, lease expiry) need tuning + golden capture.
+- [Phase 26 planning] Profile per-center twin-build cost vs the synchronous in-fold budget; keep a heuristic-Decide fallback behind the sub-flag if too heavy.
+- [Phase 27] Resolve the vendored `@alexanderfedin/async-queue` `dist/` (commit `vendor/async-queue/dist/` recommended) + `vendor/*` workspace wiring + ESLint core-ban before any plumbing lands.
 
 ### Blockers/Concerns
 
-None — v1.2 shipped clean. v2.0 roadmap research confirmed zero new runtime dependencies. Phase 21 (FLOW-*) is the highest-integration phase; the `PlanSuperseded`/supersession-aware `PlanAccepted` design decision must be resolved during Phase 21 planning. Detection-cost-scales-with-state tech debt will be addressed in Phase 21 via `is_active` filter.
+blocking roadmap approval. Top risk carried into execution: **determinism keystone** — every phase must hold the two-part flags-off gate; the `applyHubInventory` O(n²) freeze (P1-BLOCKING, Phase 23) and the per-center coordinator oscillation/deadlock modes (Phase 25) are the first-class blockers flagged by PITFALLS.
+
+- 26-03 Task 2: optimizer-backed coordinator golden is byte-identical to the Phase-25 edfa5a6d golden on EVERY config (single-center, continental, fleet 2/4/8). Verified via instrumentation: runEpoch IS invoked (2000 epochs, 9663 reroutes, 0 fallbacks) but endorses the exact same reroute set as the rule-based path. Root cause in Plan-02 wiring: the optimizer twin route head is structurally pinned to obs.centerId (same target the rule-based heuristic picks) AND the twin is built always-feasible/unfrozen so the optimizer never declines a reroute the rule flags. Plan truth #2 (!= edfa5a6d) is unachievable without changing Plan-02 production reroute semantics — Rule-4 architectural decision required.
 
 ### Quick Tasks Completed
 
@@ -90,14 +122,16 @@ Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| *(none)* | | | |
+| v2.0 debt | Materialize the delivery-KPI projection before enabling event-log retention in a long run | Open | v2.0 close |
+| v2.0 debt | Add one all-flags-on lifecycle integration test | Open | v2.0 close |
 
 ## Session Continuity
 
-Last session: 2026-06-25T06:34:15.177Z
-Stopped at: context exhaustion at 75% (2026-06-25)
+Last session: 2026-06-27T20:39:01.845Z
+Stopped at: Completed 27-03: VIZ-15/VIZ-16 scale viz (cluster + tier styles)
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Review the v3.0 roadmap (.planning/ROADMAP.md) + traceability (.planning/REQUIREMENTS.md)
+- On approval, plan the foundation phase: `/gsd-plan-phase 23`

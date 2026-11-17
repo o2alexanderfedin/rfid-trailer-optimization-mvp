@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { validateEvent } from "@mm/domain";
+import { validateEvent, type FuelConfig } from "@mm/domain";
 import { simulate } from "../src/engine.js";
+import {
+  FLAGS_OFF_GOLDEN_SHA256,
+  OODA_ON_GOLDEN_SHA256,
+  COORDINATOR_ON_GOLDEN_SHA256,
+} from "./goldens.js";
 
 /**
  * SIM-02 — THE DETERMINISM KEYSTONE.
@@ -120,16 +125,14 @@ describe("deterministic event stream (SIM-02)", () => {
  * to replace the log-normal sampler with an integer lookup table (do NOT do this
  * unless the hash actually fails on CI).
  */
-// Captured from simulate({ seed: 42, durationTicks: 10000 }) on x86_64 (darwin),
-// 6172 events. This is the TRUE hash of the long-run stream (plan-03 GREEN).
-const LONG_RUN_GOLDEN_SHA256 =
-  "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861";
+// See goldens.ts for the canonical FLAGS_OFF_GOLDEN_SHA256 constant and its full
+// capture provenance (x86_64 darwin, 6172 events, reproducibility-first protocol).
 
 describe("10k-tick determinism golden (DET-02)", () => {
   it("simulate({ seed: 42, durationTicks: 10000 }) produces a committed SHA-256 hash", () => {
     const stream = simulate({ seed: 42, durationTicks: 10000 });
     const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
-    expect(hash).toBe(LONG_RUN_GOLDEN_SHA256);
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // Plan 19-08 Task D (folded from p19-r2): in-process reproducibility — two
@@ -145,7 +148,7 @@ describe("10k-tick determinism golden (DET-02)", () => {
       .update(JSON.stringify(simulate({ seed: 42, durationTicks: 10000 })))
       .digest("hex");
     expect(b).toBe(a);
-    expect(a).toBe(LONG_RUN_GOLDEN_SHA256);
+    expect(a).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 });
 
@@ -238,9 +241,7 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
     const hash = createHash("sha256")
       .update(JSON.stringify(stream))
       .digest("hex");
-    expect(hash).toBe(
-      "3920accc05220b45f79736cc98c9773fa7ffd8df08eb607bdbed2b8c054d6861",
-    );
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
   });
 
   // ...and the EXPLICIT false 10k-tick run is byte-identical to the absent run.
@@ -250,6 +251,236 @@ describe("DET-01 flags-off gate (v2.0 regression)", () => {
       seed: 42,
       durationTicks: 10000,
       outboundDeliveryEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // Phase 23 (NET-01/DET-01): the continental multi-center topology is OPT-IN and
+  // DEFAULT OFF. The two-part flags-off gate (mirrors the outboundDelivery case):
+  //   (a) `continentalTopology: false` is byte-identical to the flag being absent,
+  //   (b) the flag ABSENT => the seed-42 10k golden is still 3920accc... .
+  // This is the keystone witness that the whole Phase-23 generalization preserved
+  // byte-identical legacy replay (the seed-42 stream never moved).
+
+  // (a) explicit false === absent over a short run.
+  it("explicit continentalTopology: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      continentalTopology: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // (b) flag ABSENT => the seed-42 10k golden is byte-identical to 3920accc... .
+  it("continentalTopology ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(
+      FLAGS_OFF_GOLDEN_SHA256,
+    );
+  });
+
+  // ...and the EXPLICIT false 10k-tick continental run is byte-identical to absent.
+  it("continentalTopology: false is byte-identical to absent over the 10k golden run", () => {
+    const absent = simulate({ seed: 42, durationTicks: 10000 });
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      continentalTopology: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // Phase 24 (OODA-01/02/DET-01): the decentralized agent decision core is OPT-IN
+  // and DEFAULT OFF. The two-part flags-off gate (mirrors the continental case):
+  //   (a) `oodaAgentsEnabled: false` is byte-identical to the flag being absent,
+  //   (b) the flag ABSENT => the seed-42 10k golden is still 3920accc… .
+  // This is the keystone witness that wiring the `stepAgents` SimTask + the flag +
+  // the centralized-decision bypass preserved byte-identical legacy replay (the
+  // seed-42 stream never moved).
+
+  // (a) explicit false === absent over a short run.
+  it("explicit oodaAgentsEnabled: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      oodaAgentsEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // (b) flag ABSENT => the seed-42 10k golden is byte-identical to 3920accc… .
+  it("oodaAgentsEnabled ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(
+      FLAGS_OFF_GOLDEN_SHA256,
+    );
+  });
+
+  // ...and the EXPLICIT false 10k-tick OODA run is byte-identical to absent.
+  it("oodaAgentsEnabled: false is byte-identical to absent over the 10k golden run", () => {
+    const absent = simulate({ seed: 42, durationTicks: 10000 });
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      oodaAgentsEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // Phase 25 (COORD-01/04/DET-01): the advisory coordination-center process manager
+  // is OPT-IN and DEFAULT OFF. The two-part flags-off gate (mirrors the OODA case),
+  // CONSOLIDATED here in the canonical DET-01 gate file (it is also asserted in
+  // coordinator-engine.unit.test.ts; this is the keystone confirmation):
+  //   (a) `coordinatorsEnabled: false` is byte-identical to the flag being absent,
+  //   (b) the flag ABSENT => the seed-42 10k golden is still 3920accc… ,
+  //   (c) the EXPLICIT false 10k run is byte-identical to absent.
+  // This witnesses that wiring the `stepCoordinators` SimTask + the five guards + the
+  // same-tick handshake + the serialized guard state (25-05) preserved byte-identical
+  // legacy replay (the seed-42 stream never moved).
+
+  // (a) explicit false === absent over a short run.
+  it("explicit coordinatorsEnabled: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      coordinatorsEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // (b) flag ABSENT => the seed-42 10k golden is byte-identical to 3920accc… .
+  it("coordinatorsEnabled ABSENT is byte-identical to the seed-42 10k golden (DET-01)", () => {
+    const stream = simulate({ seed: 42, durationTicks: 10000 });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
+  });
+
+  // (c) ...and the EXPLICIT false 10k-tick coordinator run is byte-identical to absent.
+  it("coordinatorsEnabled: false is byte-identical to absent over the 10k golden run", () => {
+    const absent = simulate({ seed: 42, durationTicks: 10000 });
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      coordinatorsEnabled: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // Phase 26 (COORD-06/DET-01): the optimizer-backed REROUTE source is OPT-IN behind
+  // the SUB-flag `coordinatorUsesOptimizer` (a sub-flag of `coordinatorsEnabled`,
+  // DEFAULT OFF). The two-part flags-off gate for a SUB-flag — the keystone witness
+  // that the optimizer branch is byte-identically INERT when off:
+  //   (a) `coordinatorUsesOptimizer: false` === absent over a short run,
+  //   (b) the sub-flag ABSENT but `coordinatorsEnabled` ON (the all-on stack) ⇒ the
+  //       seed-42 stream is byte-identical to the PHASE-25 COORDINATOR golden
+  //       `edfa5a6d…` (absent ⇒ the rule-based reroute path is untouched),
+  //   (c) ALL v3.0 flags absent + explicit-false (incl. `coordinatorUsesOptimizer:
+  //       false`) ⇒ the seed-42 10k golden is still `3920accc…` AND the OODA-on golden
+  //       `94689f99…` is intact (the master flags-off gate re-asserted),
+  //   (d) `coordinatorUsesOptimizer: false` === absent over a 10k all-on run (the
+  //       longer false===absent witness).
+  // This witnesses that wiring the in-fold `runEpoch` reroute source + the scope-size
+  // cap fallback + the global-RollingLoop disable preserved byte-identical replay of
+  // BOTH the legacy flags-off stream (3920accc…) AND the Phase-25 coordinator stream
+  // (edfa5a6d…) when the sub-flag is off — the sub-flag changes ONLY the reroute SOURCE.
+
+  // The Phase-25 all-on coordinator stack (the EXACT config the coordinator-on golden
+  // `edfa5a6d…` was captured over — see coordinator-determinism.unit.test.ts): seed 42,
+  // 10k, `coordinatorsEnabled` layered onto the OODA-on flag set (hos + fuel + induction
+  // + consolidation + oodaAgentsEnabled). With `coordinatorUsesOptimizer` ABSENT this is
+  // the rule-based coordinator path, so it MUST still hash to `edfa5a6d…`.
+  const FUEL_ON: FuelConfig = {
+    enabled: true,
+    refuelThresholdMiles: 1200,
+    milesPerGallon: 6.5,
+    tankCapacityGallons: 150,
+    refuelTimeMinutes: 30,
+  };
+  const COORDINATOR_ON_OPTS = {
+    seed: 42,
+    durationTicks: 10000,
+    coordinatorsEnabled: true,
+    oodaAgentsEnabled: true,
+    hosEnabled: true,
+    fuel: FUEL_ON,
+    inductionEnabled: true,
+    consolidationEnabled: true,
+  } as const;
+  // COORDINATOR_ON_GOLDEN_SHA256 and OODA_ON_GOLDEN_SHA256 imported from goldens.ts
+
+  // (a) explicit false === absent over a short run.
+  it("explicit coordinatorUsesOptimizer: false is byte-identical to the flag being absent", () => {
+    const absent = simulate(FLAGS_OFF_OPTS);
+    const explicitFalse = simulate({
+      ...FLAGS_OFF_OPTS,
+      coordinatorUsesOptimizer: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+  });
+
+  // (b) sub-flag ABSENT (coordinators ON, all-on stack) ⇒ the Phase-25 coordinator
+  //     golden edfa5a6d… (the rule-based reroute path is byte-identically untouched).
+  it("coordinatorUsesOptimizer ABSENT (coordinators on) is byte-identical to the Phase-25 edfa5a6d… golden", () => {
+    const stream = simulate(COORDINATOR_ON_OPTS);
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(COORDINATOR_ON_GOLDEN_SHA256);
+  });
+
+  // ...and the EXPLICIT false all-on run is byte-identical to the sub-flag absent (so
+  // an explicit-false re-asserts edfa5a6d… too — false === absent on the all-on stack).
+  it("coordinatorUsesOptimizer: false (coordinators on) is byte-identical to absent over the edfa5a6d… golden run", () => {
+    const absent = simulate(COORDINATOR_ON_OPTS);
+    const explicitFalse = simulate({
+      ...COORDINATOR_ON_OPTS,
+      coordinatorUsesOptimizer: false,
+    });
+    expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
+    const hash = createHash("sha256")
+      .update(JSON.stringify(explicitFalse))
+      .digest("hex");
+    expect(hash).toBe(COORDINATOR_ON_GOLDEN_SHA256);
+  });
+
+  // (c) ALL v3.0 flags absent + explicit-false (incl. coordinatorUsesOptimizer:false)
+  //     ⇒ the seed-42 10k golden is still 3920accc… (the master flags-off re-assert).
+  it("coordinatorUsesOptimizer: false (all flags off) is byte-identical to the seed-42 10k 3920accc… golden", () => {
+    const explicitFalse = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      coordinatorUsesOptimizer: false,
+    });
+    const hash = createHash("sha256")
+      .update(JSON.stringify(explicitFalse))
+      .digest("hex");
+    expect(hash).toBe(FLAGS_OFF_GOLDEN_SHA256);
+  });
+
+  // (c, OODA arm) the OODA-on golden 94689f99… stays intact alongside the new sub-flag
+  //     (its absence perturbs nothing on the OODA-on stack either).
+  it("the OODA-on golden 94689f99… is intact with coordinatorUsesOptimizer absent", () => {
+    const stream = simulate({
+      seed: 42,
+      durationTicks: 10000,
+      oodaAgentsEnabled: true,
+      hosEnabled: true,
+      fuel: FUEL_ON,
+      inductionEnabled: true,
+      consolidationEnabled: true,
+    });
+    const hash = createHash("sha256").update(JSON.stringify(stream)).digest("hex");
+    expect(hash).toBe(OODA_ON_GOLDEN_SHA256);
+  });
+
+  // (d) explicit false === absent over a 10k all-on run (the longer false===absent
+  //     witness — the sub-flag is byte-identically inert even over the full golden run).
+  it("coordinatorUsesOptimizer: false === absent over a 10k all-on run (longer witness)", () => {
+    const absent = simulate(COORDINATOR_ON_OPTS);
+    const explicitFalse = simulate({
+      ...COORDINATOR_ON_OPTS,
+      coordinatorUsesOptimizer: false,
     });
     expect(JSON.stringify(explicitFalse)).toBe(JSON.stringify(absent));
   });

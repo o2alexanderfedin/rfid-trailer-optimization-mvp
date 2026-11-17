@@ -1,14 +1,11 @@
 import type { Kysely } from "kysely";
 import type { Database } from "@mm/event-store";
-import { readAll } from "@mm/event-store";
-import type { OccurredEvent, ProjectionDb } from "@mm/projections";
-import { emptyTrailerFuelState, getTrailerMiles, trailerFuelReducer } from "@mm/projections";
+import type { ProjectionDb } from "@mm/projections";
 import type { Hub, HosClock, LonLat, TimingConfig } from "@mm/domain";
 import {
   DEFAULT_TIMING_CONFIG,
   expectedTransitMinutes,
   haversineKm,
-  isoToEpochMinutes,
 } from "@mm/domain";
 import type { RoadGeometryFile } from "@mm/simulation";
 import { loadStaticRoadGeometry, routeId } from "@mm/simulation";
@@ -91,49 +88,27 @@ function coordHub(point: LonLat): Hub {
 }
 
 /**
- * SP2 (spec §6/§7): fold the trailer-fuel reducer over the WHOLE event log to
- * derive each trailer's `milesSinceRefuel`. Reuses the same PURE reducer the
- * catch-up runner uses (DRY) so the optimizer's odometer matches the projection.
- * Deterministic: the log is read in `global_seq` order and the reducer reads only
- * logged geometry + event payloads (no clock, no RNG). Returns trailerId → miles.
+ * PERF-02 (SP2 §6/§7): read the trailer fuel odometer from the incremental
+ * `trailer_fuel` projection — a bounded `SELECT *` replacing the old
+ * `readAll(0n)` full-log fold. The projection is maintained by `applyTrailerFuel`
+ * (driven by the existing `applyInline` cursor), so this read is O(trailers),
+ * not O(events). Returns trailerId → milesSinceRefuel.
  */
-async function computeMilesSinceRefuel(db: SnapshotDb): Promise<Map<string, number>> {
-  const es = db as unknown as Kysely<Database>;
-  const stored = await readAll(es, 0n);
-  let state = emptyTrailerFuelState;
-  for (const s of stored) {
-    const occurred: OccurredEvent = { event: s.event, occurredAt: s.occurredAt };
-    state = trailerFuelReducer(state, occurred);
-  }
-  const out = new Map<string, number>();
-  for (const trailerId of state.fuel.keys()) {
-    out.set(trailerId, getTrailerMiles(state, trailerId));
-  }
-  return out;
+async function readMilesSinceRefuel(db: SnapshotDb): Promise<Map<string, number>> {
+  const rows = await db.selectFrom("trailer_fuel").selectAll().execute();
+  return new Map(rows.map((r) => [r.trailer_id, r.miles_since_refuel]));
 }
 
 /**
- * IND-03: scan the event log for `PackageInducted` events and build a
- * `packageId → deadlineMin` map (epoch-minutes) from each event's `slaDeadlineIso`
- * (locked at induction). The optimizer reads this to set `TwinBlock.deadlineMin`
- * for inducted freight, enabling slack / critical-ratio prioritization (IND-03
- * success criterion 2).
- *
- * Deterministic + PURE READ: the log is read in `global_seq` order, so a packageId
- * appearing more than once resolves last-write-wins. No clock, no RNG, no writes.
+ * PERF-02 (IND-03): read the induction deadlines from the incremental
+ * `induction_deadline` projection — a bounded `SELECT *` replacing the old
+ * `readAll(0n)` full-log scan for PackageInducted events. The projection is
+ * maintained by `applyInductionDeadline` (LWW, driven by `applyInline`).
+ * Returns packageId → deadlineMin (epoch-minutes).
  */
-async function buildInductionDeadlines(db: SnapshotDb): Promise<Map<string, number>> {
-  const es = db as unknown as Kysely<Database>;
-  const stored = await readAll(es, 0n);
-  const out = new Map<string, number>();
-  for (const s of stored) {
-    if (s.event.type !== "PackageInducted") continue;
-    out.set(
-      s.event.payload.packageId,
-      isoToEpochMinutes(s.event.payload.slaDeadlineIso),
-    );
-  }
-  return out;
+async function readInductionDeadlines(db: SnapshotDb): Promise<Map<string, number>> {
+  const rows = await db.selectFrom("induction_deadline").selectAll().execute();
+  return new Map(rows.map((r) => [r.package_id, r.deadline_min]));
 }
 
 /**
@@ -403,9 +378,11 @@ export async function buildTwinSnapshot(
   // IND-03: also scan the log for PackageInducted deadlines (packageId →
   // epoch-minutes). Runs alongside the fuel fold — both are pure read scans of the
   // same log. Used to set TwinBlock.deadlineMin for inducted freight.
+  // PERF-02: bounded reads from incremental projections (replaces two readAll(0n) scans).
+  // Cost is now O(trailers) + O(inducted packages), not O(events) — independent of run length.
   const [milesSinceRefuelByTrailer, inductionDeadlines] = await Promise.all([
-    computeMilesSinceRefuel(db),
-    buildInductionDeadlines(db),
+    readMilesSinceRefuel(db),
+    readInductionDeadlines(db),
   ]);
 
   // 3. Read operational projections. OPT-HOS-01: also read the Phase-13

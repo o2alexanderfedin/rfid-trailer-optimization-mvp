@@ -29,12 +29,21 @@ describe("exceptionKindToWire", () => {
     expect(exceptionKindToWire("missed-unload")).toBe("missedUnload");
   });
 
+  it("maps 'coordination-rejected' → 'blockedFreight' (COORD-03 reuses the existing feed)", () => {
+    expect(exceptionKindToWire("coordination-rejected")).toBe("blockedFreight");
+  });
+
   it("covers every projection ExceptionKind member", () => {
     // Exhaustive: every member of the closed union maps to a wire literal.
-    const allKinds: readonly ExceptionKind[] = ["wrong-trailer", "missed-unload"];
+    const allKinds: readonly ExceptionKind[] = [
+      "wrong-trailer",
+      "missed-unload",
+      "coordination-rejected",
+    ];
     const expected: Record<ExceptionKind, ExceptionItem["kind"]> = {
       "wrong-trailer": "wrongTrailer",
       "missed-unload": "missedUnload",
+      "coordination-rejected": "blockedFreight",
     };
     for (const k of allKinds) {
       expect(exceptionKindToWire(k)).toBe(expected[k]);

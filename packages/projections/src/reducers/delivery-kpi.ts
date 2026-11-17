@@ -71,6 +71,10 @@ export function deliveryKpiReducer(
     case "TruckRefueled":
     case "PackageInducted":
     case "PlanSuperseded":
+    case "TrailerDiverted": // Phase-24 OODA-01: a re-route is not a delivery-KPI event
+    case "ActionSuggested": // Phase-25 COORD-02: advisory suggestion events are not delivery-KPI events
+    case "SuggestionAccepted":
+    case "SuggestionRejected":
       return state;
     default:
       return assertNeverEvent(event);

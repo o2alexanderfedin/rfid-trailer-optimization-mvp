@@ -16,6 +16,7 @@
  */
 import { useEffect, useState } from "react";
 import { AlertFeed } from "./AlertFeed.js";
+import { SuggestionFeed } from "./SuggestionFeed.js";
 import { TrailerDetail } from "./TrailerDetail.js";
 import { AuditTimeline } from "./AuditTimeline.js";
 import { HubDetail } from "./HubDetail.js";
@@ -24,6 +25,7 @@ import { DeliveryKpi } from "./DeliveryKpi.js";
 import { MoneySlide } from "./MoneySlide.js";
 import { SpeedControl } from "./SpeedControl.js";
 import type { FeedEntry } from "./AlertFeed.js";
+import type { SuggestionFeedEntry } from "./useSuggestions.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,6 +40,12 @@ interface RightRailProps {
   readonly selectedTrailerId: string | null;
   /** VIZ-07: the currently selected hub id (from a hub map click), or null. */
   readonly selectedHubId?: string | null;
+  /** VIZ-17: the sorted advisory suggestion feed (from useSuggestions in App). */
+  readonly suggestionFeed?: readonly SuggestionFeedEntry[];
+  /** VIZ-17: whether the Suggestions toggle is ON (governs feed + map overlay). */
+  readonly showSuggestions?: boolean;
+  /** VIZ-17: callback to toggle the Suggestions overlay + feed on/off. */
+  readonly onToggleSuggestions?: ((on: boolean) => void) | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +66,9 @@ export function RightRail({
   feed,
   selectedTrailerId,
   selectedHubId = null,
+  suggestionFeed = [],
+  showSuggestions = false,
+  onToggleSuggestions,
 }: RightRailProps): React.JSX.Element {
   const [activeTab, setActiveTab] = useState<DetailTab>("kpis");
 
@@ -75,6 +86,63 @@ export function RightRail({
     <aside className="right-rail" data-testid="right-rail" aria-label="Operator panels">
       {/* --- Speed of Time gauge (fixed-height, decoupled from the map) ---- */}
       <SpeedControl />
+
+      {/* --- VIZ-17: Suggestions toggle (default OFF, blue accent ON) ------- */}
+      <div className="right-rail__section right-rail__section--toggle" style={{ padding: "4px 12px" }}>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            cursor: "pointer",
+            userSelect: "none",
+            fontSize: "12px",
+            color: showSuggestions ? "#93c5fd" : "#94a3b8",
+          }}
+          data-testid="suggestions-toggle-label"
+        >
+          <input
+            type="checkbox"
+            checked={showSuggestions}
+            onChange={(e) => onToggleSuggestions?.(e.target.checked)}
+            data-testid="suggestions-toggle"
+            style={{ accentColor: "#1d4ed8" }}
+          />
+          Suggestions
+          {showSuggestions && suggestionFeed.length > 0 && (
+            <span
+              className="right-rail__badge"
+              data-testid="suggestion-count"
+              style={{ backgroundColor: "#1d4ed8" }}
+            >
+              {suggestionFeed.length}
+            </span>
+          )}
+        </label>
+      </div>
+
+      {/* --- VIZ-17: Advisory Suggestions feed (visible when toggle is ON) -- */}
+      {showSuggestions && (
+        <section className="right-rail__section right-rail__section--feed">
+          <header className="right-rail__section-header">
+            <h2 className="right-rail__section-title">
+              Advisory Suggestions
+              {suggestionFeed.length > 0 && (
+                <span
+                  className="right-rail__badge"
+                  data-testid="suggestion-feed-count"
+                  style={{ backgroundColor: "#1d4ed8" }}
+                >
+                  {suggestionFeed.length}
+                </span>
+              )}
+            </h2>
+          </header>
+          <div className="right-rail__feed-scroll">
+            <SuggestionFeed feed={suggestionFeed} />
+          </div>
+        </section>
+      )}
 
       {/* --- Alert Feed (UI-01) ------------------------------------------- */}
       <section className="right-rail__section right-rail__section--feed">

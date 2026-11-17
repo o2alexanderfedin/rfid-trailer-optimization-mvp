@@ -157,6 +157,26 @@ vi.mock("ol/layer/Vector.js", () => {
   return { default: V };
 });
 
+vi.mock("ol/layer/VectorImage.js", () => {
+  class VI {
+    readonly opts: { source?: unknown; style?: unknown; declutter?: boolean };
+    constructor(opts: { source?: unknown; style?: unknown; declutter?: boolean }) {
+      this.opts = opts;
+    }
+  }
+  return { default: VI };
+});
+
+vi.mock("ol/source/Cluster.js", () => {
+  class C {
+    readonly opts: { distance?: number; minDistance?: number; source?: unknown };
+    constructor(opts: { distance?: number; minDistance?: number; source?: unknown }) {
+      this.opts = opts;
+    }
+  }
+  return { default: C };
+});
+
 vi.mock("ol/proj.js", () => ({ fromLonLat }));
 
 /**
@@ -182,26 +202,29 @@ import {
   removeTrailerFeature,
   applyHubBuckets,
   applyRouteBuckets,
+  type HubLayers,
 } from "./layers.js";
-import { hubStyle, routeStyle, trailerStyle } from "./coloring.js";
+import { hubStyleTiered, routeStyleTiered, trailerStyle } from "./coloring.js";
 
 // ---------------------------------------------------------------------------
 // Helpers / fixtures
 // ---------------------------------------------------------------------------
 
-function hub(hubId: string, lon: number, lat: number, name = hubId): HubDto {
-  return { hubId, name, lon, lat };
+function hub(hubId: string, lon: number, lat: number, name = hubId, kind: HubDto["kind"] = "spoke"): HubDto {
+  return { hubId, name, lon, lat, kind, tier: kind === "center" ? 1 : 2 };
 }
 
 function route(
   routeId: string,
   geometry: ReadonlyArray<readonly [number, number]>,
+  isBackbone = false,
 ): RouteDto {
   return {
     routeId,
     fromHubId: "A",
     toHubId: "B",
     geometry: geometry as RouteDto["geometry"],
+    isBackbone,
   };
 }
 
@@ -225,31 +248,51 @@ function asSource(source: unknown): MockVectorSource {
   return source as MockVectorSource;
 }
 
+interface MockVectorImageLayer {
+  opts: { source?: unknown; style?: unknown; declutter?: boolean };
+}
+interface MockClusterSource {
+  opts: { distance?: number; minDistance?: number; source?: unknown };
+}
+
 // ---------------------------------------------------------------------------
-// createHubLayer
+// createHubLayer (VIZ-15/16 — split center/spoke layers)
 // ---------------------------------------------------------------------------
 
 describe("createHubLayer", () => {
-  it("creates one Point feature per hub with id `hub:<id>`", () => {
-    const { source } = createHubLayer([hub("MEM", -90, 35), hub("ORD", -87, 41)]);
-    const src = asSource(source);
+  it("returns unified source with all hub features (center + spoke) keyed hub:<id>", () => {
+    const layers: HubLayers = createHubLayer([
+      hub("MEM", -90, 35, "Memphis", "center"),
+      hub("ORD", -87, 41, "Chicago"),
+    ]);
+    const src = asSource(layers.source);
     expect(src.features.length).toBe(2);
     expect(src.getFeatureById("hub:MEM")).not.toBeNull();
     expect(src.getFeatureById("hub:ORD")).not.toBeNull();
   });
 
-  it("projects [lon, lat] through fromLonLat (order preserved) into the Point geom", () => {
-    const { source } = createHubLayer([hub("MEM", -90, 35)]);
+  it("center hubs go into centerSource, spoke hubs into spokeSource", () => {
+    const layers: HubLayers = createHubLayer([
+      hub("DFW", -97, 32, "Dallas", "center"),
+      hub("LAX", -118, 33, "LA", "spoke"),
+    ]);
+    expect(asSource(layers.centerSource).getFeatureById("hub:DFW")).not.toBeNull();
+    expect(asSource(layers.centerSource).getFeatureById("hub:LAX")).toBeNull();
+    expect(asSource(layers.spokeSource).getFeatureById("hub:LAX")).not.toBeNull();
+    expect(asSource(layers.spokeSource).getFeatureById("hub:DFW")).toBeNull();
+  });
+
+  it("projects [lon, lat] through fromLonLat into the Point geometry", () => {
+    const layers: HubLayers = createHubLayer([hub("MEM", -90, 35)]);
     expect(fromLonLat).toHaveBeenCalledWith([-90, 35]);
-    const f = asSource(source).getFeatureById("hub:MEM");
+    const f = asSource(layers.source).getFeatureById("hub:MEM");
     const geom = f?.getGeometry() as MockPoint;
-    // fromLonLat mock multiplies by 10 → [-900, 350]; lon/lat order intact.
     expect(geom.getCoordinates()).toEqual([-900, 350]);
   });
 
-  it("stores hub metadata + default metric buckets (0) on the feature", () => {
-    const { source } = createHubLayer([hub("MEM", -90, 35, "Memphis")]);
-    const f = asSource(source).getFeatureById("hub:MEM");
+  it("stores hub metadata + default metric buckets (0) on the unified source feature", () => {
+    const layers: HubLayers = createHubLayer([hub("MEM", -90, 35, "Memphis")]);
+    const f = asSource(layers.source).getFeatureById("hub:MEM");
     expect(f?.get("hubId")).toBe("MEM");
     expect(f?.get("name")).toBe("Memphis");
     expect(f?.get("volumeBucket")).toBe(0);
@@ -257,14 +300,24 @@ describe("createHubLayer", () => {
     expect(f?.get("congestionBucket")).toBe(0);
   });
 
-  it("creates a VectorSource with useSpatialIndex and a layer styled by hubStyle", () => {
-    const { layer, source } = createHubLayer([]);
-    const src = asSource(source);
-    expect(src.opts).toEqual({ useSpatialIndex: true });
-    expect(src.features.length).toBe(0);
-    const olLayer = layer as unknown as MockVectorLayer;
-    expect(olLayer.opts.source).toBe(source);
-    expect(olLayer.opts.style).toBe(hubStyle);
+  it("centerLayer uses hubStyleTiered", () => {
+    const layers: HubLayers = createHubLayer([]);
+    const olLayer = layers.centerLayer as unknown as MockVectorLayer;
+    expect(olLayer.opts.style).toBe(hubStyleTiered);
+  });
+
+  it("spokeLayer is a VectorImageLayer with declutter=true", () => {
+    const layers: HubLayers = createHubLayer([]);
+    const olLayer = layers.spokeLayer as unknown as MockVectorImageLayer;
+    expect(olLayer.opts.declutter).toBe(true);
+  });
+
+  it("spoke cluster source has distance=40 and minDistance=20 (UI-SPEC)", () => {
+    const layers: HubLayers = createHubLayer([hub("LAX", -118, 33)]);
+    const spokeLayer = layers.spokeLayer as unknown as MockVectorImageLayer;
+    const clusterSrc = spokeLayer.opts.source as MockClusterSource;
+    expect(clusterSrc.opts.distance).toBe(40);
+    expect(clusterSrc.opts.minDistance).toBe(20);
   });
 });
 
@@ -305,12 +358,18 @@ describe("createRouteLayer", () => {
     ]);
   });
 
-  it("creates a VectorSource with useSpatialIndex and a layer styled by routeStyle", () => {
+  it("creates a VectorSource with useSpatialIndex and a layer styled by routeStyleTiered", () => {
     const { layer, source } = createRouteLayer([]);
     expect(asSource(source).opts).toEqual({ useSpatialIndex: true });
     const olLayer = layer as unknown as MockVectorLayer;
     expect(olLayer.opts.source).toBe(source);
-    expect(olLayer.opts.style).toBe(routeStyle);
+    expect(olLayer.opts.style).toBe(routeStyleTiered);
+  });
+
+  it("stores isBackbone on the route feature (VIZ-16)", () => {
+    const { source } = createRouteLayer([route("R1", [[-90, 35], [-87, 41]], true)]);
+    const f = asSource(source).getFeatureById("route:R1");
+    expect(f?.get("isBackbone")).toBe(true);
   });
 });
 

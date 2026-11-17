@@ -19,13 +19,16 @@ import {
   createTrailerStopLayer,
   createInductionLayer,
   createDeliveryLayer,
+  createSuggestionLayer,
   applyTrailerStops,
   flashInduction,
   flashDelivery,
+  flashSuggestion,
   upsertTrailerKeyframe,
   removeTrailerFeature,
   applyHubBuckets,
   applyRouteBuckets,
+  type HubLayers,
 } from "./layers.js";
 import {
   makeEntityMaps,
@@ -82,9 +85,19 @@ interface MapViewProps {
    * co-located) trailer hit so the Hub Detail panel opens reliably.
    */
   readonly onHubSelect?: ((hubId: string | null) => void) | undefined;
+  /**
+   * VIZ-17: whether the advisory suggestion overlay is visible (default false).
+   * When false the suggestion layer is hidden and no flash markers are placed.
+   * The same toggle governs the Advisory Suggestions rail feed (in RightRail).
+   */
+  readonly showSuggestions?: boolean;
 }
 
-export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): React.JSX.Element {
+export function MapView({
+  onTrailerSelect,
+  onHubSelect,
+  showSuggestions = false,
+}: MapViewProps = {}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<OlMap | null>(null);
   const trailerSourceRef = useRef<VectorSource | null>(null);
@@ -96,6 +109,10 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
   const inductionSourceRef = useRef<VectorSource | null>(null);
   // VIZ-14: the transient outbound-delivery flash layer source.
   const deliverySourceRef = useRef<VectorSource | null>(null);
+  // VIZ-17: the transient advisory-suggestion flash layer source + layer ref for
+  // toggle visibility without recreating the map.
+  const suggestionSourceRef = useRef<VectorSource | null>(null);
+  const suggestionLayerRef = useRef<VectorLayer | null>(null);
 
   /** Route DTOs cached so we can look up LineString geometry for TrailerAnim. */
   const routeDtosRef = useRef<Map<string, RouteDto>>(new Map());
@@ -133,11 +150,17 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
   );
   onHubSelectRef.current = onHubSelect;
 
+  /** VIZ-17: stable ref for the suggestions-visible flag so onEnvelope stays stable. */
+  const showSuggestionsRef = useRef(showSuggestions);
+  showSuggestionsRef.current = showSuggestions;
+
   /** Leak guard counters. */
   const mapInstancesRef = useRef(0);
   const mapDisposedRef = useRef(0);
   const trailerSourceInstancesRef = useRef(0);
   const snapshotCountRef = useRef(0);
+  /** Id of the trailer whose OL uid `data-trailer-uid` reports (leak guard). */
+  const probeTrailerIdRef = useRef<string | number | undefined>(undefined);
 
   /** Entity maps — off the React render path. */
   const entityMapsRef = useRef<EntityMaps>(makeEntityMaps());
@@ -174,14 +197,36 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
     const delivery = createDeliveryLayer();
     deliverySourceRef.current = delivery.source;
 
+    // VIZ-17: the transient advisory-suggestion layer, ABOVE the delivery layer.
+    // Decluttered so a burst of accepts/rejects never stacks unreadably. Visibility
+    // is controlled by `showSuggestions` (default OFF — clean map first).
+    const suggestion = createSuggestionLayer();
+    suggestionSourceRef.current = suggestion.source;
+    suggestionLayerRef.current = suggestion.layer;
+    suggestion.layer.setVisible(false); // default OFF per UI-SPEC
+
     const map = new OlMap({
       target: container,
       layers: [
-        new TileLayer({ source: new OSM({ crossOrigin: "anonymous" }) }),
+        new TileLayer({
+          source: new OSM({
+            crossOrigin: "anonymous",
+            // HUB-04: the hub set is derived from the GeoNames city dataset
+            // (via `all-the-cities`), which is CC BY 4.0 and requires visible
+            // attribution. OL APPENDS these to its default "© OpenStreetMap
+            // contributors" credit, so both render in the on-map attribution
+            // control alongside the basemap credit.
+            attributions: [
+              'City data © <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">GeoNames</a>, ' +
+                '<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>',
+            ],
+          }),
+        }),
         trailer.layer,
         stop.layer,
         induction.layer,
         delivery.layer,
+        suggestion.layer,
       ],
       view: new View({
         center: fromLonLat([USA_CENTER[0], USA_CENTER[1]]),
@@ -267,15 +312,20 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
           hubLonLatRef.current.set(h.hubId, [h.lon, h.lat]);
         }
 
-        const hubLayer = createHubLayer(hubs);
+        const hubLayers: HubLayers = createHubLayer(hubs);
         const routeLayer = createRouteLayer(routes);
-        hubSourceRef.current = hubLayer.source;
+        // VIZ-15/16: use the unified source for metric bucket updates.
+        // Both center and spoke features live in hubLayers.source (keyed hub:<id>).
+        hubSourceRef.current = hubLayers.source;
         routeSourceRef.current = routeLayer.source;
 
-        // Routes beneath hubs beneath trailers (trailers stay top-most).
+        // Layer insertion order: routes → spoke cluster → center tier → trailers.
+        // Centers (tier 1) are inserted ABOVE the spoke cluster so they are always
+        // visible and never obscured by cluster bubbles.
         map.getLayers().insertAt(1, routeLayer.layer);
-        map.getLayers().insertAt(2, hubLayer.layer);
-        setAttr("data-hub-count", hubLayer.source.getFeatures().length);
+        map.getLayers().insertAt(2, hubLayers.spokeLayer);
+        map.getLayers().insertAt(3, hubLayers.centerLayer);
+        setAttr("data-hub-count", hubLayers.source.getFeatures().length);
         setAttr("data-route-count", routeLayer.source.getFeatures().length);
       } catch {
         /* a stubbed/failed geo fetch leaves the basemap + live trailers usable */
@@ -315,11 +365,21 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       stopSourceRef.current = null;
       inductionSourceRef.current = null;
       deliverySourceRef.current = null;
+      suggestionSourceRef.current = null;
+      suggestionLayerRef.current = null;
       trailerAnimsRef.current.clear();
       routeDtosRef.current.clear();
       hubLonLatRef.current.clear();
     };
   }, [setAttr]);
+
+  // --- VIZ-17: sync suggestion layer visibility to the prop ------------------
+  // When the "Suggestions" toggle flips, show/hide the OL layer in place
+  // without recreating the map. The ref guards against the layer not yet
+  // created (first render before the async geo fetch completes).
+  useEffect(() => {
+    suggestionLayerRef.current?.setVisible(showSuggestions);
+  }, [showSuggestions]);
 
   // --- Apply each ws envelope (VIZ-02 keyframes + VIZ-03 bucket deltas) -----
   const onEnvelope = useCallback(
@@ -330,6 +390,7 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
       const stopSource = stopSourceRef.current;
       const inductionSource = inductionSourceRef.current;
       const deliverySource = deliverySourceRef.current;
+      const suggestionSource = suggestionSourceRef.current;
       if (trailerSource === null) return;
 
       // Drive the local clock's PLAYBACK RATE from the server's effective speed
@@ -416,13 +477,43 @@ export function MapView({ onTrailerSelect, onHubSelect }: MapViewProps = {}): Re
             }
           }
         }
+        // VIZ-17: flash a transient accept/reject marker at each suggestion's
+        // target hub for ~2500ms (only when the Suggestions toggle is ON).
+        // `locationHubId` is resolved to lon/lat from the static hub cache.
+        // `suggestions` exists ONLY on a TickPayload (Pitfall-7), so a reconnect
+        // snapshot never re-flashes historical suggestion outcomes.
+        if (suggestionSource !== null && showSuggestionsRef.current && payload.suggestions !== undefined) {
+          for (const ev of payload.suggestions) {
+            if (ev.locationHubId === "") continue; // no hub resolved — skip marker
+            const lonLat = hubLonLatRef.current.get(ev.locationHubId);
+            if (lonLat !== undefined) {
+              flashSuggestion(
+                suggestionSource,
+                ev.suggestionId,
+                lonLat[0],
+                lonLat[1],
+                ev.outcome,
+              );
+            }
+          }
+        }
       }
 
       setAttr("data-trailer-count", trailerSource.getFeatures().length);
 
-      // Leak guard: expose the OL uid of a stable trailer feature.
-      const probe = trailerSource.getFeatures()[0];
-      if (probe !== undefined) {
+      // Leak guard: expose the OL uid of ONE trailer, followed by its id. The
+      // uid changes only if that trailer's feature is recreated. Do not take
+      // `getFeatures()[0]`: the spatial index reorders features as trailers
+      // move, so "the first feature" is a different live trailer each tick.
+      let probe =
+        probeTrailerIdRef.current === undefined
+          ? null
+          : trailerSource.getFeatureById(probeTrailerIdRef.current);
+      if (probe === null) {
+        probe = trailerSource.getFeatures()[0] ?? null;
+        probeTrailerIdRef.current = probe?.getId();
+      }
+      if (probe !== null) {
         setAttr("data-trailer-uid", getUid(probe));
       }
 

@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type {
+  actionSuggestedSchema,
   driverAssignedToTripSchema,
   driverDutyStateChangedSchema,
   driverRegisteredSchema,
@@ -18,8 +19,11 @@ import type {
   rfidObservedSchema,
   routeRegisteredSchema,
   severitySchema,
+  suggestionAcceptedSchema,
+  suggestionRejectedSchema,
   trailerArrivedAtHubSchema,
   trailerDepartedSchema,
+  trailerDivertedSchema,
   trailerDockedSchema,
   truckRefueledSchema,
   truckRestedSchema,
@@ -169,6 +173,48 @@ export type PlanSuperseded = z.infer<typeof planSupersededSchema>;
  */
 export type PackageDelivered = z.infer<typeof packageDeliveredSchema>;
 
+// --- Phase-24 OODA truck divert (OODA-01) -----------------------------------
+
+/**
+ * The OODA truck agent's re-route decision (OODA-01 / Phase 24) — the ONE
+ * genuinely-new truck decision with no current centralized analog. A truck
+ * diverts from its planned next hub (`fromHubId`) to an alternate (`toHubId`)
+ * with a closed `reason`. Carries `tripId` + from/to hub ids for a replayable
+ * audit trail (T-24-02); NO lon/lat, NO RNG (geometry-free).
+ */
+export type TrailerDiverted = z.infer<typeof trailerDivertedSchema>;
+
+// --- Phase-25 advisory coordination events (COORD-02) -----------------------
+
+/**
+ * An ADVISORY coordination suggestion from a regional-center coordinator
+ * (COORD-01/02 / Phase 25). NON-binding: the target Phase-24 agent accepts it
+ * (→ a binding event + {@link SuggestionAccepted}) or rejects it against its own
+ * local feasibility (→ {@link SuggestionRejected}). The RICH payload feeds the
+ * five anti-oscillation guards (COORD-04). Ids + a closed `kind` enum + an
+ * integer/string-only `params` + sim-time INTEGER ms only — NO lon/lat, NO RNG
+ * (geometry-free; the hashed payload is pinned via `canonicalizeSuggestionPayload`).
+ * Streamed on `coordinator-<centerId>`. SCOPE-NEUTRAL in scope.ts.
+ */
+export type ActionSuggested = z.infer<typeof actionSuggestedSchema>;
+
+/**
+ * The target agent ACCEPTED an {@link ActionSuggested}; it then emits the
+ * corresponding binding domain event in the SAME in-fold step. Carries the
+ * `suggestionId` correlation key + the virtual-clock `occurredAt`. Streamed on
+ * the target's own stream. SCOPE-NEUTRAL — never re-triggers the coordinator.
+ */
+export type SuggestionAccepted = z.infer<typeof suggestionAcceptedSchema>;
+
+/**
+ * The target agent DECLINED an {@link ActionSuggested} against the binding local
+ * feasibility it alone knows (Phase 24). The CLOSED `reasonCode`
+ * (`hos | fuel | dock | infeasible`) drives the visible reject-with-reason demo
+ * moment (COORD-03, surfacing wired in Plan 03). SCOPE-NEUTRAL (anti-feedback-
+ * storm, Pitfall 11).
+ */
+export type SuggestionRejected = z.infer<typeof suggestionRejectedSchema>;
+
 /**
  * The closed `DomainEvent` union — the single contract every other package
  * imports (FND-01). Adding an event means adding a member here AND a schema in
@@ -206,7 +252,13 @@ export type DomainEvent =
   // Phase-21 bidirectional freight / consolidation (FLOW-04 / D-21-1).
   | PlanSuperseded
   // Phase-22 terminal delivery event (OUT-01).
-  | PackageDelivered;
+  | PackageDelivered
+  // Phase-24 OODA truck divert (OODA-01).
+  | TrailerDiverted
+  // Phase-25 advisory coordination events (COORD-02).
+  | ActionSuggested
+  | SuggestionAccepted
+  | SuggestionRejected;
 
 /** The discriminator literal — useful for exhaustive switches in reducers. */
 export type DomainEventType = DomainEvent["type"];

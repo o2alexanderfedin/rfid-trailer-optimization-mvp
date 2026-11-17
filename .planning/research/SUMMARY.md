@@ -1,393 +1,223 @@
-# Research Summary — Milestone v2.0 "Complete Simulation Model"
+# Project Research Summary
 
-**Project:** Middle-Mile Trailer Optimization Platform
-**Domain:** Deterministic, event-sourced discrete-event logistics simulation
-**Researched:** 2026-06-23
-**Confidence:** HIGH (all four research files grounded in live codebase reads)
+**Project:** Middle-Mile Trailer Optimization Platform — Milestone **v3.0 "Continental OODA Network"**
+**Domain:** Continental-scale, event-sourced, deterministic discrete-event logistics simulation (golden-replay keystone)
+**Researched:** 2026-06-26
+**Confidence:** HIGH (codebase-grounded integration + determinism; registry-verified stack) / MEDIUM-HIGH (topology + coordination, where the three sources diverged and are reconciled below)
+
+> **This is a SUBSEQUENT milestone on a shipped product** (v1.0–v2.1: single-center sim, RFID fusion, LIFO planner, rolling-horizon optimizer, HOS, fuel/rest, full freight lifecycle, live map). The v1–v2 stack/architecture is NOT re-evaluated. This synthesis covers ONLY the four new v3.0 capability clusters and how they layer onto the deterministic core without breaking byte-identical replay. It feeds requirements + roadmap authoring, so it is deliberately decisive.
 
 ---
 
 ## Executive Summary
 
-v2.0 closes four tightly-coupled gaps in an already-shipped, deterministic, event-sourced TS/Node simulation: making the run open-ended (today it halts at ~120 ticks), adding freight that enters from outside (today only the center hub spawns packages), adding a genuine terminal event when freight leaves a destination hub (today `PackageArrivedAtHub` is the terminal — which is ambiguous for transit stops), and making the return trailer leg carry real consolidation freight (today trailers return empty). All four can be realized through pure engine extensions — no new runtime dependencies are required. The stack verdict is unambiguous: extend the existing `EventQueue`/`generate()` core with opt-in feature flags, two new RNG salt constants, and a renamed pending-manifest data structure. Nothing else.
+v3.0 grows the network from 10 fixed hubs to a **continental topology (~80–130 big-city hubs, 1–3 per state, on a small set of regional sort centers)** and replaces the single global rolling optimizer with a **decentralized OODA model**: every truck and hub gets a deterministic `step()` (Observe→Orient→Decide→Act) that emits domain events, and per-center **coordination centers** (event-sourcing process-managers) observe those events and emit **advisory** `ActionSuggested` events that agents arbitrate against local feasibility (fuel, HOS, road-closure) they alone know. This is how real tiered parcel networks (FedEx 2 superhubs + ~7 regionals; UPS hub/spoke + rail backbone) and modern hybrid robot-autonomy / control-tower architectures actually work: a slow, broad, *advisory* strategic layer over a fast, local, *binding* reactive layer. The single most compelling demo moment — and the project's core "explainable, auditable" value extended into the agent layer — is a **visible reject-with-reason** (a truck rejects a coordinator re-route because fuel/HOS won't allow it).
 
-The recommended build order, confirmed by convergent reasoning across all four researchers, is CONT → IND → FLOW → OUT. Continuous operation is the foundation everything else requires; external induction introduces the new `PackageInducted` domain event that bidirectional flow reuses for spoke-origin freight; bidirectional flow (FLOW-*) is where the optimizer, projections, and engine all touch simultaneously and is the highest-integration phase; outbound delivery (OUT-*) is relatively self-contained — one new terminal event type, a scheduled post-arrival dwell, and projection purge logic. The slight disagreement between researchers (Architecture put OUT last; Features/Pitfalls paired IND+OUT then FLOW) resolves to CONT → IND → FLOW → OUT because FLOW-* requires IND-* freight to exist at spokes and the optimizer changes for FLOW-* are more entangled than the single-event OUT-* addition.
+The recommended approach adds **zero new heavy runtime dependencies**: the big-city dataset is a build-time-generated, committed, checksummed JSON (reusing the proven `road-geometry.generated.json` pattern); great-circle geometry keeps the existing pure `greatCircle` function untouched; 100+ hubs render with built-in OpenLayers `ol/source/Cluster` + `declutter` (no WebGL); and the vendored `@alexanderfedin/async-queue` is confined to runtime plumbing only (worker handoff, ws backpressure, DB batching), banned from the deterministic core by ESLint. The model layers entirely **inside** the one generation core (`runToHorizon`) as new flag-gated `SimTask` variants (`stepAgents`, `stepCoordinators`) emitting new event types into the same log — never a parallel path.
 
-The keystone risk is determinism integrity. Two new RNG salt constants (`INDUCTION_RNG_SALT`, `OUTBOUND_RNG_SALT`) must be pairwise-distinct from all six existing salts and asserted in the existing salt-collision test before any induction draw is written. A long-horizon floating-point golden (10,000 ticks across x86 and ARM) must pass before continuous operation is declared done. Every new domain event type must be round-trip tested through `validate()`. Projection memory is bounded by the `PackageDelivered` purge — without it, continuous operation grows projection tables without bound. These are not speculative risks; they are specific failure modes traced to actual source lines.
-
----
-
-## Canonical Domain Events (Reconciled Decision)
-
-The four researchers proposed conflicting names for three new domain events. The existing naming convention in `@mm/domain` uses `PascalCase`, `Package` as the entity prefix for package lifecycle events, and concrete verb phrases (`PackageCreated`, `PackageArrivedAtHub`, `TrailerDeparted`). The reconciled canonical set follows that convention:
-
-### New Event 1: `PackageInducted` — NEW event type
-
-**Rationale for name:** Architecture and Pitfalls both proposed `PackageInducted`; Features proposed `FreightInducted`. Existing events use `Package` as the entity prefix — not `Freight`. `PackageInducted` is consistent. This is a NEW event type (not a reuse of `PackageCreated`) because it carries `slaDeadlineIso` and `externalOriginRef` that `PackageCreated` does not, and because the two events have distinct semantics: `PackageCreated` = internal simulation construction; `PackageInducted` = first network-visible entry of externally-originated freight.
-
-**Key fields:**
-```
-PackageInducted {
-  packageId:          string   // new package entering the network
-  inductionHubId:     string   // spoke (or center) where it enters from outside
-  destHubId:          string   // final destination hub
-  sizeClass:          SizeClass
-  weight:             number   // kg
-  slaDeadlineIso:     string   // ISO-8601 delivery deadline (drives optimizer priority)
-  rfidTagId?:         string   // optional
-  externalOriginRef?: string   // deterministic audit ref, e.g. "EXT-P00042"
-  occurredAt:         string
-}
-```
-
-**Stream:** `package-${packageId}` — same pattern as `PackageCreated`.
-
-### New Event 2: `PackageDelivered` — NEW event type
-
-**Rationale for name:** Architecture proposed `PackageDelivered`; Features proposed `FreightDelivered`; Pitfalls proposed `PackageDeliveredOut`. `PackageDelivered` follows the `Package` prefix convention. `PackageDeliveredOut` is redundant ("out" is implied by "delivered"). `FreightDelivered` breaks the existing `Package*` convention.
-
-**Key fields:**
-```
-PackageDelivered {
-  packageId:    string
-  hubId:        string    // destination hub where last-mile handoff occurs
-  deliveryRef:  string    // deterministic ref, e.g. "DEL-P00042"
-  onTime:       boolean   // deliveredAt <= slaDeadlineIso
-  occurredAt:   string
-}
-```
-
-**Lifecycle position:** fires AFTER `PackageArrivedAtHub` at the destination hub, after a seeded outbound dwell (`OUTBOUND_RNG_SALT` substream). `PackageArrivedAtHub` retains its current meaning (arrived at ANY hub, transit or destination) and is no longer terminal. `PackageDelivered` is the single authoritative terminal.
-
-**Effect on projections:** `packageLocationReducer`, `hubInventoryReducer`, and `zoneEstimateReducer` must DELETE (not upsert) the package row on this event. This is the bounded-memory mechanism for continuous operation.
-
-### Spoke-origin consolidation freight: NOT a new event type
-
-Architecture proposed a separate `SpokeFreightCreated` event for spoke-origin consolidation freight. This is REJECTED after reconciliation. A spoke-originated package inducted at a spoke is `PackageInducted` with `inductionHubId` set to the spoke. Introducing a separate event type for the same real-world action creates unnecessary projection branching. The distinction between "externally inducted" and "spoke-originated consolidation" is captured by `inductionHubId` (spoke vs center) and `destHubId`, not by separate event types.
-
-**The two-queue manifest model (from Pitfalls)** does not require a new event type. It requires a structural addition in `engine.ts`: a new `pendingAtSpoke: Map<spokeHubId, string[]>` alongside the existing `pendingBySpoke: Map<spokeHubId, string[]>`. Spoke→center consolidation trailers drain `pendingAtSpoke`; center→spoke distribution trailers drain `pendingBySpoke`. Empty `pendingAtSpoke` is valid — return leg departs with empty manifest.
-
-### Existing events whose context widens in v2.0
-
-| Event | Change |
-|-------|--------|
-| `PackageCreated` | Unchanged, center-origin only |
-| `PackageArrivedAtHub` | Now intermediate (not terminal) at final destination hub. Terminal is `PackageDelivered`. Schema unchanged. |
-| `TrailerDeparted` | `fromHubId`/`toHubId` already support both directions. Schema unchanged. Now also fires as designed spoke→center consolidation legs (not only over-carry exceptions). |
-| `PackageScanned` | `scanType: "outbound"` now also fires at spoke hubs before consolidation departures. Schema unchanged. |
+**Determinism is the keystone and the dominant risk.** Every feature is flag-gated; flags-off must stay byte-identical to the v2.0 golden `3920accc…`, and the OODA/coordination model gets its own new goldens. The eight critical determinism guards (sorted agent step order, no transcendentals in hashed payloads, stable-id-derived seeded substreams, frozen mid-tick observation surface, async-queue out of the core, no `Date.now`/`Math.random`, canonical JSON serialization, flags-off non-drift) are non-negotiable. Two perf traps are first-class blockers, not follow-ups: the **`applyHubInventory` full-table scan** (a latent v2.1-style O(events×hubs) freeze that becomes *active* the moment hub count jumps — a **P1-BLOCKING** fix) and the per-center **coordinator scope/oscillation/deadlock** failure modes (handled by hysteresis, seeded-jitter backoff, sim-time TTL, single-owner leases, reject-path pruning). The build order is hard-sequenced: topology must ship and golden before agents; agents must exist before coordinators can arbitrate.
 
 ---
 
 ## Key Findings
 
-### Stack Verdict
+### Recommended Stack
 
-**Zero new runtime dependencies.** The specific extension points are:
+**Net new heavy runtime dependencies for v3.0: ZERO.** (Full detail: `.planning/research/STACK.md`.) Every new capability is static data, an existing library, or a single zero-dep vendored queue confined to non-deterministic plumbing. The repo's standing bias — *prefer committed static data + custom TS over heavy runtime deps* — drives every recommendation.
 
-1. **Engine stop-signal:** Replace `if (action.fireTick > durationTicks) break` with a shared `stopped` boolean, gated by `runUntilStopped?: boolean`. The `durationTicks` path is unchanged — golden tests continue using it. ~10 LOC.
-
-2. **Streaming emit:** Switch `generate()`'s `out: SimulatedEvent[]` accumulation to an `onEvent` callback. The existing `simulate()` wrapper collects into an array for golden tests. ~15 LOC.
-
-3. **Two new RNG salt constants:**
-   ```typescript
-   export const INDUCTION_RNG_SALT = 0x9f_2e_a4_c8; // PackageInducted arrival draws
-   export const OUTBOUND_RNG_SALT  = 0x7b_1c_d3_f6; // PackageDelivered dwell draws
-   ```
-   Assert pairwise-distinct from all 6 existing salts in the salt-collision test. No new RNG library.
-
-4. **Two-queue manifest model:** Add `pendingAtSpoke: Map<spokeHubId, string[]>` alongside existing `pendingBySpoke`. Spoke→center trailers drain `pendingAtSpoke`. Empty is valid.
-
-5. **Bidirectional route registration:** `buildRoutes()` emits `RouteRegistered` for both directions. Reverse geometry = existing polyline with coordinates reversed — no new ORS call.
-
-**What NOT to add:** No DES framework (SimScript/SIM.js/simmer/des.js — stale 2021-2022, coroutine model breaks determinism). No Kafka/Redis/BullMQ. No PCG/xoshiro/ts-seedrandom (would invalidate all existing goldens). No actor library. No Postgres snapshotting for v2.0 (demo runs hours, not days; 10k events is trivial for Postgres).
-
-All existing dependencies remain at pinned versions. Version compatibility table unchanged from v1.x.
+**Core technologies (additions only):**
+- **Big-city dataset → committed `us-big-cities.generated.json`** — a dev-only build-time generator (mirroring `scripts/precompute-routes.ts`) consumes **SimpleMaps US Cities Basic** (CC BY 4.0; clean 2-letter `state_id` + `population` + `ranking` + IANA `timezone`) *or* the offline **`all-the-cities`** npm (MIT/GeoNames; needs admin1→postal mapping). Runtime imports only the committed JSON with a coords checksum — golden replay never couples to an upstream data version. **Two flagged tasks:** (1) **dataset attribution compliance** (SimpleMaps backlink OR "city data © GeoNames CC BY 4.0" credit in footer/README) is a non-optional roadmap task; (2) state→region/timezone metadata is best **transcribed** as a 50-row const (determinism-safe), not a runtime dep.
+- **Great-circle geometry — KEEP the existing pure `greatCircle`** (`routes.ts`). Do NOT adopt `@turf/great-circle` or `geodesy`: different numerics would invalidate flags-off goldens, turf adds transitive deps + GeoJSON impedance + antimeridian-split, geodesy is stale (2022). New multi-center legs simply reuse the existing primitive.
+- **OpenLayers `ol` 10.9.0 (already installed)** — at ~130 hubs the problem is *clutter, not throughput*. Use built-in **`ol/source/Cluster`** + style **`declutter`** + (per PITFALLS) **`VectorImageLayer`** for the dense static network. **Skip WebGL** (overkill <10k points; forks the proven `postrender` trailer-animation model). No `ol-ext`.
+- **`@alexanderfedin/async-queue` 1.1.0 (vendored, MIT, 0 deps)** — runtime **plumbing only** (worker↔optimizer handoff, ws backpressure, DB write-batching). **Second flagged task: resolve the missing vendored `dist/`** — its `main`/`types` point at an uncommitted build output. Recommended: build + **commit `vendor/async-queue/dist/`** (keeps vendored code off our stricter typecheck gate) and add `vendor/*` to `pnpm-workspace.yaml`, consume via `workspace:*`. Enforce the core ban with ESLint `no-restricted-imports`.
 
 ### Expected Features
 
-**Must ship — P1:**
-- CONT-01: Open-ended run loop (stop-signal replaces `durationTicks`)
-- CONT-02: Periodic induction trigger at multiple hubs (self-rescheduling)
-- CONT-03: Sim-day / cycle counter in ws state diff + KPI panel
-- IND-01: `PackageInducted` domain event in closed union
-- IND-02: Induction at spoke hubs (not center-only)
-- IND-03: `destHubId` + `slaDeadlineIso` on inducted package
-- FLOW-01: Spoke-origin trailer departures carry freight (`pendingAtSpoke` drained)
-- FLOW-02: Center inbound unload + re-sort handles spoke→center arrivals
-- FLOW-03: Existing center→spoke distribution continues unbroken
-- OUT-01: `PackageDelivered` domain event (terminal last-mile tender)
-- OUT-02: Destination hub detection triggers `PackageDelivered` after dwell
-- OUT-03: `onTime: boolean` on `PackageDelivered`
-- VIZ-07: Spoke→center trailers show non-empty freight manifests on map
+(Full detail: `.planning/research/FEATURES.md`.) Grounded in real tiered carrier networks, hybrid robot autonomy (reactive/tactical/strategic horizon separation), and control-tower maturity (visibility→prescriptive→orchestration; v3.0 sits deliberately at **prescriptive/advisory**).
 
-**Add if time allows — P2:**
-- OUT-04: Delivered-out counter + on-time % KPI panel widget
-- CONT-04: Sort wave / cut-off window rhythm (burst-quiet-burst departure pattern)
-- FLOW-04: Per-hub inventory balance display (cross-dock utilization heat)
+**Must have (table stakes — a continental demo looks broken without these):**
+- **Big-city hub generation** (1–3/state, ~80–130, static/deterministic) — the root dependency.
+- **Multi-center topology** (engine supports >1 center) — the linchpin engine change; generalizes `buildRoutes` off the hard-wired `USA_HUBS[0]`.
+- **Nearest-center spoke assignment** (great-circle + region/division tie-break for boundary stability).
+- **Inter-center backbone** (multi-hop center→center freight) — see topology reconciliation below.
+- **OODA `step()` per truck + per hub** emitting existing domain events (fuel/rest/dispatch/hold) — the decentralized brain; determinism keystone.
+- **Agent-owned local feasibility** (fuel/HOS/rest binding, non-overridable by a coordinator).
+- **Advisory coordination centers** (`ActionSuggested`, one per center, bounded scope) + **accept/reject contract** with reason codes.
+- **Oscillation guardrails** (hysteresis, cooldown/TTL, conflict partition) — a flapping demo is worse than no coordinator.
+- **New flag-gated goldens; flags-off byte-identical to v2.0.**
+- **Scale visualization** (100+ hubs + backbones + suggestion overlays, no clutter) + **sustained continental-run perf.**
 
-**Explicitly deferred:**
-- IND-04: Mixed-direction same-hub local short-circuit deliveries
-- CONT-05: Pacer safety valve for sustained high-speed multi-cycle runs
-- Returns / reverse logistics (third flow direction)
-- Last-mile delivery routing (door-level VRP to customers)
-- Per-wave per-hub SLA differentiation
+**Should have (differentiators):**
+- **Visible reject-with-reason** — the headline "smart and honest" moment; local knowledge beats central advice, auditable. Reuses the alert feed + audit timeline.
+- **Coordinator-uses-optimizer** — the proven v1 min-cost-flow/VRPTW becomes the per-center scoped suggestion engine (preserves the hardest-won IP; ship rule-based first to de-risk).
+- **Hub-of-hubs/meshed-core backbone animated as a distinct visual tier**, **per-agent explainable rationale**, **accept-green/reject-red advisory overlay**.
+
+**Defer (v2+ / out of this milestone):**
+- **Binding/orchestration coordinators** (violates advisory-first + the locked "no fully automated dispatch without override").
+- **True ABM rewrite** of the event queue (destroys determinism — explicitly rejected).
+- **p-median live hub siting**, **live ORS geometry at scale**, **capacity-balanced/ML hub assignment**, **per-tick Decide for every agent** (all anti-features; use static ranked dataset + per-N-tick + "anything-to-decide?" guard).
 
 ### Architecture Approach
 
-v2.0 is an additive extension to the existing pnpm monorepo. All architectural patterns follow established conventions: new events via `eventSchema()` factory with `.strict()` payloads, new reducer cases with `assertNever` exhaustiveness guards that fail the build until handled, new feature flags on `SimulateOptions` that are off-by-default, and new ws message types in the typed protocol. The closed `DomainEvent` discriminated union is the integration seam — adding `PackageInducted` and `PackageDelivered` to it ripples to every `switch(event.type)` in the codebase, which is by design and enforced by `contract.assert.ts`.
+(Full detail: `.planning/research/ARCHITECTURE.md`.) The one-sentence thesis: add **three flag-gated behaviors INSIDE `runToHorizon`** (multi-center topology, OODA `step()` agents, per-center coordinator process-managers) that emit NEW `DomainEvent` types into the SAME log, keep the optimizer as a *suggestion engine* called by coordinators, and keep `async-queue` strictly in the wall-clock plumbing layer below the core. Every new behavior enters as a `SimTask` data variant on the `(fireTick, seq)` EventQueue — never a closure, never a parallel loop, never `Map`/`Set` iteration order.
 
-**Touched packages and approximate change sizes:**
-
-| Package | Change nature | Approx. size |
-|---------|--------------|-------------|
-| `@mm/domain` | 2 new event schemas + union members; update `contract.assert.ts` | ~50 LOC |
-| `@mm/simulation` | Stop-signal, streaming emit, `pendingAtSpoke`, `inductionEnabled`/`outboundDeliveryEnabled` flags, 2 new salts, bidirectional route registration | ~125 LOC |
-| `@mm/projections` | Handle new events in all reducers (DELETE on `PackageDelivered`); new `packageLifecycleReducer`; checkpoint table schema | ~100 LOC |
-| `@mm/optimizer` | New events in `hubsOf()` in `scope.ts`; `deadlineMin?` on `TwinBlock`; LRU eviction on idempotency map | ~40 LOC |
-| `@mm/api` | New ws message types; sim-driver passes new flags; projection watermark checkpoint wiring | ~50 LOC |
-| `@mm/web` | `inductionLayer`, `deliveryLayer`, direction field on trailer animation, new ws message handlers | ~80 LOC |
-
-**New components introduced:**
-- `packageLifecycleReducer` in `@mm/projections` — per-package state machine (`pre-inducted | inducted | in-transit | at-hub | delivered`); feeds optimizer twin builder
-- `inductionLayer` in `@mm/web` — pulsing OL circle on `PackageInducted` ws message
-- `deliveryLayer` in `@mm/web` — hub highlight on `PackageDelivered` ws message
-- `projection_checkpoints` Postgres table — watermark for catch-up projections (prevents O(log-size) rebuild on restart)
+**Major components:**
+1. **Multi-center topology** (`network/hubs.ts`, new `network/centers.ts`, `network/routes.ts`) — `generateBigCityHubs()` + `pickRegionalCenters()` + `assignSpokesToNearestCenter()` (all pure); `buildRoutes`/`buildTransitParamsByLeg` generalized from single-center star to spoke↔center + center↔center backbone; engine `const center = hubs[0]` → a `centerOf(spoke)` map; `detectAffectedScope` gains per-center partition (the scaling fix).
+2. **OODA step-agents** (`simulation/src/ooda/` + `stepAgents` `SimTask`) — sorted-by-stable-id iteration; per-agent seeded substream from `mixSeed(seed ^ stableAgentHash(id))`; Observe = pure read of in-engine fold maps at pass entry; Act = `emit`; agent state added to `SerializedWorldState`.
+3. **Coordination process-managers** (`simulation/src/coordinator/` + `stepCoordinators` `SimTask`) — one per center, sorted by centerId, in-fold (NOT async); new events `ActionSuggested`/`SuggestionAccepted`/`SuggestionRejected` added to the closed union + zod + every exhaustive switch; in-tick handshake via a `pendingSuggestionsByTarget` map; feasibility from existing engine state (`odometerByTrailer`, `clockByDriver`/`remainingLegalDriveMinutes`).
+4. **Coordinator↔optimizer** (`simulation/src/coordinator/optimize.ts`) — build a small per-center twin from in-engine fold state and call the **pure `@mm/optimizer` `runEpoch` synchronously in-fold**; translate results to `ActionSuggested`. Global `RollingLoop` disabled under the continental flag so the two never double-plan.
+5. **Perf + plumbing** — incremental cursor-fold projections for `twin-snapshot` (`milesSinceRefuel`, `inductionDeadlines`); `async-queue` backpressure at worker/DB/ws seams; scale viz.
 
 ### Critical Pitfalls
 
-**P1 — RNG salt collision breaks golden determinism** [Phase 1]
-Adding induction draws to an existing substream, or using a colliding salt, silently shifts every downstream draw. Prevention: assign `INDUCTION_RNG_SALT` and `OUTBOUND_RNG_SALT` before writing any draw; extend salt-collision assertion test to cover all 8 salts pairwise; gate `inductionRng` construction on `inductionEnabled` exactly as `fuelRng` is gated.
+(Full detail + 16 pitfalls + per-phase mapping: `.planning/research/PITFALLS.md`.) The eight **determinism guards (Critical 1–8)** are the non-negotiable core; the two perf/coordination items below are first-class blockers.
 
-**P2 — Projection memory explosion without `PackageDelivered` purge** [Phase 4]
-Under continuous induction, `package_location`, `hub_inventory`, and `zone_estimate` grow without bound. Detection (`runDetection`) scans ALL rows — cost grows with total-packages-ever-inducted. Prevention: `PackageDelivered` must DELETE rows (not upsert); scope detection to `is_active = true` packages. The `assertNever` exhaustiveness guard enforces reducer coverage at build time.
+1. **Non-deterministic agent step order** (Map/Set iteration) — drive every per-tick pass over a **sorted-by-stable-id array**; assign `claimSeq()` so same-tick ties break reproducibly. *(Verify: shuffle agents → byte-identical event batch.)*
+2. **Mid-tick read-your-writes** — **freeze the observation surface for the whole tick**; agents decide on frame-N state, emit for frame N+1; never read a projection a peer just wrote this tick.
+3. **RNG substream collision at ~100s of agents** — derive each stream from the **stable agent id** via the repo's `mixSeed`/splitmix32 finaliser, never spawn index; keep `OODA_RNG_SALT` pairwise-distinct.
+4. **`Date.now()`/`Math.random()`/async-queue in the decision core** — sim-time only, seeded RNG only, sync+pure `step()`/`react()`; ESLint guard fails CI on a hit and forbids `async-queue`/`kysely` in the decision packages.
+5. **Flags-off drift from `3920accc…`** — per flag, BOTH `flag:false === absent` AND `absent ⇒ hash 3920accc…`; construct new substreams **lazily** (only when on); the generalized multi-center `buildRoutes` must produce the **identical `Route[]`** for the legacy 10-hub input.
+6. **`applyHubInventory` O(events×hubs) full-table scan RECURS at 100 hubs** — **P1-BLOCKING, not a follow-up.** Key-scope it to the touched hub id(s) (the exact v2.1 surgery already applied to the other projections). Shipping the hub jump without this re-creates the v2.1 freeze.
+7. **Advisory-reject deadlock/livelock + oscillation/conflict** — reject carries a reason the coordinator *consumes* (reject-path pruning); every agent has a feasible no-op default; cap suggestions per (coordinator, agent, sim-window); `scopeHash` memo per coordinator; **single-owner lease** so two coordinators can't bind the same agent; suggestion events are **scope-neutral** so they don't re-trigger the suggesting coordinator.
+8. **Per-center optimizer scope blowup + WS/viz bloat at scale** — each coordinator reuses `detectAffectedScope` (scoped slice, never whole-region re-solve); one shared twin read/frame sliced per coordinator; static topology sent **once**, per-tick deltas carry only trailers + transient suggestions; cluster + `VectorImageLayer` + decluttered opt-in overlays.
 
-**P3 — Long-run floating-point drift** [Phase 1 acceptance gate]
-Log-normal transit draws use `Math.exp`/`Math.log` (implementation-defined). Over 10,000+ ticks on ARM vs x86, a one-tick drift cascades through all downstream event timing. Prevention: add a `simulate({ seed: 42, durationTicks: 10000 })` golden hash test on both CI architectures before CONT-* is declared done. If hashes diverge, switch to integer lookup tables.
+---
 
-**P4 — Optimizer thrash + idempotency map memory growth** [Phase 1 LRU fix; Phase 3 persistence]
-Continuous induction triggers optimizer epochs indefinitely. The in-memory `(epoch, scopeHash)` idempotency map (known v1.0 tech debt) grows without bound and is lost on restart, producing duplicate `PlanAccepted` events. Prevention: (a) LRU eviction (500-entry cap) in Phase 1; (b) `optimizer_idempotency` Postgres table in Phase 3; (c) verify `detectAffectedScope` for `PackageInducted` scopes to `[inductionHubId, destHubId]` only.
+## Key Reconciliations (the sources diverged — resolved here)
 
-**P5 — WS backpressure / snapshot size explosion** [Phase 1]
-At ~7,200 ticks/hour, a backgrounded browser tab saturates its ws buffer. `buildSnapshot` on reconnect must not scan the raw event log (O(log-size)). Prevention: add `bufferedAmount > 256KB` skip-tick guard; audit `buildSnapshot` reads from Postgres projection tables only; cap snapshot to currently-active packages.
+The three topology sources (DESIGN-CONSULT / FEATURES / PITFALLS) gave **different** regional-center counts and backbone shapes. These are reconciled into single roadmap-confirmable defaults, with the trade-off flagged so the roadmap can adjust.
 
-**P6 — `PackageArrivedAtHub`-as-terminal assumption baked into consumers** [Phase 4 prerequisite]
-Several consumers treat the last `PackageArrivedAtHub` as terminal. Prevention: update `packageLocationReducer` first so the build fails if anything downstream uses `PackageArrivedAtHub` as terminal; add a lifecycle test asserting every package eventually emits `PackageDelivered`.
+### 1. Regional-center count + backbone topology — RECONCILED (confirmable default)
 
-**P7 — Bidirectional double-drain / double-counting at consolidation** [Phase 3 FLOW-* success criteria]
-Two trailers from the same spoke draining `pendingAtSpoke` simultaneously could produce ghost-empty manifests. Stale optimizer plan entries in `hub_inventory.staged` combined with fresh consolidation arrivals in `hub_inventory.inbound` produce double-counted freight. Prevention: `pendingAtSpoke` drained atomically per departure; `PlanSuperseded` event or supersession-aware `PlanAccepted` reducer clears stale staged entries.
+| Source | Count | Backbone | Partition |
+|--------|-------|----------|-----------|
+| DESIGN-CONSULT (Google AI Mode, advisory) | **3–5** | **FULL MESH** | freight corridor + timezone |
+| FEATURES (FedEx/UPS/census-division data) | **~6–10 (~8)** | hub-of-hubs w/ a 2–3-center fully-meshed **CORE** | region/timezone, nearest-center |
+| PITFALLS | "a handful, ~4–8" | **near-full-mesh / sparse adjacent-region mesh** (avoid hub-of-hubs = re-centralization; avoid ring = too many hops) | region/timezone-first, with a **leg-length cap** |
+
+**RECOMMENDED DEFAULT: ~5–6 regional centers, partitioned by freight-corridor + timezone, on a near-full-mesh backbone (≤2-hop coast-to-coast), with an explicit anti-SPOF connectivity check.**
+
+Rationale: all three sources agree on **corridor/timezone-first partitioning** (do NOT split a natural freight lane like I-35 across two centers; timezone aligns with HOS/shift boundaries) — adopt that unanimously. On count + backbone they trade off:
+- DESIGN-CONSULT's **3–5 + full mesh** minimizes hops and is cheap (5 nodes → 10 legs) but under-provisions consolidation for ~100 hubs (fan-out per center climbs).
+- FEATURES's **~8 + hub-of-hubs-core** maximizes trailer fill and mirrors FedEx reality but PITFALLS explicitly warns that **hub-of-hubs re-introduces the single-global-star bottleneck and SPOF this milestone exists to remove** — a hard objection that breaks a tie in favor of mesh.
+- The synthesis: keep the center count **small enough that a near-full mesh is cheap** (PITFALLS: O(centers²) is tiny at ~5–6) yet **large enough to bound per-center fan-out** (FEATURES: <5 over-concentrates). **~5–6 + near-full-mesh** satisfies both: ≤2-hop transit, no SPOF, bounded fan-out, low map clutter. Reject pure hub-of-hubs (re-centralization, FEATURES/PITFALLS anti-feature) and ring (too many hops, all three).
+
+**Flagged trade-off for the roadmap:** if consolidation/trailer-fill at the chosen center count proves thin in a continental run, the lever is **(a)** add 1–2 centers (toward FEATURES's ~8) and/or **(b)** designate the 2–3 largest as a meshed core that the rest mesh-prefer through — *without* collapsing to a single primary. Center count and exact backbone density are **roadmap-confirmable** in P1; the leg-length cap + anti-SPOF (remove-any-center connectivity) test are mandatory regardless.
+
+### 2. Coordinator↔optimizer relationship — RESOLVED (converged across all sources)
+
+**Hybrid, decided.** Macro layer = the existing rolling optimizer as a **scoped, PURE suggestion engine**; micro layer = per-center coordination centers emitting **advisory** `ActionSuggested`; agents arbitrate. The optimizer is **not replaced** — it is reframed as a recommendation generator a coordinator may invoke.
+
+**Determinism rule (the one that matters):** a coordinator builds a small per-center twin from its **in-engine fold state** and calls the optimizer's **pure `runEpoch` synchronously inside the `stepCoordinators` fold** at a deterministic tick — **NOT** the async worker-thread path. The async re-entry timing is wall-clock and would break byte-identical replay; the pure in-fold call is replayable. The global `RollingLoop` stays for the flags-off model and is disabled under the continental+coordinator flags so the two never double-plan. (DESIGN-CONSULT, FEATURES, and ARCHITECTURE all independently land here; ARCHITECTURE §5B is the authoritative wiring.)
+
+### 3. Determinism is the keystone — surfaced prominently (see "Critical Pitfalls" above)
+
+The eight critical determinism guards and the **`applyHubInventory` O(n²) full-scan trap (P1-BLOCKING)** are elevated to the top of the watch-list. This project *already shipped a freeze* from an O(events²) projection fold (v2.1 key-scoping fix); `applyHubInventory` was left full-scan and becomes an **active** regression — not a latent one — the moment hub count jumps to 100+. It must ship key-scoped *with* P1, not as hardening.
+
+### 4. Build order — RESOLVED (hard-sequenced spine, see roadmap below)
+
+ARCHITECTURE gives a dependency-respecting spine that all sources agree on: topology → agents → coordinators → coordinator-uses-optimizer → perf/plumbing/viz. Phase A is a hard prerequisite for B/C/D; B precedes C (agents must exist to arbitrate); D needs C; E (perf/plumbing/viz) is independent and can run alongside C/D.
 
 ---
 
 ## Implications for Roadmap
 
-### Recommended Build Order: CONT → IND → FLOW → OUT
+Based on combined research, the recommended **phase spine** (matching ARCHITECTURE §10 + PITFALLS' P1–P5 + FEATURES' MVP order):
 
-All four researchers converged on this sequence. The slight ordering disagreement (Architecture placed OUT last; Features/Pitfalls briefly paired IND+OUT then FLOW) resolves to CONT → IND → FLOW → OUT:
-- CONT-* is prerequisite foundation — a finite sim cannot demonstrate any other feature meaningfully.
-- IND-* introduces `PackageInducted`, which spoke-origin FLOW-* freight reuses; doing it before FLOW-* means FLOW-* inherits already-working projection handlers.
-- FLOW-* is the highest-integration phase (engine, optimizer, projections, viz all change simultaneously) and should land as a coherent unit.
-- OUT-* (`PackageDelivered` + dwell scheduling + projection purge) is the most self-contained; it lands last where its purge effect is most meaningful with all three freight types accumulating.
+### Phase A — Multi-Center Topology  [FOUNDATION — everything assumes it]
+**Rationale:** The linchpin engine change; the root dependency for agents and coordinators. Ship + golden BEFORE any agent code.
+**Delivers:** `generateBigCityHubs()` (1–3/state, ~80–130, pure, committed + checksummed dataset) · `pickRegionalCenters()` + `assignSpokesToNearestCenter()` (corridor/timezone partition + nearest tie-break-by-id + **leg-length cap**) · `buildRoutes`/`buildTransitParamsByLeg` generalized to spoke↔center + **near-full-mesh backbone** (great-circle) · engine `centerOf` map + flow routing through centers · per-center scope partition in `detectAffectedScope`.
+**Addresses (FEATURES):** big-city hub generation, multi-center topology, nearest assignment, backbone, great-circle, scale-viz baseline.
+**Avoids (PITFALLS):** 2 (float divergence — round at boundary, transcendentals out of hashed payloads) · **6/9 (`applyHubInventory` key-scoping — P1-BLOCKING, ships HERE)** · 8 (multi-center degenerates byte-identically to the 10-hub `Route[]`) · 12 (center partition: leg cap, tie-break-by-id, committed partition snapshot) · 13 (cross-state metros de-duped; ~80–130 in continental envelope) · 14 (backbone connectivity / anti-SPOF, ≤2-hop).
+**Uses (STACK):** committed `us-big-cities.generated.json` + dataset attribution task · existing `greatCircle` (untouched) · OL Cluster/`VectorImageLayer` baseline.
+**Flag:** `continentalTopology`; new continental golden (small 12–20-hub fixture); DET-01 flags-off still `3920accc…`.
 
----
+### Phase B — OODA Step-Agents  [the decentralized brain]
+**Rationale:** Agents read the topology and must exist before coordinators can arbitrate.
+**Delivers:** `stepAgents` `SimTask` + dispatch case + bootstrap self-reschedule (cadence constant, per-N-tick) · per-agent seeded substream from **stable id** · Observe (fold maps)/Orient/Decide/Act(emit) with **sorted agent iteration** · agent state into `SerializedWorldState` (continuation-equivalence).
+**Addresses (FEATURES):** OODA truck agent, OODA hub agent, agent-owned local feasibility (fuel/HOS/rest binding).
+**Avoids (PITFALLS):** 1 (sorted step order) · 3 (RNG decorrelation) · 4 (frozen observation surface) · 5/6 (sync+pure, no async-queue/`Date.now`/`Math.random`) · 8 (lazy substream, flags-off gate).
+**Implements (ARCHITECTURE):** §3 OODA-inside-the-engine.
+**Flag:** `oodaAgentsEnabled`; new ooda golden + flags-off regression + order-shuffle + N-agent-decorrelation tests.
 
-### Phase 1: Continuous Operation Foundation (CONT-*)
+### Phase C — Coordination Centers  [advisory process-managers — the headline differentiator]
+**Rationale:** Coordinators subscribe to agent-emitted events; agents must exist first. Ship **rule-based** suggestions first to de-risk.
+**Delivers:** `ActionSuggested`/`SuggestionAccepted`/`SuggestionRejected` events (union + zod + every exhaustive switch; **scope-neutral** classification) · `stepCoordinators` `SimTask` (one per center, sorted) · in-tick handshake via `pendingSuggestionsByTarget` · agent accept/reject from existing engine state · **the five anti-oscillation/anti-deadlock guards: hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning** · canonical JSON serialization of all new hashed payloads.
+**Addresses (FEATURES):** advisory coordinators, accept/reject contract, **visible reject-with-reason**, oscillation guardrails.
+**Avoids (PITFALLS):** 4 (coordinators observe the frozen surface) · 7 (`canonicalize` all hashed payloads) · 10 (reject-deadlock: suppression + feasible no-op default + cooldown) · 11 (oscillation/conflict/feedback: `scopeHash` memo + single-owner partition + scope-neutral events) · 15 (scoped, not whole-region).
+**Implements (ARCHITECTURE):** §4 process-manager-in-fold.
+**Flag:** `coordinatorsEnabled`; new coordinator golden + continuation-equivalence + converge-in-K-epochs + bounded-events-per-tick tests.
 
-**Rationale:** Engine must run open-ended before any other v2.0 feature operates in a meaningful multi-cycle context. Also establishes infrastructure non-negotiables every subsequent phase depends on: backpressure, projection watermarks, LRU idempotency eviction, long-run golden.
+### Phase D — Coordinator ↔ Optimizer  [suggestion engine; needs C]
+**Rationale:** Preserve the proven v1 optimizer IP as the per-center scoped suggestion generator.
+**Delivers:** build-center-twin-from-fold · call **pure `@mm/optimizer` `runEpoch` in-process** (NOT the async worker) · result → `ActionSuggested` translation · disable global `RollingLoop` under the flag (no double-plan).
+**Addresses (FEATURES):** coordinator-uses-optimizer (P2 differentiator).
+**Avoids (PITFALLS):** 5 (synchronous pure call, deterministic tick) · 15 (scoped epoch, bounded horizon).
+**Implements (ARCHITECTURE):** §5B (the recommended wiring; §5A async path is rejected for the golden).
+**Flag:** `coordinatorUsesOptimizer` (sub-flag of coordinators) + golden.
 
-**Delivers:**
-- Open-ended `generate()` loop with stop-signal (`runUntilStopped?: boolean` option)
-- Streaming `onEvent` callback (replacing `out[]` accumulation)
-- Self-rescheduling induction trigger at center hub generalized to multi-cycle
-- `projection_checkpoints` Postgres table + watermark-based `runCatchup`
-- WS `bufferedAmount > 256KB` skip-tick backpressure guard
-- `buildSnapshot` audited to read from projection tables only
-- LRU eviction (500-entry cap) on optimizer idempotency map
-- Long-horizon golden: `simulate({ seed: 42, durationTicks: 10000 })` passes on x86 + ARM CI
-- Sim-day / cycle counter in ws state diff (CONT-03)
-- Bidirectional route registration in `buildRoutes()` (spoke→center reverse legs at bootstrap — prerequisite for Phase 3)
+### Phase E — Perf + Plumbing + Scale Viz  [independent; parallelizable with C/D]
+**Rationale:** Read/plumbing-side; touches no model decisions, so it can run alongside C/D.
+**Delivers:** **incremental cursor-fold projections** for `twin-snapshot` (`milesSinceRefuel`, `inductionDeadlines` → `applyInline` APPLIERS; reads small tables instead of full-log scans) · **async-queue** backpressure at worker handoff → DB write-batching → ws backpressure (plumbing only; append-order==generation-order test; **resolve vendored `dist/`** + `vendor/*` workspace wiring + ESLint core-ban) · **scale viz** (Cluster + `VectorImageLayer` + decluttered opt-in suggestion overlays; static topology sent once, per-tick deltas only) · sustained continental-run perf test.
+**Addresses (FEATURES):** scale visualization, sustained continental-run perf, incremental twin-snapshot.
+**Avoids (PITFALLS):** 9 (twin-snapshot incremental fold) · 16 (ws bloat + viz clutter).
+**Implements (ARCHITECTURE):** §6 async-queue placement, §8 cursor-fold.
 
-**Addresses:** CONT-01, CONT-02, CONT-03; pitfalls P1 (salt discipline established), P3, P4 (LRU), P5
-**Determinism gate:** With `durationTicks` = current value, all existing goldens pass byte-identical.
-
-**Research flag:** Standard patterns. All integration points traced to actual source lines.
-
----
-
-### Phase 2: External Induction (IND-*)
-
-**Rationale:** Introduces the only genuinely new domain event (`PackageInducted`) and defines the pattern for spoke-origin freight. Domain event union expansion ripples to every `switch(event.type)` consumer — doing this before FLOW-* means FLOW-* inherits working projection handlers.
-
-**Delivers:**
-- `PackageInducted` event schema, type, union membership in `@mm/domain`
-- `contract.assert.ts` updated to include `PackageInducted`
-- `INDUCTION_RNG_SALT` constant + pairwise-distinct assertion in salt-collision test
-- `inductionEnabled?: boolean` flag on `SimulateOptions`
-- Per-hub induction batches firing at spokes on repeating schedule
-- Packages carry `destHubId` and `slaDeadlineIso` drawn from `inductionRng` substream
-- All projection reducers handle `PackageInducted` (including new `packageLifecycleReducer`)
-- `detectAffectedScope` in `scope.ts` handles `PackageInducted` → `[inductionHubId, destHubId]`
-- `validate()` round-trip test for `PackageInducted`
-- `freightInducted` ws message type + `inductionLayer` pulsing-circle animation in `@mm/web`
-- `deadlineMin?` (optional, additive) added to `TwinBlock` for optimizer SLA awareness
-
-**Addresses:** IND-01, IND-02, IND-03; pitfalls P1 (INDUCTION_RNG_SALT sealed), P6
-**Determinism gate:** `inductionEnabled: false` (default) → ZERO new events → existing golden byte-identical.
-
-**Research flag:** Standard patterns. Event-union expansion and reducer exhaustiveness-guard patterns are well-established in the codebase.
-
----
-
-### Phase 3: Bidirectional Freight / Spoke→Center Consolidation (FLOW-*)
-
-**Rationale:** Highest-integration phase — engine manifest model, optimizer scope and twin, projections, and map viz all change simultaneously. Placed third because: (a) needs `PackageInducted` (Phase 2) for spoke-origin freight; (b) needs bidirectional routes registered at bootstrap (Phase 1); (c) optimizer changes are more entangled than the OUT-* terminal event, so FLOW-* should land as a coherent unit.
-
-**Delivers:**
-- `pendingAtSpoke: Map<spokeHubId, string[]>` in `engine.ts` (spoke→center manifest queue)
-- `consolidationEnabled?: boolean` flag on `SimulateOptions`
-- Spoke→center `TrailerDeparted` as designed flow (draining `pendingAtSpoke`), not only over-carry exception
-- Center hub inbound unload + re-sort on spoke→center `TrailerArrivedAtHub`
-- All projection reducers handle bidirectional trailer events
-- Optimizer `detectAffectedScope` and `buildTravelModel` verified for both directions
-- `isFrozen` freeze-window semantics verified for spoke→center return trailers
-- `optimizer_idempotency` Postgres table + migration (persistent idempotency across restarts)
-- `PlanSuperseded` event or supersession-aware `PlanAccepted` reducer (clears stale `staged` entries)
-- Detection (`runDetection`) scoped to `is_active = true` packages only
-- `direction: 'outbound' | 'consolidation'` field on ws trailer tick; map colors consolidation trailers distinctly (VIZ-07)
-- Empty-manifest `TrailerDeparted` accepted and tested (valid return when no consolidation freight)
-- Two-trailer double-drain test: two trailers from same spoke drain `pendingAtSpoke` independently
-
-**Addresses:** FLOW-01, FLOW-02, FLOW-03, VIZ-07; pitfalls P4 (persistence), P7
-**Determinism gate:** `consolidationEnabled: false` (default) → ZERO new events.
-
-**Research flag:** Needs careful test design. The three OPEN DECISIONS (see below) must be resolved before requirements are written for this phase. The `PlanSuperseded` / supersession-aware `PlanAccepted` pattern is not yet in the codebase — warrants a brief design session during requirements.
-
----
-
-### Phase 4: Outbound Delivery (OUT-*)
-
-**Rationale:** Most self-contained phase — one new event type, a scheduled post-arrival dwell, and projection purge logic. Placing it last allows the purge to operate on the richest set of package types: center-created, inducted, and consolidated.
-
-**Delivers:**
-- `PackageDelivered` event schema, type, union membership in `@mm/domain`
-- `OUTBOUND_RNG_SALT` constant + assertion in salt-collision test
-- `outboundDeliveryEnabled?: boolean` flag on `SimulateOptions`
-- Post-arrival dwell scheduling: after `PackageArrivedAtHub` at `destHubId`, schedule `PackageDelivered` at `arriveTick + outboundDwellTicks` (drawn from `outboundRng` substream)
-- `onTime` flag: `deliveredAt <= slaDeadlineIso`
-- ALL projection reducers handle `PackageDelivered` with DELETE semantics: `packageLocationReducer`, `hubInventoryReducer`, `zoneEstimateReducer`, `packageLifecycleReducer`
-- Optimizer twin builder filters out `PackageDelivered` packages from `TwinSnapshot.blocks`
-- `freightDelivered` ws message type + `deliveryLayer` hub-highlight animation in `@mm/web`
-- Lifecycle ordering test: `PackageDelivered` always follows `PackageArrivedAtHub` for same package
-- Terminal completeness test: every package emits `PackageDelivered` within sim horizon when enabled
-- OUT-04 (P2): delivered-out counter + on-time % in KPI panel widget
-
-**Addresses:** OUT-01, OUT-02, OUT-03, OUT-04 (if time allows); pitfalls P2 (complete), P6
-**Determinism gate:** `outboundDeliveryEnabled: false` (default) → ZERO new events.
-
-**Research flag:** Standard patterns. Only subtlety: `slaDeadlineIso` must be queryable at delivery time (see Gaps to Address).
-
----
-
-### Phase Ordering Summary
-
-- CONT-* first: prerequisite for all other features to have observable multi-cycle behavior.
-- IND-* second: `PackageInducted` is the domain anchor for spoke-origin freight; defining it before FLOW-* lets reducers already handle it when FLOW-* lands.
-- FLOW-* third: highest-integration change; benefits from IND-* freight already flowing through the system.
-- OUT-* fourth: cleanest self-contained addition; its projection-purge effect is most meaningful when all three freight types are accumulating.
+### Phase Ordering Rationale
+- **A before everything:** OODA agents read "which center am I heading to?"; coordinators are *one per center*. Topology + golden first (ARCHITECTURE §2, PITFALLS P1, FEATURES "build first").
+- **B before C:** agents must exist to accept/reject (the whole advisory contract). FEATURES + ARCHITECTURE + PITFALLS all sequence agents→coordinators.
+- **D after C:** the optimizer-backed suggestion is a refinement of an already-working rule-based coordinator; ship rule-based first to de-risk (FEATURES).
+- **E parallel to C/D:** it touches the plumbing/read side, not the event stream — but the **`applyHubInventory` key-scoping is pulled FORWARD into A** (P1-BLOCKING; the rest of E's perf work is genuinely deferrable).
+- **Every phase carries its own flags-off gate** (DET-01 two-part); a consolidated migration audit lands at the end (Hardening).
 
 ### Research Flags
 
-Needs deeper planning attention during requirements:
-- **Phase 3 (FLOW-*):** Three open decisions must be resolved before requirements are written. The `PlanSuperseded`/supersession-aware pattern warrants a design session.
-- **Phase 3 (FLOW-*):** Optimizer freeze-window behavior for spoke→center trailers should be validated against the existing `isFrozen` implementation before the phase is planned.
+Phases likely needing deeper research during planning (`/gsd-research-phase`):
+- **Phase A:** confirm final **center count (5–6 default) + backbone density** against a real continental run (the reconciled trade-off above); confirm dataset source (SimpleMaps vs `all-the-cities`) + attribution mechanics; cross-state-metro de-dup canonical-coordinate rules.
+- **Phase C:** the five anti-oscillation guards are well-specified but their **sim-time constants** (hysteresis dwell ~15 min, TTL ~5–8 min, cooldown K, lease expiry) need tuning + golden capture; conflict-partition lease semantics in a single-process fold.
+- **Phase D:** per-center twin-build cost vs the synchronous in-fold budget (gate behind a sub-flag with a heuristic fallback if profiling shows it's too heavy).
 
-Standard patterns (skip research phase):
-- **Phase 1 (CONT-*):** Engine stop-signal, streaming callback, projection watermarks, WS backpressure — all well-documented with clear integration points.
-- **Phase 2 (IND-*):** Event union expansion, RNG salt addition, reducer exhaustiveness guard — all follow established codebase patterns.
-- **Phase 4 (OUT-*):** New event type + scheduled dwell + projection purge — same patterns as IND-*.
-
----
-
-## Open Decisions (Must Be Resolved in Requirements Step)
-
-### Decision 1: Does `PackageInducted` REPLACE or COEXIST with `PackageCreated`?
-
-**Option A — Coexist (recommended):** `PackageCreated` = internal center-origin spawn (unchanged); `PackageInducted` = first network-visible entry of externally-originated freight. Two distinct events. Existing golden tests untouched. Consumers handle both events (similar but different fields).
-
-**Option B — Replace:** `PackageInducted` supersedes `PackageCreated` everywhere. Center-origin packages become inducted at the center with `inductionHubId = centerId`. Simpler projection logic. Requires migrating or toggling all `PackageCreated` callsites.
-
-**Recommendation:** Coexist (Option A). Preserves golden tests and the semantic distinction between "simulation spawns a package" and "external shipper tenders freight."
-
-### Decision 2: Spoke→spoke paths — route via center or add direct routes?
-
-**Option A — Hub-and-spoke via center (recommended):** All cross-spoke freight routes Spoke A → Center → Spoke B. No new route registrations. Existing time-expanded graph handles multi-hop via the center node. The existing optimizer assigns first-leg to spoke→center and re-manifests at center for spoke B.
-
-**Option B — Direct spoke↔spoke:** Register direct spoke→spoke routes. Changes the time-expanded graph edge set. More complex optimizer behavior.
-
-**Recommendation:** Hub-and-spoke (Option A). The existing topology and optimizer assume a star graph. The center cross-dock is a feature demonstrating consolidation value, not a limitation.
-
-### Decision 3: Does the optimizer pick up inducted freight automatically or need a new demand source?
-
-**Option A — Automatic via projection (recommended):** `buildTwinSnapshot` queries `hub_inventory` for inbound packages at each hub. `PackageInducted` populates `hubInventory[spoke].inbound` via the same reducer path as `PackageArrivedAtHub`. The scope trigger (`detectAffectedScope` returning `[inductionHubId, destHubId]` on `PackageInducted`) fires the epoch. No new optimizer twin concept.
-
-**Option B — Explicit new demand source:** The optimizer's twin model adds `spokeOriginDemand: Record<spokeId, TwinBlock[]>`. Induction events explicitly populate this demand.
-
-**Recommendation:** Automatic via projection (Option A). The optimizer already reads `hub_inventory` inbound counts. `PackageInducted` adds packages to `inbound` via the same handler that `PackageArrivedAtHub` uses. No new twin concept needed.
-
----
+Phases with standard/well-documented patterns (lighter research):
+- **Phase B:** the OODA-as-`SimTask` pattern is fully specified against existing self-rescheduling tasks (`createPackageBatch`/`inductPackage`) and the existing salt/substream discipline — mostly disciplined reuse.
+- **Phase E:** the cursor-fold is the exact v2.1 move applied again; async-queue seams + OL Cluster/declutter are documented and mechanical.
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | All researchers grounded in actual source files (`engine.ts`, `rng.ts`, `schemas.ts`). "Zero new deps" conclusion is definitive. |
-| Features | HIGH | Grounded in real carrier operations + existing codebase. Feature list complete for the 4 audited gaps. |
-| Architecture | HIGH | Full codebase read: `engine.ts` (1,267 LOC), all reducer files, optimizer `scope.ts`/`types.ts`, ws protocol. Integration points traced to actual source lines. |
-| Pitfalls | HIGH | All pitfalls reference specific source files and line ranges. No speculative risks. |
+| Stack | HIGH | Versions registry-verified 2026-06-26; dataset licenses checked; OL primitives Context7/docs-confirmed; zero new heavy runtime deps. Two flagged tasks (attribution, vendored `dist/`) are mechanical, not risky. |
+| Features | HIGH (carrier network design) / MEDIUM (OODA-as-event-emitting fusion) | Hub counts/tiering grounded in multiple HIGH carrier sources; the event-sourced OODA fusion is novel but adapts well-documented hybrid-autonomy/control-tower patterns. |
+| Architecture | HIGH | Every integration point names a real file:line in the shipped tree (verified 2026-06-26); the in-fold process-manager + pure-`runEpoch` wiring is codebase-grounded. |
+| Pitfalls | HIGH (determinism + perf) / MEDIUM-HIGH (coordination/topology/viz) | Determinism/perf grounded in this repo's OWN prior O(n²) freeze + `twin-snapshot` debt + RNG-substream machinery; coordination cross-checked against multi-agent + ES literature. |
 
-**Overall confidence: HIGH**
+**Overall confidence:** HIGH — decisive enough for requirements + roadmap. The one genuinely open lever (center count + backbone density) is reconciled to a default with an explicit, bounded adjustment path.
 
-### Gaps to Address During Requirements
-
-- **Float-point golden at 10,000 ticks:** Cross-platform (x86/ARM) hash behavior of `sampleLogNormal` not verified beyond 120-tick golden. Phase 1 acceptance gate must include this test. If it diverges, plan the integer-lookup-table mitigation.
-
-- **`slaDeadlineIso` queryability at `PackageDelivered` time:** When the engine schedules `PackageDelivered`, it needs the original `slaDeadlineIso` to compute `onTime`. Clarify during Phase 4 requirements whether (a) the engine retains `slaDeadlineIso` in its in-memory package entity, or (b) the `packageLifecycleReducer` projects it to a queryable table.
-
-- **`PlanSuperseded` vs supersession-aware `PlanAccepted`:** The double-counting pitfall (P7) requires clearing stale `staged` entries when a plan is superseded. The right event-sourced pattern is not yet decided. Surface as a design decision in Phase 3 requirements.
-
-- **Detection scoping benchmark:** The existing detection-cost-scales-with-state tech debt will be exacerbated by continuous induction. The `is_active` filter mitigation needs a Vitest benchmark at 10,000+ package state size to confirm it is sufficient. Add to Phase 3 requirements.
-
----
+### Gaps to Address
+- **Center count + backbone density (5–6 + near-full-mesh default):** validate trailer-fill/consolidation in a continental run during Phase A; adjust per the flagged lever (add 1–2 centers and/or designate a meshed core — never a single primary). Mandatory regardless: leg-length cap + anti-SPOF remove-any-center connectivity test.
+- **Dataset source + attribution:** pick SimpleMaps (backlink) vs `all-the-cities` (GeoNames credit + admin1→postal map) in Phase A planning; attribution is a **non-optional roadmap task**.
+- **Vendored async-queue `dist/`:** resolve the missing build output (commit `dist/` recommended) + `vendor/*` workspace wiring + ESLint core-ban before any Phase-E plumbing lands.
+- **Anti-oscillation sim-time constants:** hysteresis dwell, TTL, cooldown K, lease expiry need empirical tuning + their own golden in Phase C.
+- **Coordinator-in-fold optimizer cost:** profile the synchronous per-center `runEpoch`; keep a heuristic-Decide fallback behind a sub-flag (Phase D).
 
 ## Sources
 
-### Primary (HIGH confidence — codebase reads)
+### Primary (HIGH confidence)
+- **This repository (codebase-grounded, verified 2026-06-26):** `packages/simulation/src/{engine,continuation,rng}.ts`, `network/{hubs,routes}.ts`; `packages/domain/src/events/domain-event.ts`; `packages/optimizer/src/rolling/{scope,types,freeze-idempotency}.ts`; `packages/api/src/optimizer/{twin-snapshot,worker-client,coalesced-runner}.ts`, `sim/driver.ts`; `packages/projections/src/runner/inline.ts` (the residual `applyHubInventory` full-scan); `packages/simulation/test/determinism.unit.test.ts` (golden `3920accc…` + DET-01 two-part gate); `vendor/async-queue/src/index.ts`; `pnpm-workspace.yaml`, `tsconfig.base.json`, `vitest.config.ts`.
+- npm registry (`npm view`, 2026-06-26): `ol` 10.9.0, `@alexanderfedin/async-queue` 1.1.0 (MIT, 0 deps), `all-the-cities` 3.1.0, `us` 2.0.0, `@turf/great-circle`/`geodesy` (rejected).
+- Context7 `/openlayers/openlayers` + OL 10.9 API docs — `ol/source/Cluster`, `declutter`, `VectorImageLayer`, WebGL thresholds.
+- Real carrier network design: On the Seams (UPS, FedEx primers), FreightWaves, Census MSA tables, FCC top-100 MSA list — tiered hub counts, MSA-as-freight-node.
+- Robot autonomy / OODA: Boyd OODA, NASA NTRS "Planning in Subsumption", layered-control + subsumption literature — reactive/tactical/strategic horizon separation = agent-vs-coordinator authority split.
 
-- `packages/simulation/src/engine.ts` (1,267 LOC) — EventQueue, generate() stop condition, 6 seeded substream salts, opt-in feature flags, `pendingBySpoke` manifest pattern
-- `packages/simulation/src/rng.ts` — mulberry32 + splitmix32, `makeRng()`, `Rng` interface
-- `packages/domain/src/events/schemas.ts` — Zod schemas, `eventSchema` factory, `.strict()` payload contract
-- `packages/domain/src/events/domain-event.ts` — closed `DomainEvent` union (22 types as of v1.2+SP2)
-- `packages/domain/src/events/contract.assert.ts` — type-equality enforcement (build gate)
-- `packages/projections/src/reducers/hub-inventory.ts` — FND-07 bucket logic, `placePackage` null-remove pattern
-- `packages/projections/src/reducers/package-location.ts` — FND-05 lifecycle, additive-only upsert, no terminal-state removal
-- `packages/projections/src/detector.ts` — `runDetection` without active-package filter (confirmed scaling issue)
-- `packages/optimizer/src/rolling/scope.ts` — `detectAffectedScope`, `hubsOf`, `trailersOf`
-- `packages/optimizer/src/rolling/types.ts` — `TwinBlock`, `TwinRoute`, `TwinSnapshot`, `EpochResult`
-- `packages/optimizer/src/rolling/freeze-idempotency.ts` — `scopeHash`, `canonicalize`, `isFrozen`
-- `packages/api/src/sim/driver.ts` — per-tick loop, `runCatchup`, `readAll` usage
-- `packages/api/src/ws/snapshots.ts` — `diffTick`, `buildSnapshot`, ws send path
-- `.planning/PROJECT.md` — v2.0 goals, constraints, out-of-scope boundaries, v1.0 tech debt
-- `milestones/v1.0-MILESTONE-AUDIT.md` — in-memory idempotency debt, utilization proxy debt, detection-cost-scaling debt
+### Secondary (MEDIUM-HIGH confidence)
+- SimpleMaps US Cities Basic (CC BY 4.0 + backlink clause; site behind 403, corroborated via search); GeoNames readme (CC BY 4.0).
+- Control-tower maturity: IBM, Locus, OpenText, Inbound Logistics — visibility→prescriptive→orchestration; reroute/reallocate/sequence action types.
+- Process-manager / saga: Event-Driven.io, microservices.io — stateful-state-machine, choreography vs orchestration, single-owner instance.
+- Multi-agent anti-oscillation / Zeno exclusion: switching-topology stability, event-triggered consensus (PMC) — hysteresis/cooldown/dynamic-threshold rationale.
 
-### Secondary (MEDIUM confidence — domain and library research)
-
-- npm registry (2026-06-18 verified) — all pinned versions confirmed unchanged
-- https://prng.di.unimi.it/ — PRNG quality class reference; confirms mulberry32/splitmix32 approach
-- https://gee.cs.oswego.edu/dl/papers/oopsla14.pdf — Fast Splittable PRNGs; confirms XOR-split sub-seeding is sound
-- https://domaincentric.net/blog/event-sourcing-snapshotting — Snapshot pattern rationale
-- https://dev.to/kspeakman/event-storage-in-postgres-4dk2 — Postgres event store at large scale
-- https://eudl.eu/pdf/10.4108/ICST.SIMUTOOLS2009.5603 — DES warm-up; confirms warm-up is a statistical-estimator concern, not a visualization concern
-- Locus.sh, TransportGeography.org, ShipScience.com, RedStagFulfillment.com — middle-mile operational patterns (induction scan semantics, last-mile tender handoff, spoke-to-center consolidation flows)
+### Tertiary (advisory, cross-checked)
+- **`.planning/research/DESIGN-CONSULT.md`** (Google AI Mode, `udm=50`, 2026-06-26) — treated as a peer advisory input; its 3–5 / full-mesh recommendation and five anti-oscillation guards are reconciled against FEATURES/PITFALLS above (NOT silently averaged). Its anti-oscillation patterns and corridor/timezone partitioning are adopted; its center count is blended toward 5–6 to satisfy the FEATURES fan-out + PITFALLS anti-SPOF constraints.
+- MDPI Sustainability (metro-based hub-location p-median) — grounding only; live p-median is an explicit anti-feature.
 
 ---
-*Research completed: 2026-06-23*
+*Research completed: 2026-06-26*
 *Ready for roadmap: yes*

@@ -34,14 +34,14 @@ import type {
 // Fixtures — small but contract-realistic
 // ---------------------------------------------------------------------------
 
-/** Three USA hubs (subset of the real ~10) with valid lat/lon. */
+/** Three USA hubs (subset of the real ~10) with valid lat/lon + VIZ-16 tier. */
 export const HUBS: readonly HubDto[] = [
-  { hubId: "LAX", name: "Los Angeles", lat: 33.9416, lon: -118.4085 },
-  { hubId: "DFW", name: "Dallas/Fort Worth", lat: 32.8998, lon: -97.0403 },
-  { hubId: "ORD", name: "Chicago O'Hare", lat: 41.9742, lon: -87.9073 },
+  { hubId: "LAX", name: "Los Angeles", lat: 33.9416, lon: -118.4085, kind: "spoke", tier: 2 },
+  { hubId: "DFW", name: "Dallas/Fort Worth", lat: 32.8998, lon: -97.0403, kind: "center", tier: 1 },
+  { hubId: "ORD", name: "Chicago O'Hare", lat: 41.9742, lon: -87.9073, kind: "spoke", tier: 2 },
 ];
 
-/** Two linehaul routes with `[lon, lat]` GeoJSON-axis geometry. */
+/** Two linehaul routes with `[lon, lat]` GeoJSON-axis geometry + VIZ-16 isBackbone. */
 export const ROUTES: readonly RouteDto[] = [
   {
     routeId: "R-LAX-DFW",
@@ -51,6 +51,7 @@ export const ROUTES: readonly RouteDto[] = [
       [-118.4085, 33.9416],
       [-97.0403, 32.8998],
     ],
+    isBackbone: false,
   },
   {
     routeId: "R-DFW-ORD",
@@ -60,6 +61,7 @@ export const ROUTES: readonly RouteDto[] = [
       [-97.0403, 32.8998],
       [-87.9073, 41.9742],
     ],
+    isBackbone: false,
   },
 ];
 

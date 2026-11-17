@@ -1,245 +1,299 @@
-# Feature Research — Milestone v2.0 "Complete Simulation Model"
+# Feature Research — Milestone v3.0 "Continental OODA Network"
 
-**Domain:** Middle-mile parcel hub-and-spoke logistics simulation
-**Researched:** 2026-06-23
-**Confidence:** HIGH (grounded in real carrier operations + existing codebase)
-**Scope note:** This file covers ONLY the 4 audited gaps for v2.0. Everything shipped in v1.0–v1.2 is not re-researched. Features are evaluated as SIMULATION behaviors to model in a deterministic, event-sourced demo — not production WMS/TMS integrations.
+**Domain:** Continental-scale middle-mile parcel hub-and-spoke simulation + decentralized OODA agents + advisory coordination centers
+**Researched:** 2026-06-26
+**Confidence:** HIGH (real carrier network design) / MEDIUM (OODA-as-event-emitting framing — adapts well-documented patterns, the specific event-sourced fusion is novel)
+**Scope note:** This file covers ONLY the 4 NEW v3.0 feature clusters: (1) big-city hub generation, (2) regional-center topology + backbone, (3) OODA step-agents for trucks + hubs, (4) advisory coordination centers. Everything shipped in v1.0–v2.1 (single-center sim, RFID fusion, LIFO planner, rolling-horizon optimizer, HOS/driver model, fuel/rest stops, induction, consolidation, outbound, live map) is NOT re-researched and is treated as an existing dependency. The prior v2.0-scoped feature research is preserved at `FEATURES-v2.0.md`.
+
+This is a SIMULATION/demo. Features are evaluated as deterministic, event-sourced, golden-replayable behaviors — not production WMS/TMS/control-tower integrations. The real-world patterns below are grounding for what "realistic" and "good" look like, not integration targets.
 
 ---
 
-## Research Findings by Gap Area
+## Real-World Grounding (informs every category below)
 
-### What real middle-mile operations look like (grounding the simulation)
+### 1. How real carriers choose hub locations + how many
 
-**External induction in real networks:** A package enters a carrier network when a shipper tenders it and the carrier performs an origin scan (or "induction scan"). In real parcel operations this is the first event in the carrier's event ledger: the scanning system captures the tracking number, origin address, destination address, service level (next-day / 2-day / ground), and routes the package to a lane or outbound trailer. The package is assigned a destination hub (the hub nearest the recipient) at this moment. In large networks, induction happens at BOTH spokes (local pickup routes drop freight at spoke facilities) and at center/sort hubs (shippers with dock access tender directly). The key attributes carried from induction forward: origin hub (where inducted), destination hub (routing target within the middle-mile network), service level / deadline (determines priority in load planning), package dimensions/weight class, and a unique tracking id.
+Real parcel/LTL networks are **tiered**: super hubs (1–2 national sort centers) → regional hubs (mid-tier, state/region volume) → spoke facilities / delivery stations (hyper-local). [FedEx primer, UPS primer, FreightWaves]
 
-**Outbound / last-mile handoff in real networks:** When a package arrives at its destination hub and passes the final sort, it is "tendered to last-mile" — handed to a local delivery arm (DSP, postal service, or the carrier's own delivery fleet). Real events at this boundary: (1) a destination sort scan confirming correct hub, (2) route/manifest build (grouping packages for a delivery route), (3) a "tendered" or "out for delivery" status event — the package leaves the middle-mile network. The boundary is clean: once freight is tendered to the last-mile arm, middle-mile responsibility ends. Door-level vehicle routing to customers is the last-mile carrier's problem and stays out of scope for this simulation.
+Concrete public numbers (HIGH confidence, multiple sources):
 
-**Spoke-to-center consolidation in real networks:** Spokes aggregate freight from their service area (local pickups + shipper tenders at the spoke dock) and run one or more linehaul departures per day toward the sort center. At the sort center (center hub), arriving trailers are unloaded, freight is sorted by destination hub, and re-loaded onto outbound trailers for spoke delivery. This is the bidirectional flow: center→spoke for distribution, spoke→center for consolidation. Both directions use the same trailer fleet: a trailer that runs center→spoke delivers outbound freight, then loads inbound freight at the spoke and returns center→spoke, making it genuinely bidirectional.
+| Carrier (network) | Super/major hubs | Regional hubs | Spoke facilities | Notes |
+|---|---|---|---|---|
+| FedEx Express | 2 superhubs (Memphis, Indianapolis) | ~7 regional (Anchorage, Fort Worth, Greensboro, Miami, Newark, Oakland, Ontario) | — | ~9 major hub facilities total in Express. |
+| FedEx Ground | ~40 major hubs | — | ~700 spokes | Hub:spoke ≈ 1:17. |
+| UPS | 264 hubs | — | 745 spoke facilities (Centers) | Hub:spoke ≈ 1:3; air backbone via Louisville Worldport + 5 regional air gateways; **~34 rail facilities** as the cross-country ground backbone. |
+| Generic regional ground tier | — | "50–100 regional ground hubs across the US" | — | Consolidate truck traffic for an area. |
 
-**Sort waves and day cycles in real operations:** Large parcel hubs run in sort waves — roughly 2–3 per 24-hour cycle. A typical pattern: overnight inbound sort (receiving trailers that departed the previous evening from spokes), morning outbound sort (loading center→spoke delivery trailers for same-day spoke delivery), afternoon/evening inbound sort (receiving the day's spoke pick-ups for next-night linehaul). Cut-off times anchor each wave: a spoke has a "linehaul cut-off" by which freight must be inducted to make the night departure, and a center hub has a "dispatch window" for each outbound leg. In simulation terms: sort waves can be modeled as periodic triggers that generate induction events and mark trailer departure windows.
+**Hub-site selection drivers (real-world):** metro **population / freight demand density**, proximity to interstate corridors, **centrality** (minimize total linehaul miles), real-estate/labor cost, and air/rail access. Site selection is fundamentally a **facility-location / p-median** problem — place K hubs to minimize population-weighted distance to demand. For a demo we approximate this with a population-ranked metro list rather than solving p-median live.
 
-**Continuous operation:** Real operations run 365/24/7. Freight arrives throughout the day; cut-off windows segment it into departure slots. A simulation must therefore run as an open-ended event loop, generating induction events and trailer cycles that repeat across multiple sort periods without a fixed stop tick.
+**"Big city" = metro, not city-proper.** Real networks size facilities to the **Metropolitan Statistical Area (MSA)** population, not the incorporated city population (San Jose city > San Francisco city, but the SF Bay metro dwarfs San Jose metro). There are **400+ MSAs**; the **top ~100 MSAs hold a large majority of US population and parcel demand**. A top-100-MSA-derived hub map is the realistic basis. [Census MSA tables, FCC top-100 MSA list]
+
+**Why 1–3 per state is a reasonable demo heuristic (MEDIUM):** It is a *coverage* rule, not how carriers actually allocate (carriers allocate by demand density, so CA/TX/NY get many and Wyoming gets ~1). A pure top-N-MSA selection would leave several low-population states with **zero** hubs (no MSA in the national top-N), which looks broken on a USA map and breaks "every state reachable." The "≥1 and ≤3 per state" rule is a **per-state floor + per-state cap** layered on top of population ranking: guarantee national coverage (floor 1) while preventing CA/TX from dominating (cap 3). This yields ~80–130 hubs (50 states × 1 floor = 50 minimum; population-weighted top metros push the dense states to 2–3). This is a defensible, explainable demo rule — flag it as a *coverage heuristic*, not a claim about real carrier siting.
+
+### 2. How real regional-center networks are structured
+
+- **Tier count for ~100 hubs:** real super-hub tiers are tiny — FedEx Express runs the whole country on **2 superhubs + ~7 regionals**; UPS's cross-country ground backbone is **~34 rail consolidation points** but the *strategic* sort tier is far smaller. For a ~100-hub demo, **6–10 regional centers** is the realistic sweet spot: it mirrors the "one big regional sort per ~10–15 spokes" ratio and matches the count of US **census regions/divisions** (4 regions, 9 divisions) and rough **timezone × north/south** partitions. Fewer than ~5 over-concentrates fan-out (the v2.0 scaling problem returns); more than ~12 fragments consolidation (trailers leave half-empty).
+- **Spoke→center assignment:** **nearest-center (great-circle)** is the standard first-cut and is what the design already locked. Real carriers refine with **region/timezone boundaries** (so a hub 5 miles across a region line still sorts with its region) and **capacity balancing** (don't overload one center). Recommendation: **nearest-center as the base rule, with a region/division partition as a tie-break/guard** so assignment is stable and explainable, not jittery near equidistant boundaries.
+- **Inter-center backbone topology** — the real tradeoff:
+
+| Topology | Transit time | Consolidation (trailer fill) | Robustness | Edge count (C centers) | Fit for demo |
+|---|---|---|---|---|---|
+| **Full mesh** (every center↔every center) | Best (1 hop center-to-center) | Worst (thin lanes, half-empty trailers) | High (many paths) | C·(C−1) → ~30–90 legs | Too many thin lanes; clutters the map |
+| **Ring** | Worst (up to C/2 hops) | Good | Low (1 cut splits the ring) | C | Cheap but unrealistic + fragile |
+| **Hub-of-hubs** (one primary center; others spoke to it) | Medium (≤2 hops) | **Best** (everything consolidates through the primary) | Low (primary = SPOF) | C−1 | Matches FedEx Memphis/Indy reality |
+| **Hierarchical / 2-tier mesh** (a small core fully-meshed; others hub-of-hubs onto core) | Good | Good | Good | tunable | **Best balance for ~6–10 centers** |
+
+**Recommendation:** **hub-of-hubs backbone with a small fully-meshed core** (the 2–3 largest centers mesh; remaining centers spoke to their nearest core center). This is exactly the FedEx pattern (Memphis+Indy superhub core, regionals feed in), keeps lane count and on-map clutter low, gives good consolidation, and ≤2-hop center-to-center transit. Full mesh and ring are **anti-features** at this scale (see below). The design notes leave this open; **this is the concrete answer the roadmap should adopt.**
+
+Resulting freight path: `spoke → nearest regional center → [backbone: ≤2 hops, possibly via core] → destination regional center → destination spoke`. This is the documented LTL flow (origin terminal → linehaul between hubs → destination terminal). [STG Logistics, Redwood, RXO]
+
+### 3. OODA / sense-plan-act for trucks + hubs — concrete grounding
+
+OODA (Boyd: Observe → Orient → Decide → Act) is the canonical decision-cycle and is explicitly applied to **autonomous vehicles, robotics, and agentic systems**: Observe = sense world state; Orient = build situational awareness (filtering, prediction); Decide = select an action; Act = execute + control. [ASDLC, USPTO 11734590, EmergentMind]
+
+The robotics **layered-control / hybrid architecture** literature gives the crucial decomposition the design needs (HIGH):
+
+- **Reactive layer** (fast, local, sensor→action, no planning) — horizon **10–100 ms**.
+- **Tactical planner** — horizon **1–60 s**.
+- **Strategic / mission planner** (deliberative) — horizon **minutes–hours**.
+- Hybrid/3-layer + **subsumption** architectures explicitly **separate fast local reactive behavior from slower deliberative oversight**, and higher (slower, broader) layers can *suggest/suppress* but the fast local layer owns immediate feasibility/safety. [Brooks subsumption; layered-control; NASA "Planning in Subsumption"]
+
+**This maps directly onto the v3.0 design:** the **OODA agent = reactive/tactical layer** (owns local feasibility it alone knows — fuel, HOS remaining, position), the **coordination center = strategic deliberative layer** (broad, slow, *advisory*). The agent can always **reject** the strategic layer's suggestion on local-feasibility grounds. This is textbook hybrid robot autonomy, which is strong validation for the locked "advisory-first, agents arbitrate" decision.
+
+**Truck agent — concrete OODA (per step):**
+- **Observe:** own position/leg progress (odometer), fuel level, **HOS clock remaining** (drive + duty + cycle), current load/assignment, ETA, and *read from projections*: queue/dock state at next hub, any open `ActionSuggested` addressed to it.
+- **Orient:** Will fuel reach the next hub/stop? Will HOS expire mid-leg? Is the next hub congested? Is there a pending suggestion to consider?
+- **Decide (seeded, pure):** **proceed** | **divert to fuel stop** | **take rest break** (HOS) | **swap/relay driver at hub** | **accept or reject** a coordinator suggestion (re-route/hold). Local-feasibility decisions (fuel, rest) are **agent-owned and non-overridable** by a coordinator.
+- **Act:** emit the existing domain events (`FuelStopStarted`, `RestStarted`, `DriverSwapped`, depart/arrive, `SuggestionAccepted`/`SuggestionRejected`) — reuses v1.2 HOS + v2.x fuel/rest plumbing.
+
+**Hub agent — concrete OODA (per step):**
+- **Observe:** inbound queue (trailers/freight awaiting sort), outbound queue by destination lane, **dock/door capacity in use**, current trailer fill levels, cut-off/sort-wave clock, open suggestions.
+- **Orient:** Is an outbound trailer full enough to dispatch (vs the 75–90% utilization band)? Is a cut-off approaching (dispatch even if under-full)? Are docks saturated (hold inbound)? Is freight blocked awaiting a connection?
+- **Decide (seeded, pure):** **dispatch** an outbound trailer | **hold** for more consolidation / a connecting trailer | **consolidate** (merge partial loads) | trigger a **load-plan** (call the existing LIFO planner) | **accept/reject** a coordinator suggestion (e.g., "hold for inbound from center X").
+- **Act:** emit dispatch / hold / consolidation / load-plan-requested events.
+
+**Decision-authority split (the key architectural rule):**
+
+| Decision | Owner | Why |
+|---|---|---|
+| Fuel divert, rest break, HOS legality, drive/no-drive | **Truck agent (local, binding)** | Only the agent knows exact fuel + HOS clock; safety/legality is non-negotiable; matches reactive-layer authority. |
+| Dispatch-vs-hold under cut-off, local consolidation, load-plan trigger | **Hub agent (local, binding)** | Local dock/queue state; immediate feasibility. |
+| Cross-hub re-routing, which center to consolidate through, load balancing across centers, lane swaps | **Coordinator (advisory)** | Needs the broad multi-hub view a single agent lacks; but lacks local feasibility, so **suggest only**. |
+| Global plan optimization (min-cost-flow / VRPTW) | **Coordinator may invoke existing optimizer** to *generate* suggestions | Preserves proven v1 IP as a recommendation engine, not a binding global solve. |
+
+**OODA step cadence:** step on the **existing deterministic tick / EventQueue**, not wall-clock (mandatory for determinism). **Per-N-tick** (not every tick) for cost control — most ticks an agent has nothing to decide; gate Decide behind cheap Observe/Orient guards (a "is there anything to decide?" predicate) so the common case is O(1). This is the reactive-vs-deliberative horizon separation applied to tick budget.
+
+### 4. Coordination centers / advisory suggestions — control-tower grounding
+
+Real **supply-chain control towers** sit on a maturity ladder: **visibility** (just shows the SLA risk) → **prescriptive** (recommends the fix) → **orchestration/autonomous** (executes within guardrails, logs exceptions for human review). [IBM, Locus, OpenText, Inbound Logistics] The v3.0 coordinator is deliberately at the **prescriptive/advisory** rung: it *recommends*, the agent *arbitrates*. This is also the existing optimizer's "recommendation + human override with audit" model (already locked in PROJECT.md out-of-scope: "Fully automated dispatch with no human override" stays out).
+
+**Suggestion types that matter (from control-tower practice):** **re-route** (lane/path change to avoid congestion or balance centers), **hold** (wait for a connecting trailer / better consolidation), **consolidate** (merge partial loads), **dispatch** (release a trailer now, e.g., cut-off imminent), **driver swap/relay** (fresh driver at a relay hub), **reassign/reallocate load** (move freight to a different trailer/lane). These map cleanly onto events the agents already emit. [Locus: reroute / reallocate / sequence / notify]
+
+**The advisory contract (the differentiator):** coordinator emits `ActionSuggested` (advisory, addressed to a specific agent, with a rationale + expiry). The agent runs its OODA Decide step, checks the suggestion against **local feasibility it alone knows** (fuel, HOS rest due, road closure / blocked dock), and emits **`SuggestionAccepted`** (→ then the binding event) or **`SuggestionRejected`** (with a reason code). This makes the reject path **first-class, auditable, and explainable** — which is exactly the project's core value ("explainable, auditable decisions").
+
+**Guardrails against oscillation / suggestion storms (CRITICAL — this is where naive multi-agent coordination fails):** distributed control-loop literature is explicit that switching/coordination loops oscillate without damping/hysteresis. [multi-agent stability under switching topologies; control-theoretic foundations] Concrete guardrails the demo must implement:
+
+- **Hysteresis / dead-band:** only suggest a re-route if the improvement exceeds a threshold (don't flap a truck between two near-equal paths).
+- **Cooldown / debounce:** a min interval between suggestions to the same agent/lane; suppress re-suggesting something just rejected (carry a short "rejected recently" memory).
+- **One-suggestion-per-target-per-epoch:** bounded scope per coordinator epoch prevents a suggestion storm; coordinators are **per-regional-center with bounded scope** (already locked), which structurally caps fan-out.
+- **Expiry / staleness:** suggestions expire; an agent ignores a stale suggestion (the world moved on).
+- **Conflict resolution:** at most one coordinator owns a given agent/lane (partition by region) so two coordinators can't issue contradictory advice; if a suggestion conflicts with an in-flight binding decision, the binding decision wins.
+- **Determinism:** all of the above must be **seeded/pure** and tick-driven so the golden replay is byte-identical.
 
 ---
 
 ## Feature Landscape
 
-### Table Stakes (Demo Feels Incomplete Without These)
+### Table Stakes (a continental network demo looks broken without these)
 
-Features a reviewer expects to see in a "complete simulation model" demo. Missing = the demo story breaks.
+| Feature | Why Expected | Complexity | Notes / Dependencies |
+|---|---|---|---|
+| **Big-city hub generation (1–3/state, ~80–130)** from a curated, ranked metro dataset | A "continental" demo with 10 hubs isn't continental. Static/deterministic (no clock/RNG) to stay golden-reproducible. | MEDIUM | Generalizes `hubs.ts` (10 fixed IATA). Needs a committed top-MSA dataset (name/state/lat-lon/pop). **Dep:** none upstream; everything downstream depends on it. |
+| **Multi-center topology** (engine supports >1 center) | Single-center star can't scale to 100+ hubs (the v2.0 stall). Real networks are multi-tier. | HIGH | **Real change** to `buildRoutes` (currently centers on `USA_HUBS[0]`), the freight-flow model, and optimizer/twin scope. **Dep:** big-city hubs; existing routes/freight-flow. |
+| **Nearest-center spoke assignment** (great-circle) | Standard first-cut in real networks; design-locked. | LOW | Pure great-circle (already have `haversineKm` + `greatCircle`). Add region/division tie-break for stability. **Dep:** hubs + centers chosen. |
+| **Inter-center backbone** (multi-hop center→center freight) | LTL/parcel freight flows spoke→hub→linehaul→hub→spoke; without a backbone, centers are islands. | MEDIUM | **Recommendation: hub-of-hubs with a small meshed core** (see table above). **Dep:** centers chosen; great-circle geometry. |
+| **Great-circle arc geometry for new legs** | ORS road geometry doesn't scale to hundreds of legs; design-locked. | LOW | Already implemented (`greatCircle`, `buildRoutes` falls back to it). Just stop expecting per-leg ORS. **Dep:** none. |
+| **OODA `step()` per truck + per hub** emitting existing domain events | The decentralized decision model IS the milestone; agents must make the local calls (fuel/rest/dispatch/hold) the global optimizer used to. | HIGH | Observe reads projections; Decide is seeded+pure; Act emits existing events. **Dep:** HOS engine (v1.2), fuel/rest (v2.x), consolidation/load-planner (v1/v2), projections. **Determinism keystone.** |
+| **Agent-owned local feasibility** (fuel/HOS/rest binding, non-overridable) | A coordinator that could override a fuel/HOS-illegal move would be unrealistic and unsafe. | MEDIUM | Reuses v1.2 HOS + v2.x fuel/rest as the binding constraints. **Dep:** HOS + fuel/rest. |
+| **Coordination centers as advisory process-managers** (`ActionSuggested`, one per region, bounded scope) | The "suggest, don't command" model is the locked design + matches control-tower prescriptive rung + project's no-full-automation rule. | HIGH | ES process-manager subscribing to truck/hub events. **Dep:** OODA agents + events; multi-center topology (one coordinator per center). |
+| **Accept/reject suggestion contract** (`SuggestionAccepted` / `SuggestionRejected` w/ reason) | Without a first-class reject path, "advisory" is fiction. Reject is the explainability moment. | MEDIUM | Agent's OODA Decide arbitrates. **Dep:** advisory coordinator + agent feasibility checks. |
+| **Oscillation guardrails** (hysteresis, cooldown, expiry, conflict partition) | Naive coordination flaps; a flapping demo is worse than no coordinator. | MEDIUM | Seeded/pure; per-region scope caps fan-out. **Dep:** advisory contract. |
+| **New flag-gated goldens; flags-off byte-identical to v2.0** | Determinism keystone; OODA changes the event stream by design. | MEDIUM | Every feature behind a flag. **Dep:** all of the above. |
+| **Scale visualization** (100+ hubs + backbones + suggestion overlays, no clutter) | The map is the demo centerpiece; 100+ hubs naively rendered is a hairball. | MEDIUM-HIGH | LOD/clustering, backbone styled distinct from spokes, suggestion overlays toggleable. **Dep:** topology + events to render. |
+| **Sustained continental-run performance** | The whole point is *not* stalling at scale. | HIGH | O(active) per-agent/per-coordinator cost; per-N-tick stepping; incremental snapshot (carry-over debt). **Dep:** OODA + coordinators; `twin-snapshot` incremental follow-up. |
 
-| Feature | Why Expected | Complexity | Existing Dependencies | Notes |
-|---------|--------------|------------|-----------------------|-------|
-| **CONT-01: Open-ended run loop** | A simulation that stops after ~120 ticks is clearly finite; a "continuous" demo must visibly sustain flow indefinitely | LOW | `engine.ts` `durationTicks`, `VirtualClock` | Replace hard stop with an epoch-cycle loop; keep seeded determinism by using tick-counter-based triggers not wall-clock |
-| **CONT-02: Periodic induction trigger** | Without recurring freight generation, the network drains; sustained flow requires induction events to fire on a repeating schedule | LOW-MEDIUM | `PACKAGE_INTERVAL_TICKS`, engine event queue | Generalize the center-only package generation to fire at multiple hubs on a configurable interval; spoke induction fires at spokes |
-| **IND-01: FreightInducted event** | Every package entering the network from outside needs a traceable first event (origin scan analog); `PackageCreated` today is an internal construction, not an entry event | LOW | `PackageCreated`, `@mm/domain` events union | New event type carrying: `hubId` (induction point), `originAddress` (simulated), `destinationHubId`, `slaClass`, `deadline` (epoch minutes), `packageId` |
-| **IND-02: Induction at spoke hubs** | Freight entering at spoke locations (not just center) is the defining characteristic of a real network; center-only induction is the v1 limitation being removed | MEDIUM | `PACKAGE_INTERVAL_TICKS`, engine, network topology | The engine must generate `FreightInducted` events at spoke hubs for packages destined for other spokes or center, not just center-spawned packages |
-| **IND-03: Destination hub + SLA carried on package** | Load planner and optimizer need destination hub and deadline to route and prioritize; today's packages carry `destinationHubId` but it is always a spoke assigned by the center | LOW | `Package` entity, `PackageCreated`, AGG-04 | `FreightInducted` must carry `destinationHubId` (drawn from seeded RNG over the hub list) and `slaClass`/`deadline`; the existing deadline/SLA plumbing already handles this downstream |
-| **FLOW-01: Spoke-origin trailer departure** | Trailers must depart FROM spokes toward the center (consolidation leg) — today empty trailers return without freight | MEDIUM | `TrailerDeparted`, engine routing logic | Engine must load inducted freight at spokes onto trailers before spoke→center departure; the LIFO planner already handles loading, just needs to be called on spoke-origin load plans |
-| **FLOW-02: Center inbound unload + re-sort** | Arriving spoke→center trailers must be unloaded at center (currently center only dispatches, never receives) | MEDIUM | `UnloadStarted`, `UnloadCompleted`, `TrailerArrivedAtHub` at center | Center hub must handle inbound unload events; freight unloaded at center re-enters the center hub inventory for outbound sorting |
-| **FLOW-03: Center→spoke distribution still works** | The existing center→spoke distribution must continue unbroken alongside spoke→center consolidation | LOW | All v1.0 engine logic | Bidirectional is an extension, not a replacement; existing center→spoke path must remain functionally identical |
-| **OUT-01: FreightDelivered event** | Freight leaving the destination hub to last-mile needs a terminal event; `PackageArrivedAtHub` is currently the terminal event but is ambiguous — is this delivery or a transit stop? | LOW | `PackageArrivedAtHub`, projections, `@mm/domain` | New `FreightDelivered` event type: `packageId`, `hubId` (destination hub), `deliveredAt` (epoch), `slaClass`, `onTime` (boolean). Fired when a package at its destination hub is "tendered out" |
-| **OUT-02: Destination hub detection** | The engine must know a package has arrived at its assigned `destinationHubId` (vs a transit stop) to trigger `FreightDelivered` | LOW | `PackageArrivedAtHub`, `Package.destinationHubId` | Compare arriving trailer's hub against each unloaded package's `destinationHubId`; if match → emit `FreightDelivered` after unload; otherwise package stays in hub inventory for transit leg |
-| **OUT-03: SLA on-time flag at delivery** | The demo KPI story (rehandle reduction, SLA performance) requires visible on-time vs late tracking; without it, the optimizer's deadline awareness has no visible outcome | LOW | `AGG-04` (priority from SLA+deadline), `OPT-08` objective | `FreightDelivered.onTime = (deliveredAt <= deadline)`; fed into KPI projections |
-| **VIZ-07: Map shows freight in both directions** | A live map where all trailers only go center→spoke is obviously incomplete; reviewers expect to see spoke→center return legs carrying freight | MEDIUM | `VIZ-02` trailer animation, ws state diffs | Ensure `TrailerDeparted` from spokes carries non-empty manifest visible in the map tooltip; no new map primitives needed, just data flowing through existing viz pipeline |
-| **CONT-03: Cycle-counter / sim-day display** | With a continuous run, the observer needs to see "Day N, Sort Wave M" or equivalent to understand what period they're watching | LOW | VIZ KPI panel, ws tick envelope | Add `simDay` and `sortWave` to the ws tick state diff; display in KPI panel |
+### Differentiators (set this demo apart)
 
-### Differentiators (Enhance the Demo Story)
+| Feature | Value Proposition | Complexity | Notes |
+|---|---|---|---|
+| **Visible reject-with-reason** (truck rejects a coordinator re-route because fuel/HOS won't allow it, shown on map + alert feed) | The single most compelling "this is smart and honest" moment — local knowledge beats central advice, auditable. Directly showcases core value. | MEDIUM | Reuses alert feed (UI-01) + audit timeline (UI-02). |
+| **Coordinator-uses-optimizer** (the proven v1 min-cost-flow / VRPTW becomes the suggestion engine, per-center bounded scope) | Preserves the hardest-won IP and reframes it as decentralized advice — both more scalable AND a better story than "global solve." | HIGH | **Dep:** existing optimizer; bounded per-center scope. Exact coupling (coordinator calls optimizer synchronously per epoch, or off the worker-optimizer?) is a roadmap research point. |
+| **Hub-of-hubs core animated as a freight backbone** on the map (distinct visual tier) | Reads instantly as "national network," not "10 dots." Strong continental-scale visual. | MEDIUM | Style core lanes thicker/distinct; LOD. |
+| **Per-agent explainable rationale** (every OODA Decide carries a "why": proceed/divert/hold + the observation that triggered it) | Continues the project's per-placement-rationale tradition into the agent layer; makes the decentralized brain inspectable. | MEDIUM | Fold rationale into the emitted events (already a pattern). |
+| **Coordinator advisory overlay** (suggestion arrows that turn green on accept / red on reject) | Live, legible proof the advisory loop is working without cluttering steady state. | MEDIUM | Toggleable overlay; expiry fades stale suggestions. |
 
-Features that make the simulation richer and more persuasive without being required for the "complete" narrative.
+### Anti-Features (tempting, but wrong for this milestone)
 
-| Feature | Value Proposition | Complexity | Existing Dependencies | Notes |
-|---------|-------------------|------------|----------------------|-------|
-| **CONT-04: Sort wave / cut-off windows** | Real parcel networks run 2–3 sort waves per 24-hour cycle with cut-off times; modeling waves makes the cycle rhythm visible on the map (a burst of departures, then quiet, then burst) | MEDIUM | `PACKAGE_INTERVAL_TICKS`, timing config, optimizer rolling-horizon | Model 2 sort waves per sim day; induction batches build up freight, a cut-off window triggers a departure burst; the optimizer already has freeze-window + rolling-horizon wiring (OPT-05/06) |
-| **IND-04: Mixed-direction induction** | Some inducted freight at a spoke is destined for that same spoke's delivery zone (local short-circuit) vs needing to transit through center; modeling both makes the routing decisions richer | MEDIUM | `FreightInducted`, load planner, optimizer | Assign `destinationHubId` with weighted distribution (some fraction same-hub local, rest cross-network); local short-circuit emits `FreightDelivered` directly after induction without a transit leg |
-| **FLOW-04: Hub inventory balance display** | After bidirectional flow is live, showing per-hub freight inventory (inbound / outbound / dwell count) as a map heat or panel number demonstrates the optimizer's cross-dock balancing value | MEDIUM | `HUB-07` (hub inventory projection), KPI panel, VIZ | Extend the existing hub projection to track inbound-from-spokes vs outbound-to-spokes count; render in hub tooltip or KPI |
-| **OUT-04: Delivered-out counter / delivery rate KPI** | A running tally of freight delivered (+ on-time %) is the most legible signal that the simulation is producing real end-to-end outcomes | LOW | `FreightDelivered`, KPI projection | Append delivery count + on-time % to the existing KPI dashboard (UI-03); reuses existing projection infrastructure |
-| **CONT-05: Graceful sim-speed scaling with continuous run** | At higher sim speeds, the paced-loop accumulator must not cause unbounded queue growth as freight accumulates across many cycles; sustained high-speed demo requires the optimizer's rolling horizon to keep pace | MEDIUM | paced-loop, worker-thread optimizer | Document the existing pacer behavior under multi-cycle loads; add a max-queue-depth safety valve if needed |
-
-### Anti-Features (Explicitly Out of Scope for v2.0)
-
-Features that might seem like natural extensions but are out of scope for this milestone — either per PROJECT.md, or because they add complexity without demo value for a proof-of-concept.
-
-| Feature | Why Tempting | Why Out of Scope | What to Do Instead |
-|---------|--------------|------------------|--------------------|
-| **Last-mile delivery routing (door-level VRP)** | Natural next step after "freight leaves hub" | Explicitly excluded in PROJECT.md; it is a separate domain (delivery routing) adding major scope without proving the middle-mile value | Emit `FreightDelivered` as a terminal event — the last-mile arm is opaque; the demo story is "freight left the middle-mile network on time" |
-| **Returns / reverse logistics flow** | Real networks handle returns (consumer→spoke→center) | Adds a third flow direction; the hub graph, optimizer, and load planner would need return-package attributes; not needed to close the "continuous bidirectional" loop | Defer to a hypothetical v3.0; the two-direction center↔spoke flow is sufficient for the demo |
-| **Multiple sort waves per hub with different cut-off times** | Real hubs have 2–4 distinct waves with different SLA service classes | Modeling per-wave per-hub SLA windows requires a scheduling layer that dwarfs the optimization changes it enables; the demo does not need this granularity | Model a single uniform sort-wave rhythm across all hubs; waves can be a sim config knob without per-hub differentiation |
-| **Real-time shipper tender integration (EDI/API)** | Connects the sim to real shipper data | This is a production integration, not a simulation feature; the v1 constraint ("Simulated only") applies through v2.0 | Generate synthetic induction events from the seeded RNG; do not wire any external data source |
-| **Freight manifesting / manifest documents** | Real carriers produce manifests at cut-off | A manifest is a downstream artifact of the load plan; the load plan + LIFO instructions already serve this purpose for the demo | The existing LOAD-08 (human-readable loading instructions) IS the manifest analog for the demo |
-| **Live hub-to-hub freight demand forecasting** | Real planners forecast demand to pre-position trailers | Requires a demand model layer; scope is to react to simulated arrivals, not predict them | The rolling-horizon optimizer (OPT-05) already re-plans on induction events; no forward-demand forecast is needed |
-| **Per-package GPS tracking / last-known-location** | Seems like a richer VIZ | At this scope, freight is tracked at hub-arrival granularity via `PackageArrivedAtHub` / `FreightDelivered`; package-level sub-hub tracking is not needed and conflicts with the "RFID as probabilistic zone evidence" design | `PackageArrivedAtHub` + `FreightDelivered` provide sufficient package-level audit trail |
-| **Induction at arbitrary non-hub locations** | Some carriers have satellite injection points | Adds a third facility type to the topology; not needed for the hub-and-spoke demo | All induction happens at one of the 10 USA hub nodes |
+| Feature | Why Requested | Why Problematic | Alternative |
+|---|---|---|---|
+| **Full-mesh inter-center backbone** | "Fastest center-to-center, every center connected." | C·(C−1) thin lanes → half-empty trailers (kills consolidation), map clutter, and edge explosion at 8–10 centers. | Hub-of-hubs + small meshed core (≤2 hops, good fill). |
+| **Binding/commanding coordinators** (control tower that executes) | "Real control towers orchestrate autonomously; just let it act." | Violates the locked advisory-first decision + the project's explicit "no fully automated dispatch without override" boundary; removes the reject/explainability moment that IS the value; lets central advice override fuel/HOS feasibility the agent alone knows. | Advisory `ActionSuggested` + agent arbitration; keep human/agent override with audit. |
+| **True agent-based-model rewrite** (replace the EventQueue with per-tick autonomous agent loops) | "Agents should be real autonomous loops." | Explicitly **rejected** in design notes — destroys event-sourcing, seeded determinism, and byte-identical replay (the non-negotiable keystone). | OODA as an event-*emitting* `step()` layered on the existing tick/EventQueue; event log stays source of truth. |
+| **Live per-leg ORS road geometry at 100+ hubs** | "Real roads look better." | Hundreds of legs × live ORS = non-deterministic, slow, rate-limited; doesn't scale; design-locked against it. | Great-circle arcs (free, instant, deterministic) for the new continental legs. |
+| **p-median / live facility-location optimization for hub siting** | "Pick mathematically optimal hub sites." | Adds a whole optimization subproblem + nondeterminism risk for ~zero demo value; real value is a believable map, not provably-optimal siting. | Static population-ranked top-MSA dataset + per-state floor/cap heuristic (deterministic, explainable). |
+| **Per-tick Decide for every agent** | "Most responsive." | O(agents × ticks) cost re-creates the v2.0 stall; most ticks have nothing to decide. | Per-N-tick stepping + a cheap "anything to decide?" guard so the common case is O(1). |
+| **Unbounded / global coordinator** (one coordinator sees all hubs) | "Simpler — one brain." | Recreates the global-solve scaling pressure v3.0 exists to remove; enables suggestion storms + cross-region conflicts. | One coordinator per regional center, bounded scope, region-partitioned ownership. |
+| **Suggestions without expiry/hysteresis** | "Just send the best advice continuously." | Flapping / suggestion storms / oscillation — documented failure mode of undamped coordination loops. | Hysteresis dead-band, cooldown, expiry, one-per-target-per-epoch, reject-memory. |
+| **Async-queue (Promises/microtasks) inside the sim core** | "We vendored it; use it everywhere." | Microtask scheduling is non-deterministic → breaks golden replay. Design-locks it to **runtime plumbing only**. | Use `@alexanderfedin/async-queue` only for worker handoff / ws backpressure / DB batching — never the deterministic sim/agent/coordinator decision path. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-[IND-01: FreightInducted event]
-    └──enables──> [IND-02: Induction at spoke hubs]
-    └──enables──> [IND-03: Destination hub + SLA on package]
-    └──requires──> Extend @mm/domain DomainEvent union
+[Big-city hub dataset + ranking (1–3/state)]
+        └──requires──> (nothing upstream — the root)
+                 │
+                 ▼
+[Multi-center topology (engine supports >1 center)]
+        ├──requires──> [Big-city hubs]
+        ├──requires──> [existing buildRoutes / freight-flow (v1)]   (must be generalized)
+        │
+        ├──> [Nearest-center spoke assignment]  (great-circle; +region tie-break)
+        └──> [Inter-center backbone: hub-of-hubs + meshed core]  (great-circle arcs)
+                 │
+                 ▼
+[OODA step() agents (truck + hub)]
+        ├──requires──> [Multi-center topology]  (agents act over the new network)
+        ├──requires──> [HOS engine (v1.2)]      (truck feasibility)
+        ├──requires──> [Fuel/rest stops (v2.x)] (truck feasibility)
+        ├──requires──> [Consolidation + LIFO load planner (v1/v2)]  (hub Act)
+        └──requires──> [projections]            (Observe reads these)
+                 │
+                 ▼
+[Advisory coordination centers (ES process-manager, per region)]
+        ├──requires──> [OODA agents + their emitted events]  (subscribes to them)
+        ├──requires──> [Multi-center topology]               (one coordinator per center)
+        ├──enhanced-by──> [existing optimizer (min-cost-flow/VRPTW)]  (suggestion engine)
+        │
+        └──> [Accept/Reject contract]
+                 ├──requires──> [agent local-feasibility checks (HOS/fuel/dock)]
+                 └──> [Oscillation guardrails (hysteresis/cooldown/expiry/conflict)]
 
-[IND-02: Spoke induction]
-    └──requires──> [CONT-02: Periodic induction trigger at multiple hubs]
-    └──feeds──> [FLOW-01: Spoke-origin trailer departure] (freight to load)
-
-[FLOW-01: Spoke-origin trailer departure]
-    └──requires──> [IND-02] (something to load)
-    └──requires──> LIFO load planner called on spoke-origin build (LOAD-03 already exists)
-    └──feeds──> [FLOW-02: Center inbound unload + re-sort]
-
-[FLOW-02: Center inbound unload]
-    └──feeds──> center inventory, which feeds [FLOW-03: center→spoke distribution]
-    └──requires──> existing UnloadStarted/UnloadCompleted path at center hub
-
-[OUT-01: FreightDelivered event]
-    └──requires──> [OUT-02: Destination hub detection] (know when to fire it)
-    └──requires──> [IND-03] (package must carry destinationHubId + deadline)
-    └──enables──> [OUT-03: SLA on-time flag]
-    └──enables──> [OUT-04: Delivered-out counter KPI] (differentiator)
-
-[CONT-01: Open-ended run loop]
-    └──requires──> [CONT-02: Periodic induction trigger] (otherwise loop drains)
-    └──enables──> [CONT-03: Cycle-counter display]
-    └──enables──> [CONT-04: Sort wave windows] (differentiator — only visible in multi-cycle run)
-
-[VIZ-07: Map shows both-direction freight]
-    └──requires──> [FLOW-01] (spoke-origin trailers carry non-empty manifests)
-    └──no new map primitives needed] — existing ws pipeline + VIZ-02 trailer animation
+[Scale viz + perf]  ──renders/sustains──>  all of the above
+[New flag-gated goldens]  ──gates──>  every feature (flags-off == v2.0 byte-identical)
+[async-queue]  ──plumbing-only──>  worker handoff / ws backpressure / DB batching  (NOT sim core)
 ```
 
 ### Dependency Notes
 
-- **IND-01 requires domain extension:** The `DomainEvent` discriminated union in `@mm/domain` must gain `FreightInducted` and `FreightDelivered` event types. This is a closed union with schema versioning; all consumers (projections, API, sensor-fusion) must handle the new cases via `assertNever` exhaustive checks. This is the highest-impact single change — it touches every package.
-
-- **FLOW-01 requires load planner on spoke-origin build:** The existing LIFO load planner (LOAD-03) is already invoked at center hub departure. It must also be invoked when a spoke-origin trailer is built. The spoke has a smaller inventory to work with (locally inducted freight), so the load plan will be shorter — but the same planner code applies unchanged.
-
-- **CONT-01 + CONT-02 are the prerequisite foundation:** Every other v2.0 feature needs freight to actually exist and flow continuously. The engine must generate `FreightInducted` events on a repeating schedule before any of the directional features can be demonstrated.
-
-- **OUT-02 is trivially derivable from existing data:** Each `PackageArrivedAtHub` already carries `hubId`; the `Package` entity already carries `destinationHubId` (via the `PackageCreated` / `FreightInducted` event). Detection is a single equality check in the unload handler. No new projection needed.
-
-- **VIZ-07 requires no new map primitives:** The existing ws keyframe+delta envelope and `VIZ-02` trailer animation work for any trailer on any route. The only change is that spoke→center trailers now carry non-empty manifests in the state diff, making the tooltip show freight instead of "empty return."
+- **Multi-center topology is the linchpin** — it depends on big-city hubs AND requires a real rewrite of `buildRoutes` (today centers on `USA_HUBS[0]`). Build it before OODA/coordinators; everything else assumes >1 center.
+- **OODA agents depend on the entire existing operational stack** — they don't replace HOS/fuel/consolidation/load-planner, they *invoke* them as the local-feasibility and Act machinery. This is reuse, not rebuild — lower risk than it looks, but the integration surface is wide.
+- **Coordinators depend on agents existing first** (they subscribe to agent-emitted events). Sequence: topology → agents → coordinators. Matches the design-notes build order.
+- **Optimizer is an enhancer, not a hard dependency, of coordinators** — coordinators *may* call it to generate suggestions; a coordinator could emit rule-based suggestions without it. This lets the roadmap ship a rule-based coordinator first and wire the optimizer in as a differentiator.
+- **Guardrails depend on the accept/reject contract**, which depends on agent feasibility checks (HOS/fuel/dock). Don't ship suggestions before the reject path + hysteresis exist, or the demo flaps.
+- **Determinism flag-gating wraps everything** — each feature flag-off must leave the v2.0 golden `3920accc…` byte-identical; the new OODA model gets its own goldens.
 
 ---
 
-## MVP Definition for v2.0
+## MVP Definition (for this milestone)
 
-### Must Ship (Table Stakes — v2.0 not "complete" without these)
+### Build First (topology foundation — de-risk the engine change)
 
-- [x] **CONT-01** — Open-ended run loop (replace `durationTicks` hard stop with a self-sustaining cycle)
-- [x] **CONT-02** — Periodic induction trigger at multiple hubs (freight regeneration)
-- [x] **IND-01** — `FreightInducted` domain event (origin scan analog, new event type)
-- [x] **IND-02** — Induction at spoke hubs (not center-only)
-- [x] **IND-03** — Destination hub + SLA deadline carried on inducted package
-- [x] **FLOW-01** — Spoke-origin trailer departures carry freight (consolidation legs)
-- [x] **FLOW-02** — Center inbound unload + re-sort handles spoke→center arrivals
-- [x] **FLOW-03** — Existing center→spoke distribution continues unbroken
-- [x] **OUT-01** — `FreightDelivered` domain event (terminal last-mile tender event)
-- [x] **OUT-02** — Destination hub detection triggers `FreightDelivered`
-- [x] **OUT-03** — SLA on-time flag on `FreightDelivered`
-- [x] **CONT-03** — Sim-day / cycle counter in ws state diff + KPI panel
-- [x] **VIZ-07** — Spoke→center trailers show non-empty freight manifests on the map
+- [ ] **Big-city hub generation** (curated top-MSA dataset → 1–3/state, ~80–130, deterministic) — root dependency, no upstream risk.
+- [ ] **Multi-center topology** (generalize `buildRoutes` to N centers; nearest-center assignment; **hub-of-hubs + small meshed core** backbone; great-circle arcs) — the linchpin engine change; ship + golden before agents.
+- [ ] **Scale viz baseline** (render 100+ hubs + backbone tiers without clutter) — needed to *see* the topology is right.
 
-### Add If Time Allows (Differentiators — v2.0 richer with these)
+### Then (the decentralized brain)
 
-- [ ] **OUT-04** — Delivered-out counter + on-time % KPI panel widget
-- [ ] **CONT-04** — Sort wave / cut-off window rhythm (burst-quiet-burst departure pattern)
-- [ ] **FLOW-04** — Per-hub inventory balance display (cross-dock utilization heat)
+- [ ] **OODA truck agent** (Observe fuel/HOS/position/queue → Decide proceed/divert/rest/swap → Act via existing events).
+- [ ] **OODA hub agent** (Observe queues/docks/fill/cut-off → Decide dispatch/hold/consolidate/plan → Act).
+- [ ] **New flag-gated goldens** for the OODA model; verify flags-off == v2.0.
 
-### Explicitly Deferred (Future Milestones)
+### Then (advisory coordination — the headline differentiator)
 
-- [ ] **IND-04** — Mixed-direction same-hub local short-circuit deliveries (complexity vs demo value)
-- [ ] **CONT-05** — Pacer safety valve for sustained high-speed multi-cycle runs (diagnose first)
-- [ ] Returns / reverse logistics
-- [ ] Last-mile delivery routing
-- [ ] Per-wave per-hub SLA differentiation
+- [ ] **Advisory coordinators** (one per region, bounded scope, ES process-manager) emitting `ActionSuggested` — start **rule-based** suggestions (reroute/hold/consolidate/dispatch).
+- [ ] **Accept/Reject contract** with reason codes + **visible reject-with-reason** (the explainability moment).
+- [ ] **Oscillation guardrails** (hysteresis, cooldown, expiry, region-partition conflict avoidance).
 
----
+### Add After Validation (within or just after milestone)
+
+- [ ] **Coordinator-uses-optimizer** (wire the proven min-cost-flow/VRPTW in as the suggestion engine) — high value, but ship rule-based first to de-risk.
+- [ ] **Advisory overlay polish** (accept-green/reject-red suggestion arrows, expiry fade).
+- [ ] **Incremental `twin-snapshot`** (fold from a cursor instead of full event-log scans) — perf carry-over, needed for long continental runs.
+
+### Defer (out of this milestone)
+
+- [ ] **Binding/orchestration coordinators** — violates advisory-first + no-full-automation boundary.
+- [ ] **p-median live hub siting** — anti-feature; static ranked dataset is enough.
+- [ ] **Live ORS geometry at scale** — anti-feature; great-circle only.
+- [ ] **Capacity-balanced / ML hub assignment** — nearest + region tie-break is sufficient for the demo.
 
 ## Feature Prioritization Matrix
 
-| Feature | Demo Value | Implementation Cost | Priority |
-|---------|------------|---------------------|----------|
-| CONT-01 (open-ended run) | HIGH | LOW | P1 |
-| CONT-02 (periodic induction) | HIGH | LOW-MED | P1 |
-| IND-01 (FreightInducted event) | HIGH | LOW | P1 |
-| IND-02 (spoke induction) | HIGH | MEDIUM | P1 |
-| IND-03 (destination + SLA on package) | HIGH | LOW | P1 |
-| FLOW-01 (spoke-origin freight) | HIGH | MEDIUM | P1 |
-| FLOW-02 (center inbound unload) | HIGH | MEDIUM | P1 |
-| FLOW-03 (center→spoke continues) | HIGH | LOW | P1 |
-| OUT-01 (FreightDelivered event) | HIGH | LOW | P1 |
-| OUT-02 (destination detection) | HIGH | LOW | P1 |
-| OUT-03 (SLA on-time flag) | HIGH | LOW | P1 |
-| CONT-03 (cycle counter display) | MEDIUM | LOW | P1 |
-| VIZ-07 (both-direction map) | HIGH | LOW | P1 |
-| OUT-04 (delivery KPI widget) | MEDIUM | LOW | P2 |
-| CONT-04 (sort wave rhythm) | MEDIUM | MEDIUM | P2 |
-| FLOW-04 (hub inventory balance) | MEDIUM | MEDIUM | P2 |
-| IND-04 (local short-circuit) | LOW | MEDIUM | P3 |
+| Feature | User/Demo Value | Implementation Cost | Priority |
+|---|---|---|---|
+| Big-city hub generation (1–3/state) | HIGH | MEDIUM | P1 |
+| Multi-center topology + nearest assignment | HIGH | HIGH | P1 |
+| Hub-of-hubs + meshed-core backbone (great-circle) | HIGH | MEDIUM | P1 |
+| Scale visualization (100+ hubs, no clutter) | HIGH | MEDIUM-HIGH | P1 |
+| OODA truck agent | HIGH | HIGH | P1 |
+| OODA hub agent | HIGH | HIGH | P1 |
+| Agent-owned local feasibility (fuel/HOS/dock binding) | HIGH | MEDIUM | P1 |
+| New flag-gated goldens (flags-off == v2.0) | HIGH (keystone) | MEDIUM | P1 |
+| Advisory coordinators (`ActionSuggested`, rule-based) | HIGH | HIGH | P1 |
+| Accept/Reject contract + visible reject-with-reason | HIGH | MEDIUM | P1 |
+| Oscillation guardrails | HIGH (else demo flaps) | MEDIUM | P1 |
+| Sustained continental-run perf | HIGH | HIGH | P1 |
+| Coordinator-uses-optimizer (suggestion engine) | HIGH | HIGH | P2 |
+| Advisory overlay polish (accept/reject arrows) | MEDIUM | MEDIUM | P2 |
+| Incremental twin-snapshot (perf) | MEDIUM | MEDIUM | P2 |
+| Region/division tie-break on assignment | MEDIUM | LOW | P2 |
+| Capacity-balanced hub assignment | LOW | MEDIUM | P3 |
 
-**Priority key:** P1 = must ship in v2.0; P2 = ship if in budget; P3 = defer
+**Priority key:** P1 = must have for the milestone · P2 = should have, within/just after · P3 = nice to have, defer.
 
----
+## Concrete Realistic Defaults (adopt these in REQUIREMENTS/roadmap)
 
-## Complexity and Dependency Analysis by Gap
-
-### Gap 1 — Continuous / Open-ended Operation (CONT-*)
-
-**Core change:** The engine's `durationTicks` parameter becomes a cycle config rather than a hard stop. The engine runs until told to stop (or indefinitely in demo mode), regenerating induction events on a repeating `PACKAGE_INTERVAL_TICKS` schedule at each active hub.
-
-**Why LOW complexity:** The event-queue architecture is already a priority queue; simply removing the tick-limit guard and ensuring the package-generation trigger re-queues itself each time it fires is mechanically simple. The paced-loop (already redesigned with accumulator pacer + worker-thread optimizer) already handles unbounded tick streams — it was built for this.
-
-**Determinism preservation:** A continuous run is still fully deterministic: the seeded RNG draws the same values in the same order given the same seed + same trigger schedule. Golden tests can snapshot a fixed number of ticks from a continuous run.
-
-**Dependency on IND-02:** The open-ended loop only sustains flow if induction fires at spokes as well as center. CONT-01 and IND-02 must be built together.
-
-### Gap 2 — External Induction (IND-*)
-
-**Core change:** Two new domain events (`FreightInducted`), a new RNG-based induction generator in the engine that fires at each hub, and a new substream salt (IND_RNG_SALT) following the established six-salt pattern.
-
-**Why MEDIUM complexity (IND-02):** The engine today generates packages in a single center-specific block. Generalizing to per-hub generation requires iterating over all hubs (or a configured subset), drawing random destination hubs and SLA classes per inducted package, and scheduling the freight for loading at spoke-origin departures. The load planner must be invoked for spoke-origin build plans.
-
-**Event union impact (HIGH priority, LOW code volume):** Adding `FreightInducted` to the `DomainEvent` union in `@mm/domain` ripples to every package that does `switch(event.type)` exhaustive checks. The `assertNever` guard already enforces this — every consumer will fail to compile until it handles the new case. This is by design (type safety) but means touching projections, sensor-fusion, API, and the optimizer. These are mostly trivial `case` additions.
-
-**Existing plumbing reused:** `SlaClass`, `DeadlineBucket`, `PlanningPackage` (from `@mm/domain` planning types) already carry the SLA + deadline attributes. `FreightInducted` can reuse these types directly.
-
-### Gap 3 — Outbound / Last-mile Delivery (OUT-*)
-
-**Core change:** One new domain event (`FreightDelivered`), a destination-detection check in the unload handler (trivial equality), and a new projection counter feeding the KPI panel.
-
-**Why LOW complexity:** The hardest part of OUT-* is IND-03 (carried deadline on the package) — which is itself required by IND-01. Once a package carries `destinationHubId` and `deadline`, the `FreightDelivered` event is one equality check and one event emit. No new routing logic, no new planner code.
-
-**Boundary clarity:** `FreightDelivered` is the clean terminus. The simulation does not model what happens to the package after it leaves the destination hub. The last-mile arm is opaque. This is already called out in PROJECT.md and must be held as a firm boundary in implementation — no door-level delivery routing.
-
-### Gap 4 — Bidirectional Freight (FLOW-*)
-
-**Core change:** The engine's spoke-visit handler (today: unload → empty return departure) becomes: unload → load locally-inducted freight → spoke-origin departure with freight → center arrival → center unload. The load planner is called at spoke departure. The center hub gains an inbound-unload handler.
-
-**Why MEDIUM complexity (FLOW-01/02):** The LIFO planner, trailer model, and unload events already exist and are correct. The engine wiring is the new work: (a) the spoke-visit handler must queue any freight inducted at that spoke for loading before departure; (b) the center hub must handle `TrailerArrivedAtHub` from a spoke origin (previously it only handled center→spoke arrivals for return); (c) the optimizer's time-expanded graph must include spoke→center edges (they likely already exist as undirected routes, but may need directional weight verification).
-
-**Optimizer impact (MEDIUM, verify):** The rolling-horizon optimizer already builds a time-expanded graph over the hub network. Routes are bidirectional (center↔spoke). The min-cost-flow assignment and VRPTW planner must correctly handle freight requests for spoke→center legs. This likely requires checking that the optimizer considers spoke-originating freight (new demand sources) as inputs to the flow assignment, not just center-originating demand.
-
-**Golden test impact:** The existing determinism golden (pre-v2.0) must remain byte-identical when all v2.0 features are disabled (`{inductionEnabled: false, bidirectional: false}`). New feature opts follow the established salt-isolation pattern (a new `IND_RNG_SALT` + feature flag gates).
-
----
+| Decision point (design-notes open question) | Recommended default | Confidence | Basis |
+|---|---|---|---|
+| "Big city" ranking | **Top US MSAs by metro population** (committed static dataset: name/state/lat-lon/pop) | HIGH | Real carriers size to MSA, not city-proper; 400+ MSAs, top ~100 = most demand. |
+| Hubs per state | **floor 1, cap 3**, fill by MSA rank → **~80–130 hubs** | MEDIUM | Coverage heuristic (floor guarantees every-state reachability, cap prevents CA/TX dominance). |
+| Number of regional centers | **6–10** (start ~8) | MEDIUM | Mirrors FedEx 2 superhubs + ~7 regionals; ~census 9 divisions; ~1 center per 10–15 hubs; avoids both over-fan-out (<5) and thin-consolidation (>12). |
+| Center selection | **largest-metro per region/timezone partition** | MEDIUM | Real super-hub tier sits on biggest metros + corridor centrality. |
+| Spoke→center assignment | **nearest-center (great-circle)** + **region/division tie-break** for boundary stability | HIGH (nearest) / MEDIUM (tie-break) | Design-locked; tie-break prevents jitter near equidistant centers. |
+| Backbone topology | **hub-of-hubs with a small (2–3) fully-meshed core** | MEDIUM | FedEx Memphis/Indy pattern; ≤2-hop transit, best consolidation, low map clutter, C−1+small-mesh edges. |
+| Leg geometry | **great-circle arcs** (no ORS) | HIGH | Design-locked; free/instant/deterministic at scale. |
+| OODA cadence | **per-N-tick + "anything-to-decide?" guard** (Decide gated; Observe cheap) | MEDIUM | Reactive-vs-deliberative horizon separation; controls per-step cost. |
+| Coordinator output | **advisory `ActionSuggested`** (accept→binding event); **not** binding commands | HIGH | Design-locked; control-tower prescriptive rung; project no-full-automation rule. |
+| Coordinator↔optimizer | **coordinator may invoke existing optimizer to generate suggestions, per-center bounded scope; ship rule-based first** | MEDIUM | Preserves IP as suggestion engine; exact sync/async coupling is a roadmap research point. |
+| Suggestion types | **reroute, hold, consolidate, dispatch, driver-swap/relay, reassign-load** | HIGH | Control-tower practice (reroute/reallocate/sequence) mapped to existing events. |
+| Guardrails | **hysteresis dead-band + cooldown/debounce + expiry + one-per-target-per-epoch + reject-memory + region-partition conflict ownership** | HIGH | Documented undamped-coordination failure mode; all seeded/pure for determinism. |
+| async-queue scope | **runtime plumbing only** (worker handoff / ws backpressure / DB batching) — never sim core | HIGH | Microtask scheduling is non-deterministic → would break golden replay. |
 
 ## Sources
 
-- Codebase: `packages/simulation/src/engine.ts`, `packages/domain/src/index.ts`, `packages/simulation/src/network/hubs.ts`, `.planning/PROJECT.md` — HIGH confidence (authoritative)
-- [Middle Mile vs Last Mile Logistics (Locus.sh)](https://locus.sh/blogs/middle-mile-vs-last-mile-logistics/) — operational pattern overview, MEDIUM confidence
-- [Hub-and-Spoke Structure of Parcel Carriers (Transport Geography)](https://transportgeography.org/contents/geography-city-logistics/distribution-facilities/hub-spoke-structure-parcel-carriers/) — network hierarchy + consolidation flows, MEDIUM confidence
-- [Origin Scan: Complete Guide (ParcelPath / ShipScience)](https://www.shipscience.com/what-does-origin-scan-mean-a-comprehensive-guide-60afc/) — induction event attributes + first-entry tracking, MEDIUM confidence
-- [Tendered to Delivery Service Provider (RedStagFulfillment)](https://redstagfulfillment.com/tendered-to-delivery-service-provider/) — last-mile tender handoff semantics, MEDIUM confidence
-- [Ship Sorter Scanning and Induction (Cognex)](https://www.cognex.com/en/applications/barcode-scanning-and-tracking/ship-sorter-scanning-and-induction) — induction scan operations, MEDIUM confidence
-- [Warehouse Cutoff Times and Next-Day Delivery (GetTransport)](https://gettransport.com/articles/warehouse-cutoff-times-next-day-delivery) — cutoff windows + sort wave scheduling, MEDIUM confidence
-- [A Simulator for Logistics Systems with Hub-and-Spoke Structure (Academia)](https://www.academia.edu/44145427/A_Simulator_for_Logistics_Systems_with_Hub-and-Spoke_Structure) — academic simulation model for H&S logistics, MEDIUM confidence
-- [Parcel Hub Scheduling (ScienceDirect)](https://www.sciencedirect.com/science/article/abs/pii/S1569190X23000060) — inbound/outbound scheduling in closed-loop hub, MEDIUM confidence
-- [Cross-Dock Sortation Middle Mile (SupplyChainBrain)](https://www.supplychainbrain.com/blogs/1-think-tank/post/42982-cross-dock-sortation-the-logical-extension-of-the-middle-mile) — cross-dock + bidirectional flow patterns, MEDIUM confidence
+Real network design + hub counts:
+- [On the Seams — UPS distribution network](https://ontheseams.substack.com/p/a-brief-primer-on-upss-distribution) — 264 hubs / 745 spokes; ~34 rail backbone facilities; Louisville Worldport + 5 regional air gateways. HIGH.
+- [On the Seams — FedEx distribution network](https://ontheseams.substack.com/p/a-brief-primer-on-fedexs-distribution) (+ search synthesis) — FedEx Express 2 superhubs (Memphis, Indianapolis) + ~7 regionals; FedEx Ground ~40 hubs / ~700 spokes. HIGH.
+- [FreightWaves — last-mile sortation centers](https://www.freightwaves.com/news/two-last-mile-parcel-carriers-open-large-us-sortation-centers) — super-hub / regional-hub / delivery-station tiering; ~100 hubs+stations + 30 linehaul routes; 70% of US population coverage. MEDIUM.
+- [STG Logistics — How LTL logistics networks operate](https://www.stgusa.com/news-notices/ltl-logistics/) / [Redwood — hub-and-spoke in LTL](https://www.redwoodlogistics.com/insights/the-hub-and-spoke-distribution-model-and-why-it-works-for-ltl) / [RXO — types of LTL carriers](https://rxo.com/resources/shipper/ltl-carrier-types/) — origin terminal → linehaul between hubs → destination terminal flow; national vs multi-regional dense networks. MEDIUM-HIGH.
+
+Metro population / hub siting:
+- [Census — Metro/Micro statistical area population tables](https://www.census.gov/data/tables/time-series/demo/popest/2020s-total-metro-and-micro-statistical-areas.html) / [Wikipedia — MSA](https://en.wikipedia.org/wiki/Metropolitan_statistical_area) — 400+ MSAs; MSA = ≥50k urban core; the basis for "big city = metro." HIGH.
+- [FCC — 100 largest MSAs by population (PDF)](https://wireless.fcc.gov/wlnp/documents/top100.pdf) — concrete top-100 ranked list usable as the dataset basis. HIGH (list); verify current populations against Census.
+- [Optimizing Metro-Based Logistics Hub Locations (MDPI Sustainability)](https://doi.org/10.3390/su17104735) — hub siting as a metro-population-weighted facility-location problem. MEDIUM.
+
+OODA / agent decision loops / robot autonomy:
+- [ASDLC — OODA loop explained](https://asdlc.io/concepts/ooda-loop/) / [EmergentMind — OODA dynamic decision cycle](https://www.emergentmind.com/topics/observe-orient-decide-act-ooda-loop) — Boyd OODA phases + agentic application. HIGH (framework).
+- [USPTO 11734590 — automating OODA for cognitive autonomous agents](https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/11734590) — OODA virtual layers for autonomous vehicles (observe=sense, orient=Kalman/predict, decide=select, act=control). MEDIUM-HIGH.
+- [Wikipedia — Subsumption architecture](https://en.wikipedia.org/wiki/Subsumption_architecture) / [Robotics Architecture Authority — layered control](https://roboticsarchitectureauthority.com/layered-control-architecture) / [NASA NTRS — Planning in Subsumption Architectures](https://ntrs.nasa.gov/api/citations/19950005134/downloads/19950005134.pdf) — reactive/tactical/strategic horizon separation (10–100ms / 1–60s / min–hours); fast-local owns feasibility, slow-broad advises. HIGH (maps to agent-vs-coordinator authority split).
+
+Control tower / advisory + coordination stability:
+- [IBM — supply chain control tower](https://www.ibm.com/think/topics/control-towers) / [Locus — control towers in decision-making](https://locus.sh/blogs/control-towers-supply-chain-decision-making/) / [OpenText](https://www.opentext.com/what-is/supply-chain-control-tower) / [Inbound Logistics](https://www.inboundlogistics.com/articles/supply-chain-control-tower/) — visibility→prescriptive→orchestration maturity; reroute/reallocate/sequence/notify action types; execute-within-guardrails + exception logging. MEDIUM-HIGH.
+- [Dynamic LTL planning in hyperconnected hub networks (arXiv 2506.10290)](https://arxiv.org/pdf/2506.10290) — multi-carrier hub-network dynamic planning; consolidation vs transit tradeoffs. MEDIUM.
+- [Stability of multi-agent systems under switching topologies (Engineering.org.cn)](https://www.engineering.org.cn/engi/EN/10.1016/j.eng.2020.05.006) — coordination loops need damping/shared stability budget or a supervisory regulator → hysteresis/cooldown rationale. MEDIUM.
 
 ---
-*Feature research for: Middle-Mile Trailer Optimization Platform v2.0 — Complete Simulation Model*
-*Researched: 2026-06-23 — covers ONLY the 4 audited v2.0 gaps (CONT/IND/OUT/FLOW); replaces stale v1.2 FEATURES.md*
+*Feature research for: v3.0 Continental OODA Network (big-city hubs · regional centers · OODA agents · advisory coordinators)*
+*Researched: 2026-06-26*

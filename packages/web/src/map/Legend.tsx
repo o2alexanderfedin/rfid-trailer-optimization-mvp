@@ -20,6 +20,10 @@ import {
   HUB_BUCKET_LABELS,
   ROUTE_COLORS,
   ROUTE_BUCKET_LABELS,
+  HUB_TIER_LABELS,
+  HUB_TIER_RING_COLORS,
+  LEG_TIER_LABELS,
+  LEG_TIER_COLORS,
 } from "./coloring.js";
 import { DUTY_COLORS, DUTY_BUCKET_LABELS } from "./dutyColoring.js";
 import { STOP_STATUS_COLORS, STOP_STATUS_LABELS } from "./stopColoring.js";
@@ -164,6 +168,22 @@ export function Legend({
         title="Truck status"
         colors={STOP_STATUS_COLORS}
         labels={STOP_STATUS_LABELS}
+      />
+      <div style={styles.divider} role="separator" />
+      {/* VIZ-16: hub tier hierarchy — Regional center (large amber ring) vs Spoke hub (small).
+          Derived from the HUB_TIER_LABELS/HUB_TIER_RING_COLORS single source of truth used
+          by hubStyleTiered (size + ring, NOT hue — hue belongs to the volume ramp above). */}
+      <LegendSection
+        title="Hub tier"
+        colors={HUB_TIER_RING_COLORS}
+        labels={HUB_TIER_LABELS}
+      />
+      <div style={styles.divider} role="separator" />
+      {/* VIZ-16: route tier — backbone inter-center legs (heavy) vs spoke legs (light). */}
+      <LegendSection
+        title="Route tier"
+        colors={LEG_TIER_COLORS}
+        labels={LEG_TIER_LABELS}
       />
       <div style={styles.divider} role="separator" />
       <LegendSection

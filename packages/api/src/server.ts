@@ -183,6 +183,14 @@ export async function buildServer(deps: ServerDeps): Promise<BuiltServer> {
   // SIM-04 / OPT-02: The live rolling-optimizer loop (Plan 05-02).
   // `buildSnapshot` reads the current live projections to assemble the TwinSnapshot.
   // The sim driver calls `loop.tick(...)` per tick so the optimizer runs live.
+  //
+  // COORD-06 (Phase 26, T-26-05): the GLOBAL loop and the per-center coordinators
+  // must never DOUBLE-PLAN. The gate lives in `makeSimRunner` (driver.ts): when a
+  // run sets `coordinatorUsesOptimizer`, the driver returns the no-op runner so this
+  // `loop.tick` is NEVER invoked — the coordinators are then the primary (and only)
+  // plan source, and this global loop is the non-continental / flags-off path. The
+  // loop is still CONSTRUCTED here (the scenario re-opt path uses it directly), but
+  // the per-tick global drive is disabled under the coordinator flag.
   const snapshotDb: SnapshotDb = deps.db;
   const loop = new RollingLoop({
     service: optimizer,

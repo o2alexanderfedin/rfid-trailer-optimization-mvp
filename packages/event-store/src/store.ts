@@ -107,21 +107,24 @@ export async function appendToStream(
       await lockGlobalOrder(trx);
       await casStreamVersion(trx, streamId, expectedVersion, validated.length);
 
+      // PERF-03 (seam b): coalesce the per-event INSERT loop into a single
+      // multi-row `.values([...])` commit. All rows are built in `version`-
+      // increment order first (preserving append-order), then inserted in one
+      // round-trip. `lockGlobalOrder` + `casStreamVersion` + the UNIQUE backstop
+      // remain in the same transaction — no ordering or CAS guarantees are relaxed.
       let version = expectedVersion;
-      for (const event of validated) {
+      const rows = validated.map((event) => {
         version += 1;
-        await trx
-          .insertInto("events")
-          .values({
-            stream_id: streamId,
-            version,
-            event_type: event.type,
-            data: JSON.stringify(event.payload),
-            metadata: JSON.stringify({ schemaVersion: event.schemaVersion }),
-            occurred_at: occurredAt,
-          })
-          .execute();
-      }
+        return {
+          stream_id: streamId,
+          version,
+          event_type: event.type,
+          data: JSON.stringify(event.payload),
+          metadata: JSON.stringify({ schemaVersion: event.schemaVersion }),
+          occurred_at: occurredAt,
+        };
+      });
+      await trx.insertInto("events").values(rows).execute();
       return { newVersion: version };
     });
   } catch (err) {
@@ -320,23 +323,24 @@ export async function append(
       await lockGlobalOrder(trx);
       await casStreamVersion(trx, streamId, expectedVersion, validated.length);
 
+      // PERF-03 (seam b): coalesce per-event INSERTs into one multi-row commit
+      // (same as appendToStream above). Append-order is preserved because rows are
+      // built in version-increment order before the single execute().
       let version = expectedVersion;
       const projectionWrites: HubProjectionWrite[] = [];
-      for (const event of validated) {
+      const rows = validated.map((event) => {
         version += 1;
-        await trx
-          .insertInto("events")
-          .values({
-            stream_id: streamId,
-            version,
-            event_type: event.type,
-            data: JSON.stringify(event.payload),
-            metadata: JSON.stringify({ schemaVersion: event.schemaVersion }),
-            occurred_at: occurredAt,
-          })
-          .execute();
         projectionWrites.push(...projectHub(event));
-      }
+        return {
+          stream_id: streamId,
+          version,
+          event_type: event.type,
+          data: JSON.stringify(event.payload),
+          metadata: JSON.stringify({ schemaVersion: event.schemaVersion }),
+          occurred_at: occurredAt,
+        };
+      });
+      await trx.insertInto("events").values(rows).execute();
 
       await applyHubWrites(trx, projectionWrites);
     });

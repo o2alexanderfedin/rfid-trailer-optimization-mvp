@@ -6,8 +6,8 @@
 - ✅ **v1.1 Realistic Time Model + Hardening** — Phases 6–8 (shipped 2026-06-22) — full details: [milestones/v1.1-ROADMAP.md](milestones/v1.1-ROADMAP.md)
 - ✅ **v1.2 Driver HOS & Hub Detail** — Phases 9–18 (shipped 2026-06-22) — full details: [milestones/v1.2-ROADMAP.md](milestones/v1.2-ROADMAP.md)
 - ✅ **v2.0 Complete Simulation Model** — Phases 19–22 (shipped 2026-06-25) — continuous · external induction · bidirectional freight · outbound delivery — full details: [milestones/v2.0-ROADMAP.md](milestones/v2.0-ROADMAP.md)
-- 🩹 **v2.1 (in develop, unreleased)** — sim-perf: O(n²)→O(affected-keys) projection fold (un-froze the live demo)
-- 📋 **v3.0 Continental OODA Network (planned)** — big-city hubs (1–3/state) · regional centers · OODA step-agents · event-driven coordination centers — design seed: [v3.0-DESIGN-NOTES.md](v3.0-DESIGN-NOTES.md) → run `/gsd-new-milestone`
+- ✅ **v2.1** — sim-perf hardening (O(n²)→O(affected-keys) projection fold + snapshot clock-anchor; shipped to main as `v2.1.0` 2026-06-26)
+- 🚧 **v3.0 Continental OODA Network** — Phases 23–28 (planning) — big-city hubs (1–3/state) · multi–regional-center topology · OODA step-agents · advisory coordination centers · scale viz/perf — research: [research/SUMMARY.md](research/SUMMARY.md) · design seed: [v3.0-DESIGN-NOTES.md](v3.0-DESIGN-NOTES.md)
 
 ## Phases
 
@@ -49,134 +49,151 @@
 
 </details>
 
+<details>
+<summary>✅ v2.0 Complete Simulation Model (Phases 19–22) — SHIPPED 2026-06-25</summary>
+
+> **Keystone constraint — determinism:** Every v2.0 feature is opt-in (flag off by default). With all v2.0 flags off, the seed-42 10k-tick golden `3920accc…` is byte-identical to pre-v2.0.
+
+- [x] **Phase 19: Continuous Operation Foundation** — open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, bidirectional route registration — completed 2026-06-24
+- [x] **Phase 20: External Induction** — `PackageInducted` event, spoke-hub induction on a dedicated seeded substream, SLA deadline to optimizer, pulsing map marker — completed 2026-06-24
+- [x] **Phase 21: Bidirectional Freight / Consolidation** — spoke→center consolidation, center re-sort, `PlanSuperseded`, durable optimizer idempotency, consolidation map styling — completed 2026-06-24
+- [x] **Phase 22: Outbound Delivery** — `PackageDelivered` terminal event, `onTime` SLA flag, projection purge, delivery hub-highlight — completed 2026-06-25
+
+</details>
+
 ---
 
-### v2.0 Complete Simulation Model — Phases 19–22 (ACTIVE)
+### 🚧 v3.0 Continental OODA Network — Phases 23–28 (PLANNING)
 
-> **Keystone constraint — determinism:** Every v2.0 feature is opt-in (flag off by default). With all v2.0 flags off, the existing seed-42 golden replay is byte-identical to pre-v2.0. New RNG salts (`INDUCTION_RNG_SALT`, `OUTBOUND_RNG_SALT`) are pairwise-distinct from all existing salts, asserted in the salt-collision test. Reducers key off `occurredAt` (virtual clock), never wall-clock. New events follow the established closed-union + Zod `.strict()` + `assertNever`-exhaustive pattern.
+> **Milestone Goal:** Scale from 10 fixed hubs to a continental network (~80–130 big-city hubs, 1–3 per state, on a small set of regional sort centers) and replace the single global rolling optimizer with a decentralized **OODA agent** layer (trucks + hubs that emit domain events) plus **advisory coordination-center** process-managers that observe agent events and *suggest* actions — agents arbitrate with binding local feasibility (fuel, HOS, road-closure) they alone know.
+>
+> **Keystone constraint — determinism (every phase):** OODA decision logic *changes the event stream*, so v3.0 is a **NEW model with NEW goldens**. Every feature is flag-gated. For **each** flag, the **two-part flags-off gate** holds: `flag:false === absent` AND `absent ⇒ seed-42 10k-tick golden 3920accc…` (byte-identical to v2.0). Model-changing phases capture their **own new golden** (continental → ooda → coordinator). New RNG substreams are constructed **lazily** (only when the flag is on), use salts pairwise-distinct from the existing 8 (asserted by the salt-collision test), and derive per-agent streams from the **stable agent id** (never spawn index). The decision core stays sync + pure: no `Date.now()` / `Math.random()` / `async-queue`; all hashed payloads go through `canonicalize`.
 
-- [x] **Phase 19: Continuous Operation Foundation** - Open-ended run loop, multi-cycle generation, sim-day counter, bounded-memory infrastructure, long-run determinism golden, and bidirectional route registration
-- [x] **Phase 20: External Induction** - `PackageInducted` event, spoke-hub induction from dedicated seeded substream, SLA deadline to optimizer, pulsing map marker
-- [x] **Phase 21: Bidirectional Freight / Consolidation** - Spoke→center consolidation via `pendingAtSpoke` queue, center inbound re-sort, optimizer two-direction awareness, consolidation trailer map styling
-- [x] **Phase 22: Outbound Delivery** - `PackageDelivered` terminal event, destination detection, `onTime` SLA flag, projection purge, delivery hub-highlight on map
+- [x] **Phase 23: Multi-Center Topology** — big-city hub generation (1–3/state, ~80–130) + parameterized regional centers + near-full-mesh backbone + per-center scope partition + **`applyHubInventory` key-scoping (P1-BLOCKING)**; FOUNDATION for everything (HUB-01..04, NET-01..05, PERF-01, DET-01) (completed 2026-06-26)
+- [x] **Phase 24: OODA Step-Agents** — deterministic per-truck + per-hub `step()` (Observe→Orient→Decide→Act) emitting domain events, sorted-by-stable-id passes, per-agent seeded substreams, frozen observation surface, continuation-equivalent agent state; the decentralized decision core (OODA-01..05, DET-03) (completed 2026-06-26)
+- [x] **Phase 25: Coordination Centers** — one advisory process-manager per regional center emitting `ActionSuggested`; agents accept/reject-with-reason on local feasibility; the five anti-oscillation/anti-deadlock guards + scope-neutral suggestion events; the headline "smart and honest" differentiator (COORD-01..05) (completed 2026-06-27)
+- [x] **Phase 26: Coordinator ↔ Optimizer** — coordinators invoke the proven optimizer as a scoped, pure `runEpoch` suggestion engine called synchronously in-fold; global `RollingLoop` disabled under the flag so the two never double-plan (COORD-06) (completed 2026-06-27)
+- [x] **Phase 27: Perf + Plumbing + Scale Viz** — incremental cursor-fold twin-snapshot projections + `async-queue` runtime-plumbing wiring (ESLint-banned from the core) + 100+-hub clustered/decluttered scale viz + sustained continental-run perf (PERF-02..04, VIZ-15..17) (completed 2026-06-27)
+- [x] **Phase 28: Continental Hardening** — consolidated determinism/golden audit: per-model new goldens, agent-order-shuffle, N-agent-RNG-decorrelation, and continuation-equivalence all green together, plus the cross-arch capture note (DET-02) (completed 2026-06-27)
 
 ## Phase Details
 
-### Phase 19: Continuous Operation Foundation
-**Goal**: The simulation runs open-ended across multiple day/cycle periods with bounded memory and proven long-run determinism
-**Depends on**: Phase 18 (v1.2 complete)
-**Requirements**: CONT-01, CONT-02, CONT-03, CONT-04, CONT-05 (P2), DET-01, DET-02
+### Phase 23: Multi-Center Topology
+**Goal**: The engine runs on a continental network of ~80–130 deterministically-generated big-city hubs spoked to multiple regional sort centers over a near-full-mesh backbone, with the projection fold and optimizer scope key-scoped so the 100-hub jump does not re-create the v2.1 freeze — the foundation every later phase reads.
+**Depends on**: Phase 22 (v2.0 complete) + v2.1 perf fold
+**Requirements**: HUB-01, HUB-02, HUB-03, HUB-04, NET-01, NET-02, NET-03, NET-04, NET-05, PERF-01, DET-01
 **Success Criteria** (what must be TRUE):
-  1. A viewer can start the simulation and watch it continue indefinitely through multiple day/cycle periods without it halting; the sim-day counter in the operator UI increments visibly over a sustained run
-  2. The process runs indefinitely without unbounded memory growth: ws backpressure (`bufferedAmount` guard) prevents buffer saturation for backgrounded clients, the projection watermark checkpoint keeps rebuild cost constant regardless of event-log size, and the optimizer idempotency map stays capped at 500 entries (LRU eviction)
-  3. With all v2.0 flags off (`runUntilStopped: false`, all feature flags false), the seed-42 run produces a byte-identical event hash to pre-v2.0 — confirmed by the existing golden test passing unchanged
-  4. A 10,000-tick seeded run (`simulate({ seed: 42, durationTicks: 10000 })`) produces the same byte-identical event hash on both x86 and ARM CI architectures; if hashes diverge, the log-normal sampler is replaced with an integer lookup table before phase close
-  5. (P2) Freight departs in a sort-wave / cut-off burst-quiet-burst cadence rather than a steady trickle, observable on the live map as distinct departure surges
+  1. With the `continentalTopology` flag on, the live map renders ~80–130 hubs (1–3 per state by metro-population rank, cross-state metros de-duped to a single hub, all inside the continental envelope) sourced only from a committed, content-checksummed `us-big-cities.generated.json` (no runtime city-data dependency) — and the dataset attribution credit (SimpleMaps backlink or GeoNames CC BY 4.0) is visible in the README/UI footer
+  2. Freight flows **spoke → nearest regional center → backbone → destination center → destination spoke**: each spoke is assigned to a center by the corridor/timezone partition with great-circle nearest tie-break by stable id under a leg-length cap, centers are linked by a near-full-mesh backbone giving ≤2-hop coast-to-coast routing, and an anti-SPOF check confirms connectivity survives removing any one center
+  3. The **center count is parameterized, not hard-coded** — and the concrete value (research envelope ~4–8, default ~5–6) is **chosen empirically in this phase from a real continental run** that validates trailer-fill/consolidation; the committed center-partition snapshot records the decision, and the network never collapses to a single primary center
+  4. `applyHubInventory` is **key-scoped to the touched hub id(s)** (PERF-01, P1-BLOCKING): a per-event projection-cost test proves row reads are independent of hub count (10-hub vs 100-hub fold cost equal per event) — the freeze does not recur at 100 hubs; `detectAffectedScope` gains a per-center scope partition so one center's epoch never pulls another's trailers
+  5. **Determinism gate:** the generalized multi-center `buildRoutes` produces the **identical `Route[]`** for the legacy 10-hub single-center input; with `continentalTopology` absent (and `:false`) the seed-42 10k-tick golden is byte-identical to `3920accc…` (DET-01 two-part gate); the new continental model captures its own new golden on a small (12–20-hub) fixture for a fast hash
+**Plans**: 5 plans
+Plans:
+- [x] 23-01-PLAN.md — Big-city hub dataset generator + committed checksummed us-big-cities.generated.json (HUB-01/02/03)
+- [x] 23-02-PLAN.md — Key-scope applyHubInventory + per-event projection-cost test (PERF-01, P1-BLOCKING)
+- [x] 23-03-PLAN.md — Pure multi-center topology fns (centers, nearest-assign, backbone, anti-SPOF) + GeoNames attribution (HUB-04, NET-02/03/04)
+- [x] 23-04-PLAN.md — Multi-center buildRoutes + centerOf engine flow + per-center scope partition behind continentalTopology flag (NET-01, NET-05)
+- [x] 23-05-PLAN.md — Empirical center-count decision + flags-off two-part gate + new continental golden + drift guard (HUB-01, NET-02, DET-01)
+**UI hint**: yes
+
+### Phase 24: OODA Step-Agents
+**Goal**: Every truck and hub runs a deterministic `step()` (Observe→Orient→Decide→Act) that emits domain events as a flag-gated `SimTask` inside the one generation core — the decentralized decision layer — while keeping byte-identical replay for a given model + seed.
+**Depends on**: Phase 23 (agents read "which center am I heading to?" from the topology)
+**Requirements**: OODA-01, OODA-02, OODA-03, OODA-04, OODA-05, DET-03
+**Success Criteria** (what must be TRUE):
+  1. With `oodaAgentsEnabled` on, each truck and each hub makes its own dispatch/hold/consolidate/refuel decisions via a per-N-tick `step()` with an "anything-to-decide?" guard (never per-tick-decide-for-all), emitting existing/new domain events into the same log — observable as agent-driven freight movement on the live map rather than a single global plan
+  2. Agents own **binding local feasibility** (fuel, HOS/rest, dock capacity) by reusing the existing HOS/fuel/consolidation logic (not rebuilt); a coordinator cannot override it (verified in Phase 25's accept/reject, the contract is established here)
+  3. **Agent-order independence:** each per-tick agent pass iterates a sorted-by-stable-id array drawing from a stable-id-derived seeded substream over a frozen per-tick observation surface (no mid-tick read-your-writes) — shuffling the per-tick agent set produces a byte-identical event batch, and N agents yield N decorrelated streams (no two share their first K draws; renaming/reordering agents does not change the golden)
+  4. **Continuation-equivalence:** agent state serializes into `SerializedWorldState` so a chunked/continued run is byte-identical to an uninterrupted run
+  5. **Determinism gate (DET-03):** no `Date.now()` / `Math.random()` / `async-queue` appears in the OODA decision core (a CI/ESLint static guard fails on a violation); all hashed payloads go through `canonicalize`; with `oodaAgentsEnabled` absent (and `:false`) the seed-42 10k golden stays byte-identical to `3920accc…`, and the OODA-on model captures its own new golden
+**Plans**: 4 plans
+Plans:
+- [x] 24-01-PLAN.md — OODA scaffolding (per-agent substream, sorted-id, frozen observation) + pure truck Decide + new TrailerDiverted event (OODA-01, OODA-04, DET-03)
+- [x] 24-02-PLAN.md — stepAgents SimTask wiring (dispatch case, bootstrap self-reschedule, oodaAgentsEnabled flag, decision bypass) + hub Decide (OODA-01, OODA-02, OODA-04)
+- [x] 24-03-PLAN.md — Agent-owned binding local feasibility reusing the HOS/fuel/dock logic; infeasible outcomes unreachable (OODA-03)
+- [x] 24-04-PLAN.md — Agent state in SerializedWorldState + order-shuffle/decorrelation goldens + DET-03 ESLint guard + two-part flags-off gate + new OODA-on golden (OODA-04, OODA-05, DET-03)
+**UI hint**: yes
+
+### Phase 25: Coordination Centers
+**Goal**: One advisory coordination center per regional center (an in-fold event-sourcing process-manager) observes agent events and emits `ActionSuggested`; the target agent accepts (binding event) or rejects-with-reason on its local feasibility — surfaced as a visible "won't divert: HOS/fuel" alert — with the full set of anti-oscillation/anti-deadlock guards so the network stays stable.
+**Depends on**: Phase 24 (agents must exist to accept/reject)
+**Requirements**: COORD-01, COORD-02, COORD-03, COORD-04, COORD-05
+**Success Criteria** (what must be TRUE):
+  1. With `coordinatorsEnabled` on, one coordinator per center runs **in-fold** (a sorted-by-centerId `stepCoordinators` `SimTask`, not an async subscriber) with bounded per-center scope, emitting advisory `ActionSuggested` events (reroute / hold / consolidate / dispatch) consumed in the same tick via an in-engine `pendingSuggestionsByTarget` handshake
+  2. The target agent **accepts** (`SuggestionAccepted` + the binding event) or **rejects** (`SuggestionRejected` + reason code) based on the local feasibility it alone knows; a **visible reject-with-reason** (e.g. "won't divert: HOS/fuel") surfaces in the alert feed + audit timeline — the headline "smart and honest" demo moment
+  3. The network stays stable: the five guards ship with the first coordinator — **hysteresis dead-band, seeded-jitter exponential backoff, sim-time TTL, single-owner lease per agent, reject-path pruning** — and a fixed scenario converges to a stable plan within K epochs with no A↔B↔A oscillation
+  4. No livelock/deadlock: every agent has a **feasible no-op default** so each tick always closes; an agent that rejects every suggestion still closes its tick and the coordinator stops re-suggesting after K rejections — events-per-tick stays bounded (no advisory-reject Zeno livelock)
+  5. **Determinism gate:** `ActionSuggested`/`SuggestionAccepted`/`SuggestionRejected` are added to the closed union + zod + every exhaustive switch and classified **scope-neutral** (no re-plan feedback storm); all new hashed payloads go through `canonicalize`; with `coordinatorsEnabled` absent (and `:false`) the seed-42 10k golden stays byte-identical to `3920accc…`, and the coordinator-on model captures its own new golden (+ continuation-equivalence green)
+**Plans**: 5 plans
+Plans:
+- [x] 25-01-PLAN.md — 3 advisory events (ActionSuggested/Accepted/Rejected) through the closed union + zod + every exhaustive switch + scope-neutral + canonicalize (COORD-02 substrate)
+- [x] 25-02-PLAN.md — stepCoordinators in-fold SimTask (one per center, sorted by centerId) + rule-based 4-kind suggestion generation + ninth RNG salt + pendingSuggestionsByTarget (COORD-01, COORD-02)
+- [x] 25-03-PLAN.md — same-tick accept/reject handshake in stepAgents on the agent's binding feasibility + visible reject-with-reason in the alert feed + audit timeline (COORD-02, COORD-03)
+- [x] 25-04-PLAN.md — the five anti-oscillation/anti-deadlock guards + anti-livelock convergence + bounded-events-per-tick stability tests (COORD-04, COORD-05)
+- [x] 25-05-PLAN.md — determinism keystone: two-part flags-off gate + serialized guard-state continuation-equivalence + reproducibility-first coordinator-on golden + salt-collision + coordinator/** DET-03 ESLint guard (COORD-04 determinism facet)
+**UI hint**: yes
+
+### Phase 26: Coordinator ↔ Optimizer
+**Goal**: A coordinator may invoke the proven v1 optimizer as a per-center scoped, pure suggestion engine — building a small per-center twin from its in-engine fold state and calling `runEpoch` synchronously in-fold — preserving the hardest-won optimization IP without breaking byte-identical replay.
+**Depends on**: Phase 25 (refines an already-working rule-based coordinator)
+**Requirements**: COORD-06
+**Success Criteria** (what must be TRUE):
+  1. With `coordinatorUsesOptimizer` on (a sub-flag of coordinators), a coordinator builds a per-center twin from in-engine fold state and calls the **pure `@mm/optimizer` `runEpoch` synchronously in-fold** (never the async worker path), translating the result into `ActionSuggested` events — and the resulting suggestions are observably plan-quality (route-aware) rather than purely rule-based
+  2. The scope stays bounded: each coordinator reuses `detectAffectedScope` over a short horizon (a single event triggers an epoch whose scope ⊆ that center's affected hubs, size independent of total network size) — no per-center full-region re-solve
+  3. The global `RollingLoop` is **disabled under the coordinator flag** so the two never double-plan; a heuristic-Decide fallback remains behind the sub-flag if profiling shows the in-fold call is too heavy
+  4. **Determinism gate:** the in-fold `runEpoch` call runs at a deterministic tick in sorted order over pure inputs; with `coordinatorUsesOptimizer` absent (and `:false`) replay is byte-identical to the Phase-25 coordinator model, and the optimizer-backed model captures its own golden
+**Plans**: 3 plans
+Plans:
+- [x] 26-01-PLAN.md — Pure in-fold optimizer adapter: buildCenterTwinFromFold + epochResultToRerouteSuggestions (reroute-only, scope-size-invariant, pure)
+- [x] 26-02-PLAN.md — Engine wiring: coordinatorUsesOptimizer sub-flag + optimizer-backed reroute branch (partitionScopeByCenter NET-05 live + runEpoch in-fold + deterministic fallback) + global RollingLoop disabled
+- [x] 26-03-PLAN.md — Determinism keystone: two-part flags-off gate (absent⇒edfa5a6d) + reproducibility-first optimizer-backed golden + continuation-equivalence
+
+### Phase 27: Perf + Plumbing + Scale Viz
+**Goal**: A continental run renders cleanly at 100+ hubs and sustains a live demo without the freeze/stall failure mode — read-side projections fold incrementally, runtime plumbing is backpressured via the vendored async-queue (kept out of the deterministic core), and the map declutters the dense static network.
+**Depends on**: Phase 23 (independent of the model — can interleave with Phases 25/26)
+**Requirements**: PERF-02, PERF-03, PERF-04, VIZ-15, VIZ-16, VIZ-17
+**Success Criteria** (what must be TRUE):
+  1. `twin-snapshot` reads **incremental cursor-fold projections** (`milesSinceRefuel`, `inductionDeadlines`) instead of two full event-log scans per epoch — optimizer epoch latency no longer grows with run length (a read-side change only, no new golden; rebuild-equivalence preserved)
+  2. `@alexanderfedin/async-queue` is wired into **runtime plumbing only** (worker↔optimizer handoff, DB write-batching, ws backpressure), with the vendored `dist/` resolved and `vendor/*` in the workspace; an ESLint `no-restricted-imports` rule **bans it from the deterministic core**, and an append-order==generation-order test proves the queue never reorders the event stream
+  3. The map renders 100+ hubs **without clutter** via OpenLayers `Cluster` + `declutter` + `VectorImageLayer`: static topology is sent **once**, per-tick deltas carry only trailers + transient suggestions (per-tick payload bytes stay bounded as hub count grows), regional centers + the near-full-mesh backbone render as a distinct visual tier (centers vs spokes vs backbone), and an opt-in/decluttered advisory-suggestion overlay (accept-green / reject-red) is available
+  4. A **sustained continental-run** at ~80–130 hubs holds a target sim-min/wall-sec without the freeze/stall failure mode (PERF-04), demonstrable live end-to-end
 **Plans**: 7 plans
 Plans:
-**Wave 1**
-- [ ] 19-01-PLAN.md — Wave 0 RED test stubs: open-ended, DET-02 golden placeholder, LruMap, backpressure, simDay
-- [ ] 19-02-PLAN.md — Engine: runUntilStopped + onEvent + three conditioned guards (CONT-01/02, DET-01)
-- [ ] 19-03-PLAN.md — Commit real DET-02 hash + VQ#5 bidirectional routes verification + salt regression
-
-**Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 19-04-PLAN.md — driveSimulationOpenEnded() driver (CONT-01/02 api layer)
-- [ ] 19-05-PLAN.md — WS backpressure guard + simDay envelope + UI counter (CONT-03/04b)
-- [ ] 19-06-PLAN.md — LruMap utility + optimizer wiring + watermark verification (CONT-04a/c)
-
-**Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 19-07-PLAN.md — Sort-wave burst-quiet-burst cadence flag (CONT-05 P2, deferrable)
+- [x] 27-01-PLAN.md — PERF-02 incremental cursor-fold twin-snapshot (trailer_fuel + induction_deadline projections; read-side, no golden; rebuild-equivalence + cost-invariance)
+- [x] 27-02-PLAN.md — PERF-03 foundation: vendor async-queue build/link + vendor/* workspace + DET-03 ESLint full-core ban + append-order==generation-order FIFO test
+- [x] 27-03-PLAN.md — VIZ-15/16 scale rendering: Cluster + declutter + VectorImageLayer spoke field, separate center tier, kind/tier + isBackbone DTO fields, tier-branched cached styles + legend
+- [x] 27-04-PLAN.md — P27-A optimizer-divergent reroute (remove 3 pins) + NEW optimizer-on golden (reproducibility-first, EQUALS→DIFFERS flip; 3 prior goldens intact)
+- [x] 27-05-PLAN.md — PERF-03 seams: bounded worker↔optimizer handoff + coalesced event-store inserts + per-client ws backpressure queue
+- [x] 27-06-PLAN.md — P27-B continental demo-config live HOS/fuel reject (COORD-03, demo-config-only) + VIZ-17 opt-in suggestion overlay + Advisory Suggestions feed
+- [x] 27-07-PLAN.md — PERF-04 sustained continental-run validation (flat per-epoch cost + held throughput, no freeze/stall)
 **UI hint**: yes
 
-### Phase 20: External Induction
-**Goal**: Freight enters the network from outside at spoke hubs via a new `PackageInducted` domain event, shapes optimizer priority, and animates visibly on the map
-**Depends on**: Phase 19
-**Requirements**: IND-01, IND-02, IND-03, VIZ-13
+### Phase 28: Continental Hardening
+**Goal**: Consolidate the determinism guarantees for the full continental OODA model into one passing audit — every new model's golden, agent-order-shuffle, N-agent-RNG-decorrelation, and continuation-equivalence all green together — closing the milestone's keystone constraint with a single auditable gate.
+**Depends on**: Phases 24, 25, 26 (all model-changing phases must be in)
+**Requirements**: DET-02
 **Success Criteria** (what must be TRUE):
-  1. A viewer watching the live map sees pulsing induction markers appear at spoke hubs on a repeating schedule, indicating freight entering from outside the network
-  2. Inducted packages carry a destination hub and SLA deadline visible in the optimizer's planning output (optional `deadlineMin` on `TwinBlock`), so urgency-driven re-optimization is observable when tight deadlines are present
-  3. With `inductionEnabled: false` (default), zero `PackageInducted` events are emitted — the existing seed-42 golden is byte-identical; with the flag on, `INDUCTION_RNG_SALT` is pairwise-distinct from all other salts (asserted by the salt-collision test), and induction draws are isolated from all other RNG substreams
-  4. The `PackageInducted` event passes a `validate()` round-trip test and is exhaustively handled in every `switch(event.type)` reducer, enforced at build time by `contract.assert.ts` and `assertNever` guards
-**Plans**: 6 plans
+  1. Each new model (continental topology, OODA agents, coordinators, optimizer-backed coordinators) has its **own committed new golden**, captured only after same-seed reproducibility + the flags-off gate are proven first (no non-reproducible golden baked in)
+  2. The consolidated determinism suite is green together: **agent-order-shuffle** (shuffle the per-tick agent set → byte-identical batch), **N-agent-RNG-decorrelation** (N agents → N independent streams; rename/reorder leaves goldens unchanged), and **continuation-equivalence** (chunked == all-at-once) across every v3.0 flag combination
+  3. **Master flags-off gate re-asserted:** with all v3.0 flags absent and explicit-`false`, the seed-42 10k-tick golden is byte-identical to `3920accc…` (the full DET-01 two-part gate per flag, audited in one place); the cross-arch capture environment is documented next to each new golden with the integer-LUT contingency noted
+**Plans**: 4 plans
 Plans:
-**Wave 1**
-- [ ] 20-01-PLAN.md — PackageInducted 5-file closed-union ceremony + validate round-trip test (IND-01)
-
-**Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 20-02-PLAN.md — Engine + continuation: INDUCTION_RNG_SALT, inductPackage(), SerializedRngStates.induction, determinism tests (IND-02)
-- [ ] 20-03-PLAN.md — All 11 projection reducers: hub-inventory ACTIVE case + 10 no-ops + hub-inventory test (IND-01/IND-03)
-- [ ] 20-04-PLAN.md — Optimizer scope.ts ACTIVE classification + TwinBlock.deadlineMin? (IND-03)
-- [ ] 20-05-PLAN.md — WS envelope InductionEvent, snapshots wiring, inductionColoring.ts, layers.ts (VIZ-13)
-
-**Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 20-06-PLAN.md — Continuation-equivalence induction case + ALL_ON extension + full gate + VIZ-13 checkpoint (IND-02, VIZ-13)
-**UI hint**: yes
-
-### Phase 21: Bidirectional Freight / Consolidation
-**Goal**: Spoke→center consolidation trailers carry real freight, the center re-sorts it for onward routing, and the optimizer handles both flow directions without double-counting
-**Depends on**: Phase 20
-**Requirements**: FLOW-01, FLOW-02, FLOW-03, FLOW-04, VIZ-12, FLOW-05 (P2)
-**Success Criteria** (what must be TRUE):
-  1. A viewer watching the live map sees consolidation trailers moving spoke→center with non-empty freight manifests and distinct direction styling, alongside the unchanged center→spoke distribution trailers — both directions active simultaneously
-  2. Freight inducted at Spoke A can be traced end-to-end through the map: departure from Spoke A (consolidation), arrival and re-sort at center, departure toward Spoke B (distribution) — demonstrating the center cross-dock value
-  3. Existing center→spoke distribution continues unbroken: a regression test with `consolidationEnabled: false` (default) produces a byte-identical golden to pre-Phase-21; empty-return consolidation trailers (no pendingAtSpoke freight) depart and arrive without error
-  4. The optimizer handles both flow directions without double-counting: stale staged plan entries are cleared via plan supersession, the optimizer idempotency map persists across restarts (Postgres-backed), and `detectAffectedScope` correctly scopes spoke→center legs to `[spokeHubId, centerId]`
-  5. (P2) A per-hub inbound/outbound inventory balance display (cross-dock utilization heat) is visible in the operator UI, showing consolidation value numerically
-**Plans**: 8 plans
-Plans:
-**Wave 1**
-- [ ] 21-01-PLAN.md — PlanSuperseded 5-file closed-union ceremony + round-trip/strict-reject test (FLOW-04 / D-21-1)
-- [ ] 21-02-PLAN.md — Wave-0 RED stubs: consolidation-determinism + DET-01 off-path + consolidation continuation-equivalence case (FLOW-01/02/03)
-- [ ] 21-06-PLAN.md — Detection active-scoping (makeProjectionReads) + bounded ≤5k benchmark (FLOW-04)
-
-**Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 21-03-PLAN.md — 11 reducers handle PlanSuperseded; hub-inventory delete-then-apply + Open-Q1 staged-target resolution + regression (FLOW-04)
-- [ ] 21-04-PLAN.md — Engine: consolidationEnabled + pendingAtSpoke + consolidation departure/center re-sort + continuation capture (FLOW-01/02/03)
-- [ ] 21-05-PLAN.md — optimizer_idempotency durable table + scopeHash ORDER BY + both-direction scope + PlanSuperseded co-commit + bounded restart int test (FLOW-04)
-
-**Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 21-07-PLAN.md — VIZ-12 ws direction field + driver threading + distinct consolidation map style + human-verify checkpoint (VIZ-12)
-- [ ] 21-08-PLAN.md — FLOW-05 (P2) hub inbound/outbound balance read API + operator panel + final phase-gate checkpoint (FLOW-05)
-**UI hint**: yes
-
-### Phase 22: Outbound Delivery
-**Goal**: Freight reaching its destination hub exits the network via a `PackageDelivered` terminal event with an on-time SLA flag, projections stay bounded, and delivery highlights appear on the map
-**Depends on**: Phase 21
-**Requirements**: OUT-01, OUT-02, OUT-03, OUT-04, VIZ-14, OUT-05 (P2)
-**Success Criteria** (what must be TRUE):
-  1. A viewer watching the live map sees destination hubs briefly highlighted when `PackageDelivered` fires, closing the end-to-end freight lifecycle: induction → transit → consolidation → distribution → delivery
-  2. Every package that arrives at its designated destination hub eventually emits `PackageDelivered` (lifecycle ordering test: `PackageDelivered` always follows `PackageArrivedAtHub` for the same package; terminal-completeness test: every package reaches `PackageDelivered` within the sim horizon when `outboundDeliveryEnabled: true`)
-  3. `PackageDelivered` carries an `onTime` flag (`deliveredAt <= slaDeadlineIso`) and, in a sustained multi-cycle run, the fraction of on-time deliveries reflects optimizer effectiveness on SLA deadlines drawn from inducted packages
-  4. `PackageDelivered` purges the package from all projections (`packageLocation`, `hubInventory`, `zoneEstimate` — DELETE, not upsert), keeping projection table size bounded during a continuous multi-cycle run with `outboundDeliveryEnabled: false` (default) preserving the existing golden byte-identical
-  5. (P2) A delivered-out counter and on-time % KPI panel widget shows cumulative delivery performance as a live metric in the operator UI
-**Plans**: 7 plans
-Plans:
-**Wave 1** *(parallel — no shared files)*
-- [ ] 22-01-PLAN.md — PackageDelivered 5-file domain ceremony + OUTBOUND_RNG_SALT + continuation.ts TS types + salt test + continuation-equivalence stub (OUT-01, D-22-4)
-- [ ] 22-02-PLAN.md — Wave-0 RED test stubs: outbound-determinism, ws-delivery, deliveryLayer, hub-inventory extensions (OUT-02, OUT-03, OUT-04, VIZ-14)
-
-**Wave 2** *(blocked on Wave 1 — parallel with each other)*
-- [ ] 22-03-PLAN.md — Engine: outboundOn, outboundRng, slaDeadlineByPackage, deliverPackage(), arriveTrailer hook, captureContinuation + golden DET-01 gate + continuation-equivalence "outbound" activation (OUT-02, OUT-03, D-22-4)
-- [ ] 22-04-PLAN.md — Projection purge reducers (package-location, hub-inventory, zone-estimate) + delivery-kpi.ts new reducer (OUT-04, OUT-05)
-
-**Wave 3** *(blocked on Wave 2)*
-- [ ] 22-05-PLAN.md — WS DeliveryEvent + Broadcast extension + GET /api/delivery-kpi endpoint (VIZ-14, OUT-05)
-
-**Wave 4** *(blocked on Wave 3)*
-- [ ] 22-06-PLAN.md — Web VIZ-14 layer (deliveryColoring + flashDelivery) + DeliveryKpi.tsx panel (VIZ-14, OUT-05)
-
-**Wave 5** *(blocked on Wave 4)*
-- [ ] 22-07-PLAN.md — MapView.tsx: createDeliveryLayer() construction + deliveryEvents WS handler calling flashDelivery() + human-verify checkpoint (VIZ-14 end-to-end wiring)
-**UI hint**: yes
+- [x] 28-01-PLAN.md — Canonical goldens.ts module + DRY refactor: extract 5 golden SHAs + provenance into one home, import everywhere, remove all bare literals (DET-02)
+- [x] 28-02-PLAN.md — Coordinator agent-order-shuffle batch test mirroring ooda-determinism.unit.test.ts:49-105 for the per-center coordinator set (DET-02 GAP-1)
+- [x] 28-03-PLAN.md — Continental continuation-equivalence test: chunked==all-at-once with continentalTopology:true ALONE and stacked, chunks 1/7/23/500 (DET-02 GAP-2)
+- [x] 28-04-PLAN.md — scripts/capture-golden.ts: reproducibility-first 4-way hash protocol (in-process x2 + fork x2) as a one-command capture tool (DET-02 recommended)
 
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 19. Continuous Operation Foundation | 8/8 | ✅ Complete | 2026-06-24 |
-| 20. External Induction | 6/6 | ✅ Complete | 2026-06-24 |
-| 21. Bidirectional Freight / Consolidation | 9/9 | ✅ Complete | 2026-06-24 |
-| 22. Outbound Delivery | 7/7 | ✅ Complete | 2026-06-25 |
+| 23. Multi-Center Topology | 5/5 | Complete   | 2026-06-26 |
+| 24. OODA Step-Agents | 4/4 | Complete   | 2026-06-26 |
+| 25. Coordination Centers | 5/5 | Complete   | 2026-06-27 |
+| 26. Coordinator ↔ Optimizer | 3/3 | Complete   | 2026-06-27 |
+| 27. Perf + Plumbing + Scale Viz | 7/7 | Complete   | 2026-06-27 |
+| 28. Continental Hardening | 4/4 | Complete   | 2026-06-27 |
 
 | Milestone | Phases | Status | Shipped |
 |-----------|--------|--------|---------|
@@ -184,3 +201,5 @@ Plans:
 | v1.1 Realistic Time Model + Hardening | 6–8 | ✅ Complete | 2026-06-22 |
 | v1.2 Driver HOS & Hub Detail | 9–18 | ✅ Complete | 2026-06-22 |
 | v2.0 Complete Simulation Model | 19–22 | ✅ Complete | 2026-06-25 |
+| v2.1 sim-perf hardening | (in 19–22 range) | ✅ Shipped to main | 2026-06-26 |
+| v3.0 Continental OODA Network | 23–28 | 🚧 Planning | - |

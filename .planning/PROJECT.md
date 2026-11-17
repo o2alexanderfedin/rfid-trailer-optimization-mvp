@@ -20,19 +20,24 @@ rehandle** and continuously repair them as conditions change — demonstrated li
 over a simulated USA hub network. If everything else fails, the load planner + operational
 twin producing explainable plans must work.
 
-## Current Milestone: v2.0 Complete Simulation Model
+## Current Milestone: v3.0 Continental OODA Network
 
-**Goal:** Turn the demo from a finite center→spoke *distribution playback* into a genuine, continuously-running **end-to-end logistics simulation** — freight enters from outside, flows **both directions** through the hub network, and is **delivered out** — while preserving determinism and the event-sourced architecture.
+**Goal:** Scale the network to continental size — auto-generated hubs in big cities across every state (1–3 per state, ~80–130) on a multi–regional-center topology — and replace the single global rolling optimizer with decentralized **OODA agents** (trucks + hubs) that raise events, plus **coordination-center entities** that observe those events and **suggest** actions (advisory; agents arbitrate with local feasibility). All while preserving the event-sourced, deterministic, golden-replay foundation.
 
-**Target features (the 4 audited gaps):**
-- **Continuous / open-ended operation** — a sustained run, not a finite ~120-tick stop.
-- **External induction** — freight entering the network from outside (origin/induction events at hubs), beyond today's center-only in-memory spawning.
-- **Outbound / last-mile delivery** — freight **leaving** destination hubs (a real terminal "delivered out" beyond today's terminal `PackageArrivedAtHub`).
-- **Bidirectional freight** — spoke→center **consolidation** *and* center→spoke distribution (today: center→spoke only, empty returns).
+**Target features:**
+- **Big-city hub generation** — a curated US big-cities dataset → 1–3 hubs per state (~80–130 hubs), deterministic/static (no clock/RNG) so it stays golden-reproducible. Generalizes today's 10 fixed IATA hubs.
+- **Regional-center topology** — auto-pick regional sort centers; each big-city hub spokes to its **nearest** center; centers form an inter-center **backbone**. Generalizes the engine from a single center (Memphis) to **multiple centers** (freight flow: spoke→regional-center→backbone→regional-center→spoke). **Great-circle arc** geometry for all new legs (no per-leg ORS at this scale).
+- **OODA step-agents** — each truck/hub gets a deterministic `step()` = Observe (read projections/local state) → Orient → Decide (seeded, pure) → Act (emit domain events). OODA *generates commands*; the event log stays the source of truth; replay stays byte-identical for a given model+seed. NOT an agent-based rewrite of the event queue.
+- **Coordination-center entities** — event-sourcing process-managers (one per regional center, bounded scope) that consume truck/hub events and emit **advisory** `ActionSuggested` events. Agents **accept or reject** suggestions against local feasibility they alone know (fuel state, HOS rest, road closures) → emit the binding event. Coordinators **may use the optimizer** to generate suggestions (exact relationship decided in research).
+- **Scale viz + perf** — render 100+ hubs + regional backbones + suggestion overlays without clutter; sustain a live continental run.
 
-**Keystone constraint — determinism:** every new behavior is seeded + golden-safe; feature-off keeps the existing golden byte-identical where applicable; new domain events, projections, map viz, and optimizer-awareness follow the established event-sourced pattern.
+**Keystone constraint — determinism:** OODA decision logic **changes the event stream**, so v3.0 is a **NEW model with NEW goldens**; the v2.0 seed-42 golden `3920accc…` stays the baseline. Every feature is flag-gated so flags-off stays **byte-identical to v2.0**.
 
-**Previously shipped (releases with v2.0):** v1.0 MVP (2026-06-20), v1.1 Realistic Time Model (2026-06-22), v1.2 Driver HOS & Hub Detail (2026-06-22) — see `MILESTONES.md`; **plus two post-v1.2 `develop` sub-projects already merged** — the **paced-loop redesign** (accumulator pacer + worker-thread optimizer + per-frame fold-batching) and **rest/fuel stops + optimizer fuel-awareness** — to be recorded in v2.0 history.
+**Locked decisions (from design discussion):** regional centers · great-circle arcs · OODA as event-emitting (not ABM) · coordinators as ES process-managers · **advisory-first** (agents arbitrate with local feasibility) · coordinators **may leverage** the optimizer (not a hard replace) · every feature flag-gated.
+
+**Open (for research):** big-city dataset source + "big city" ranking; number of regional centers + region/timezone partition + nearest-assignment rule; backbone topology (mesh / ring / hub-of-hubs); OODA step cadence (per-tick vs per-N); exact coordinator↔optimizer relationship; perf budget at 100+ hubs (+ the `twin-snapshot.ts` incremental follow-up); integration points for the vendored `@alexanderfedin/async-queue` (`vendor/async-queue`) in **runtime plumbing only** — worker-optimizer handoff, ws backpressure, continuous-loop chunk handoff, DB write-batching — never the deterministic sim core.
+
+**Previously shipped:** v1.0 MVP (2026-06-20), v1.1 Realistic Time Model (2026-06-22), v1.2 Driver HOS & Hub Detail (2026-06-22), **v2.0 Complete Simulation Model (2026-06-25)** — full freight lifecycle (induction → consolidation → re-sort → distribution → terminal delivery) under continuous deterministic operation — and **v2.1 demo hardening (2026-06-26)** (projection-fold O(n²)→key-scoped + snapshot clock-anchor). See `MILESTONES.md`.
 
 ## Requirements
 
@@ -125,16 +130,17 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 
 ### Active
 
-<!-- Current scope (v2.0). Detailed REQ-IDs + acceptance defined in REQUIREMENTS.md (pending: requirements + roadmap steps of /gsd-new-milestone). -->
+<!-- Current scope (v3.0). Detailed REQ-IDs + acceptance defined in REQUIREMENTS.md (pending: requirements + roadmap steps of /gsd-new-milestone). -->
 
-**v2.0 — Complete Simulation Model** (continuous · external induction · outbound delivery · bidirectional freight):
-- [ ] Continuous / open-ended simulation operation (CONT-*)
-- [ ] External freight induction events from outside the network (IND-*)
-- [ ] Outbound / last-mile delivery out of destination hubs (OUT-*)
-- [ ] Bidirectional freight: spoke→center consolidation + center→spoke distribution (FLOW-*)
-- [ ] Projections + map viz + optimizer-awareness for the above
+**v3.0 — Continental OODA Network** (big-city hubs · regional centers · OODA agents · coordination centers):
+- [ ] Big-city hub generation: 1–3 hubs per state (~80–130) from a curated dataset, deterministic/static (HUB-*)
+- [ ] Multi–regional-center topology: nearest-center spokes + inter-center backbone, great-circle geometry (NET-*)
+- [ ] OODA step-agents for trucks + hubs: deterministic Observe→Orient→Decide→Act emitting domain events (OODA-*)
+- [ ] Coordination-center entities: advisory `ActionSuggested`; agents arbitrate with local feasibility (COORD-*)
+- [ ] Scale visualization + sustained continental-run performance (VIZ-* / PERF-*)
+- [ ] New flag-gated goldens; flags-off byte-identical to v2.0
 
-**Note:** v1.2 (Driver HOS & Hub Detail) shipped; two post-v1.2 `develop` sub-projects also shipped and release with v2.0 — paced-loop redesign and rest/fuel stops + optimizer fuel-awareness (to be recorded in v2.0 history).
+**Note:** v2.0 (Complete Simulation Model) shipped 2026-06-25 (Phases 19–22); v2.1 demo hardening (perf fold + snapshot clock-anchor) shipped to main 2026-06-26 as `v2.1.0`.
 
 ### Out of Scope
 
@@ -202,6 +208,13 @@ All 48 shipped in v1.0. OPT-02 and SNS-05 were dark on the live path in the mile
 | v1.2: **driver relay/swap at hubs** (per-hub pools) over per-trip binding | matches real middle-mile relay ops; richer demo (fresh-driver-swap moment) | — Pending (v1.2; adds pool/handoff modeling) |
 | v1.2: single pure forward-labeling HOS engine in `@mm/domain`, shared by sim + optimizer | DRY; "rest-as-time" folds into existing `serviceMin` (no new graph edge kind) | — Pending (v1.2) |
 | v1.2: hub detail via new `GET /api/hubs/:id/detail` REST endpoint (not ws-extended) | ws can't carry the heavy DTO; matches VIZ-05 fetch-on-click pattern; keeps ticks small | — Pending (v1.2) |
+| v3.0: **multi–regional-center** topology (not single Memphis center) | bounded per-center fan-out + realistic at 100+ hubs; structurally fixes the global-star scaling | — Pending (v3.0) |
+| v3.0: **great-circle arcs** for new legs (no per-leg ORS at ~100+ hubs) | free, instant, deterministic geometry; ORS road geometry doesn't scale to hundreds of legs | — Pending (v3.0) |
+| v3.0: **OODA as event-emitting** `step()` (Observe→Orient→Decide→Act), NOT an ABM rewrite | keeps event-sourcing + seeded determinism + byte-identical replay; layer OODA on top | — Pending (v3.0) |
+| v3.0: coordination centers as **ES process-managers**, **advisory** `ActionSuggested` (agents arbitrate w/ local feasibility) | decentralized bounded scope replaces global-solve scaling; agents alone know fuel/HOS/road-closure feasibility, must be able to reject | — Pending (v3.0) |
+| v3.0: coordinators **may use** the optimizer to generate suggestions (not a hard replace) | preserves proven optimizer IP as a suggestion engine; exact relationship to be settled in research | — Pending (v3.0; research) |
+| v3.0: vendored `@alexanderfedin/async-queue` for **runtime plumbing only** (worker handoff / ws backpressure / chunk handoff / DB batching) | O(1)-memory backpressured queue; Promise/microtask-based ⇒ MUST stay out of the deterministic sim core | — Pending (v3.0; research) |
+| v3.0: every feature **flag-gated**; OODA model gets **new goldens**; flags-off byte-identical to v2.0 `3920accc…` | determinism keystone carries; the new model changes the event stream by design | — Pending (v3.0) |
 
 ## Evolution
 
@@ -221,4 +234,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-25 — v2.0 "Complete Simulation Model" (Phases 19–22) ✅ SHIPPED: continuous operation, external induction, bidirectional consolidation, and outbound delivery — the full freight lifecycle runs end-to-end, deterministically, on the live map. See .planning/MILESTONES.md + milestones/v2.0-ROADMAP.md.*
+*Last updated: 2026-06-26 — v3.0 "Continental OODA Network" started: scale to big-city hubs (1–3/state) on a multi–regional-center topology + decentralized OODA step-agents + advisory coordination-center entities, preserving the deterministic event-sourced core (new flag-gated goldens; flags-off byte-identical to v2.0). v2.1 demo hardening shipped to main as `v2.1.0` (2026-06-26). See .planning/MILESTONES.md + .planning/v3.0-DESIGN-NOTES.md.*

@@ -18,7 +18,8 @@
       "@mm/projections": ["packages/projections/src/index.ts"],
       "@mm/event-store": ["packages/event-store/src/index.ts"],
       "@mm/simulation": ["packages/simulation/src/index.ts"],
-      "@mm/api": ["packages/api/src/index.ts"]
+      "@mm/api": ["packages/api/src/index.ts"],
+      "@alexanderfedin/async-queue": ["vendor/async-queue/src/index.ts"]
     }
   },
   "include": [

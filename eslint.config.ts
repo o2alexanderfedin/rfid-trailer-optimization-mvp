@@ -11,6 +11,12 @@ export default tseslint.config(
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
+      // Vendored git submodule (`@alexanderfedin/async-queue`) — third-party
+      // code with its own toolchain; not part of our typed program. It is
+      // runtime-plumbing-only and is barred from the deterministic core by a
+      // dedicated `no-restricted-imports` rule (added when it is wired in
+      // Phase 27), not by linting its own sources.
+      "vendor/**",
       "**/coverage/**",
       "**/playwright-report/**",
       "**/test-results/**",
@@ -77,6 +83,192 @@ export default tseslint.config(
         projectService: false,
         sourceType: "module",
       },
+    },
+  },
+  {
+    // Phase-24 DET-03 — THE OODA DECISION-CORE STATIC GUARD.
+    //
+    // The decentralized OODA decision core (`packages/simulation/src/ooda/**`) MUST
+    // be a pure, synchronous, seeded leaf: NO wall-clock (`Date.now`), NO ambient
+    // randomness (`Math.random`), NO async-queue plumbing, and NO database access
+    // (`kysely`). Any of these silently entering the core breaks byte-identical
+    // replay (the determinism keystone). This rule FAILS the lint on a violation —
+    // the CI gate that makes T-24-11 (tampering) structurally caught, not merely
+    // discouraged. Test siblings (`*.test.ts`) are excluded: they legitimately
+    // import seed constants from the engine and assert on the core's purity.
+    //
+    // (This is the concrete realization of the `no-restricted-imports` intent noted
+    // for the deterministic core at the top of this file; the async-queue plumbing
+    // ban widens engine-side in Phase 27.)
+    files: ["packages/simulation/src/ooda/**/*.ts"],
+    ignores: ["packages/simulation/src/ooda/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "kysely",
+              message:
+                "DET-03: the OODA decision core must not touch the database. Read frozen observations only.",
+            },
+            {
+              name: "@alexanderfedin/async-queue",
+              message:
+                "DET-03: async-queue is runtime plumbing only — the OODA decision core stays synchronous + pure (Pitfall 5).",
+            },
+          ],
+          patterns: [
+            {
+              group: ["*async-queue*"],
+              message:
+                "DET-03: async-queue is runtime plumbing only — the OODA decision core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              group: ["kysely/*", "*/kysely", "pg", "@mm/persistence", "*/persistence"],
+              message:
+                "DET-03: the OODA decision core must not touch the database/driver layer.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.object.name='Date'][callee.property.name='now']",
+          message:
+            "DET-03: no Date.now() in the OODA decision core — read the frozen virtual-clock observation (Pitfall 6).",
+        },
+        {
+          selector: "NewExpression[callee.name='Date'][arguments.length=0]",
+          message:
+            "DET-03: no wall-clock `new Date()` in the OODA decision core — use the frozen virtual-clock observation (Pitfall 6).",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          message:
+            "DET-03: no Math.random() in the OODA decision core — draw from the seeded per-agent substream (deriveAgentRng) (Pitfall 6).",
+        },
+      ],
+    },
+  },
+  {
+    // Phase-25 DET-03 — THE COORDINATOR DECISION-CORE STATIC GUARD.
+    //
+    // The advisory coordination core (`packages/simulation/src/coordinator/**`) MUST
+    // be a pure, synchronous, seeded leaf — EXACTLY like the OODA core above: NO
+    // wall-clock (`Date.now`/`new Date()`), NO ambient randomness (`Math.random`), NO
+    // async-queue plumbing, and NO database access (`kysely`). Any of these silently
+    // entering the coordinator's suggestion generation or its anti-oscillation guards
+    // breaks byte-identical replay (the determinism keystone). This rule FAILS the
+    // lint on a violation — the CI gate that makes T-25-22 (tampering: wall-clock/
+    // random in the coordinator core) structurally CAUGHT, not merely discouraged.
+    // Test siblings (`*.test.ts`) are excluded: they legitimately import seed
+    // constants from the engine and assert on the core's purity. The constant/guard
+    // doc comments legitimately NAME the banned APIs (to document the contract) —
+    // ESLint matches AST nodes, never comments, so the pure tree passes (exit 0).
+    files: ["packages/simulation/src/coordinator/**/*.ts"],
+    ignores: ["packages/simulation/src/coordinator/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "kysely",
+              message:
+                "DET-03: the coordinator decision core must not touch the database. Read frozen observations only.",
+            },
+            {
+              name: "@alexanderfedin/async-queue",
+              message:
+                "DET-03: async-queue is runtime plumbing only — the coordinator core stays synchronous + pure (Pitfall 5).",
+            },
+          ],
+          patterns: [
+            {
+              group: ["*async-queue*"],
+              message:
+                "DET-03: async-queue is runtime plumbing only — the coordinator core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              group: ["kysely/*", "*/kysely", "pg", "@mm/persistence", "*/persistence"],
+              message:
+                "DET-03: the coordinator decision core must not touch the database/driver layer.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.object.name='Date'][callee.property.name='now']",
+          message:
+            "DET-03: no Date.now() in the coordinator core — read the frozen virtual-clock observation / sim-time (Pitfall 6).",
+        },
+        {
+          selector: "NewExpression[callee.name='Date'][arguments.length=0]",
+          message:
+            "DET-03: no wall-clock `new Date()` in the coordinator core — use sim-time (tick * MS_PER_TICK) (Pitfall 6).",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          message:
+            "DET-03: no Math.random() in the coordinator core — draw from the seeded per-center substream (deriveCoordinatorRng) (Pitfall 6).",
+        },
+      ],
+    },
+  },
+  {
+    // Phase-27 DET-03 — FULL DETERMINISTIC SIMULATION CORE STATIC GUARD.
+    //
+    // The entire simulation deterministic core (`packages/simulation/src/**`) MUST
+    // stay synchronous + pure + seeded: NO async-queue plumbing, and NO database
+    // access (`kysely`). This WIDENS the per-subdir bans above (OODA + coordinator)
+    // to the full engine src so no other simulation source file (engine.ts, network,
+    // etc.) can accidentally import runtime plumbing either. Any violation FAILS
+    // the lint — the CI gate that makes T-27-04 (async-queue leaking into the
+    // deterministic core) structurally CAUGHT, not merely discouraged. Test
+    // siblings (`*.test.ts`) are excluded: they legitimately import the async-queue
+    // for order-guarantee tests and integration assertions. `vendor/**` stays in
+    // the global `ignores` above — the lib itself is not linted; only our call
+    // sites are. The ban applies at the path level (not the vendor source).
+    files: ["packages/simulation/src/**/*.ts"],
+    ignores: ["packages/simulation/src/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@alexanderfedin/async-queue",
+              message:
+                "DET-03: async-queue is runtime plumbing only — the simulation deterministic core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              name: "kysely",
+              message:
+                "DET-03: the simulation deterministic core must not touch the database. Read frozen observations only.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["*async-queue*"],
+              message:
+                "DET-03: async-queue is runtime plumbing only — the simulation deterministic core stays synchronous + pure (Pitfall 5).",
+            },
+            {
+              group: ["kysely/*", "*/kysely", "pg", "@mm/persistence", "*/persistence"],
+              message:
+                "DET-03: the simulation deterministic core must not touch the database/driver layer.",
+            },
+          ],
+        },
+      ],
     },
   },
   {

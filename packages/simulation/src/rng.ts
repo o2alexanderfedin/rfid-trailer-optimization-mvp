@@ -34,8 +34,15 @@ export interface Rng {
 
 const UINT32 = 0x1_0000_0000; // 2^32
 
-/** splitmix32 finaliser — mixes a seed so adjacent seeds decorrelate. */
-function mixSeed(seed: number): number {
+/**
+ * splitmix32 finaliser — mixes a seed so adjacent seeds decorrelate.
+ *
+ * Exported (additive, ZERO behavior change — `makeRng`/`makeRngFromState` call
+ * it exactly as before, so every golden is byte-stable) so the OODA per-agent
+ * substream deriver (`ooda/rng.ts`) reuses the SAME mixing discipline instead of
+ * re-implementing it. This is the repo's single splitmix32 mixer.
+ */
+export function mixSeed(seed: number): number {
   let z = (seed >>> 0) + 0x9e_37_79_b9;
   z = Math.imul(z ^ (z >>> 16), 0x21_f0_aa_ad);
   z = Math.imul(z ^ (z >>> 15), 0x73_5a_2d_97);

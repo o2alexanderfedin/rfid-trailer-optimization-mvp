@@ -81,6 +81,41 @@ function pkgCreated(packageId: string): DomainEvent {
   };
 }
 
+function suggestionRejected(
+  suggestionId: string,
+  reasonCode: "hos" | "fuel" | "dock" | "infeasible",
+): DomainEvent {
+  return {
+    type: "SuggestionRejected",
+    schemaVersion: 1,
+    payload: { suggestionId, reasonCode, occurredAt: at(0) },
+  };
+}
+
+function suggestionAccepted(suggestionId: string): DomainEvent {
+  return {
+    type: "SuggestionAccepted",
+    schemaVersion: 1,
+    payload: { suggestionId, occurredAt: at(0) },
+  };
+}
+
+function actionSuggested(suggestionId: string): DomainEvent {
+  return {
+    type: "ActionSuggested",
+    schemaVersion: 1,
+    payload: {
+      suggestionId,
+      coordinatorId: "HUB-CTR",
+      targetAgentId: "T0001",
+      kind: "reroute",
+      params: { toHubId: "HUB-CTR" },
+      issuedAtSimMs: 1000,
+      ttlSimMs: 360000,
+    },
+  };
+}
+
 function fold(events: OccurredEvent[]): ExceptionsState {
   return events.reduce(exceptionsReducer, emptyExceptionsState);
 }
@@ -160,10 +195,88 @@ describe("exceptionsReducer (SNS-04/05)", () => {
     expect(openExceptions(twice)).toEqual(openExceptions(once));
   });
 
-  it("the 9 non-exception events are no-ops (same state reference)", () => {
+  it("the non-exception events are no-ops (same state reference)", () => {
     const base = fold([evt(wrongTrailer("PKG-1", "TRL-B", "TRL-A", 0.82), at(0))]);
     const after = exceptionsReducer(base, evt(pkgCreated("PKG-2"), at(1000)));
     expect(after).toBe(base);
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase-25 COORD-03: SuggestionRejected surfaces in the alert/exception feed
+  // -------------------------------------------------------------------------
+
+  it("folds a SuggestionRejected into a coordination-rejected alert row carrying the reasonCode + suggestionId + label", () => {
+    const state = fold([evt(suggestionRejected("HUB-CTR-100-0", "hos"), at(0))]);
+    const open = openExceptions(state);
+    expect(open).toHaveLength(1);
+    expect(open[0]).toMatchObject({
+      kind: "coordination-rejected",
+      reasonCode: "hos",
+      suggestionId: "HUB-CTR-100-0",
+      label: "won't divert: HOS",
+    });
+    expect(state.totalExceptions).toBe(1);
+    expect(open[0]?.occurredAt).toBe(at(0));
+  });
+
+  it("maps every closed reasonCode to a human-readable label", () => {
+    const labels = (["hos", "fuel", "dock", "infeasible"] as const).map((rc) => {
+      const state = fold([evt(suggestionRejected(`S-${rc}`, rc), at(0))]);
+      return openExceptions(state)[0]?.label;
+    });
+    expect(labels).toEqual([
+      "won't divert: HOS",
+      "won't divert: fuel",
+      "won't dispatch: dock full",
+      "declined: infeasible",
+    ]);
+  });
+
+  it("a coordination reject does NOT inflate the low-confidence (false-positive) numerator", () => {
+    // A reject is HONEST, not a low-confidence detection — it must never count
+    // toward the detection FP-rate numerator (severity warning, not info).
+    const state = fold([
+      evt(suggestionRejected("S-1", "hos"), at(0)),
+      evt(suggestionRejected("S-2", "dock"), at(1000)),
+    ]);
+    expect(state.totalExceptions).toBe(2);
+    expect(state.lowConfidenceExceptions).toBe(0);
+    expect(falsePositiveRate(state)).toBe(0);
+    expect(openExceptions(state).every((e) => e.severity === "warning")).toBe(true);
+  });
+
+  it("the detection FP-rate is unchanged by coordination rejects mixed into the feed", () => {
+    // 1 info detection + 1 warning detection => detection FP-rate 1/2; adding a
+    // coordination reject (warning) keeps the INFO numerator at 1 (the reject is
+    // not low-confidence) while it legitimately appears in the feed.
+    const withoutReject = fold([
+      evt(wrongTrailer("PKG-LO", "TRL-B", "TRL-A", 0.38, "info"), at(0)),
+      evt(wrongTrailer("PKG-HI", "TRL-B", "TRL-A", 0.5, "warning"), at(1000)),
+    ]);
+    const withReject = fold([
+      evt(wrongTrailer("PKG-LO", "TRL-B", "TRL-A", 0.38, "info"), at(0)),
+      evt(wrongTrailer("PKG-HI", "TRL-B", "TRL-A", 0.5, "warning"), at(1000)),
+      evt(suggestionRejected("S-1", "fuel"), at(2000)),
+    ]);
+    expect(withoutReject.lowConfidenceExceptions).toBe(1);
+    expect(withReject.lowConfidenceExceptions).toBe(1); // numerator unchanged
+    expect(falsePositiveRate(withoutReject)).toBeCloseTo(0.5, 10);
+  });
+
+  it("is idempotent on suggestionId: re-applying the same SuggestionRejected upserts the same row", () => {
+    const e = evt(suggestionRejected("S-DUP", "dock"), at(0));
+    const once = fold([e]);
+    const twice = fold([e, e]);
+    expect(openExceptions(twice)).toHaveLength(1);
+    expect(twice.totalExceptions).toBe(once.totalExceptions);
+  });
+
+  it("SuggestionAccepted and ActionSuggested remain no-ops in the exception feed", () => {
+    const base = fold([evt(suggestionRejected("S-1", "hos"), at(0))]);
+    const afterAccept = exceptionsReducer(base, evt(suggestionAccepted("S-2"), at(1000)));
+    expect(afterAccept).toBe(base);
+    const afterSuggest = exceptionsReducer(base, evt(actionSuggested("S-3"), at(1000)));
+    expect(afterSuggest).toBe(base);
   });
 
   it("false-positive-rate is a REAL ratio: info-severity exceptions / total (not a placeholder)", () => {

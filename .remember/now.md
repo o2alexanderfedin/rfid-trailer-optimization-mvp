@@ -1,5 +1,5 @@
 
-## 02:06 | develop
-Merged SP1 (paced-loop: accumulator+worker opt, 34f02cc) + SP2 (rest/fuel+fuel-aware opt, 5 fixes, eb65a75) to develop; gate 10/10 build / 1291 unit / 97 int; v2.0 (continuous/inbound/outbound/bidirectional) init; origin synced.
-## 06:15 | develop
-Phase 22 complete (OUT-01/02/03/04/05 + VIZ-14, gate green); v2.0 released (develop→main + tag v2.0.0 + origin; 1844 tests); v2.1 perf-fix merged (projection fold O(n²)→key-scoped; demo un-froze); viz-fix merged (snapshot clock-anchor; east→west refresh + parked-truck bugs fixed); v3.0 design documented (continent OODA network w/ regional centers, big-city hubs, coordination-center entities); develop 7 commits ahead (unreleased v2.1); pause handoff `.continue-here.md` committed.
+## 13:25 | feature/phase-28-continental-hardening
+Completed phase-28 plans 28-01/02/03: goldens.ts canonical module + 6-file DRY refactor, coordinator agent-order-shuffle test (GAP-1), continental-continuation tests (GAP-2, 10 tests); 7 commits, 133 determinism tests green, typecheck clean.
+## 13:50 | feature/phase-28-continental-hardening
+Completed 28-04 (capture-golden.ts), DET-02 audit passed (1932 tests, 9/9 verifier), Phase 28→develop, milestone lifecycle underway.

@@ -14,7 +14,7 @@
  */
 
 // --- Scoped affected-slice detection (OPT-05) --------------------------------
-export { detectAffectedScope } from "./scope.js";
+export { detectAffectedScope, partitionScopeByCenter } from "./scope.js";
 
 // --- The structuredClone planning-twin sandbox (OPT-04) ----------------------
 export { buildTwin } from "./twin.js";

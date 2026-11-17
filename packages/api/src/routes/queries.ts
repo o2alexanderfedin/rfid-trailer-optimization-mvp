@@ -7,6 +7,11 @@ import {
   readAuditTimeline,
 } from "@mm/projections";
 import type { Hub, LonLat } from "@mm/domain";
+import {
+  deriveCenterPartition,
+  DEFAULT_CENTER_COUNT,
+  generateBigCityHubs,
+} from "@mm/simulation";
 
 /**
  * Read-only query endpoints over the operational + audit projections
@@ -60,13 +65,40 @@ export interface AuditEntryDto {
   readonly recommendation: string | null;
 }
 
-/** A route geometry for the map (`[lon, lat]` GeoJSON-axis vertices). */
+/**
+ * A route geometry for the map (`[lon, lat]` GeoJSON-axis vertices).
+ *
+ * VIZ-16: extended with `isBackbone` — `true` for the near-full-mesh
+ * inter-center backbone legs, `false` for spoke legs. Sourced from the
+ * Phase-23 `buildBackbone` directed leg id set (`"<from>-><to>"`).
+ *
+ * This is a STATIC topology field — sent once via REST on map init; it does NOT
+ * appear on the ws `RouteState` tick payload (per-tick bytes carry only metric
+ * buckets, not topology).
+ */
 export interface RouteDto {
   readonly routeId: string;
   readonly fromHubId: string;
   readonly toHubId: string;
   readonly geometry: readonly LonLat[];
+  readonly isBackbone: boolean;
 }
+
+/**
+ * Module-level backbone leg id set (built once at load time from the committed
+ * hub dataset). Backbone leg ids are directed `"<from>-><to>"` strings from
+ * `deriveCenterPartition.backboneLegIds`.
+ */
+function buildBackboneLegIdSet(): Set<string> {
+  try {
+    const partition = deriveCenterPartition(DEFAULT_CENTER_COUNT, undefined, generateBigCityHubs());
+    return new Set(partition.backboneLegIds);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+const BACKBONE_LEG_IDS: Set<string> = buildBackboneLegIdSet();
 
 /** A single string `:id` path param, validated non-empty by Fastify schema. */
 const idParamsSchema = {
@@ -216,11 +248,13 @@ function routeDtoFromPayload(data: unknown): RouteDto {
     toHubId: string;
     geometry: LonLat[];
   };
+  const legId = `${p.fromHubId}->${p.toHubId}`;
   return {
     routeId: p.routeId,
     fromHubId: p.fromHubId,
     toHubId: p.toHubId,
     geometry: p.geometry,
+    isBackbone: BACKBONE_LEG_IDS.has(legId),
   };
 }
 

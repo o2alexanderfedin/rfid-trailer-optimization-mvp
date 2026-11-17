@@ -403,17 +403,16 @@ export function applySleeperBerthPeriod(
   }
 
   // A qualifying period does NOT count against the 14h window → push the window
-  // start forward PAST the period (the non-monotonic window). The period is
-  // reckoned from whichever is later — the existing window start or when the
-  // period actually begins (`occurredAt`) — so a deferred sleeper period excludes
-  // exactly its own elapsed minutes.
-  const periodStartMin = Math.max(
-    isoToEpochMinutes(clock.dutyWindowStartAt),
-    isoToEpochMinutes(occurredAt),
-  );
+  // start forward by exactly the period's own minutes (the non-monotonic window).
+  // Only the period is excluded: on-duty time between the window start and the
+  // period (`occurredAt`) still counts, so the shift is independent of when the
+  // period begins. `occurredAt` only dates the driver's return to duty below.
+  const periodEndAt = epochMinutesToIso(isoToEpochMinutes(occurredAt) + periodMinutes);
   let next: HosClock = {
     ...clock,
-    dutyWindowStartAt: epochMinutesToIso(periodStartMin + periodMinutes),
+    dutyWindowStartAt: epochMinutesToIso(
+      isoToEpochMinutes(clock.dutyWindowStartAt) + periodMinutes,
+    ),
   };
 
   // A >=7h period is the LONG (berth) half; a 2–<7h period is the SHORT half.
@@ -431,11 +430,12 @@ export function applySleeperBerthPeriod(
   if (hasLong && hasShort && total >= config.resetOffDutyMin) {
     // Completed split = a 10h reset of the per-shift clocks; accumulators clear.
     // (The window start was already advanced by both qualifying periods above.)
+    // The driver comes back on duty when this period actually ends.
     next = {
       ...next,
       driveTodayMin: 0,
       sinceLastBreakMin: 0,
-      comeOnDutyAt: next.dutyWindowStartAt,
+      comeOnDutyAt: periodEndAt,
       sleeperBerthLongMin: 0,
       sleeperBerthShortMin: 0,
     };

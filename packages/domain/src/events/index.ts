@@ -28,6 +28,10 @@ export type {
   PackageInducted,
   PlanSuperseded,
   PackageDelivered,
+  TrailerDiverted,
+  ActionSuggested,
+  SuggestionAccepted,
+  SuggestionRejected,
 } from "./domain-event.js";
 export { assertNever } from "./domain-event.js";
 export {
@@ -59,4 +63,8 @@ export {
   packageInductedSchema,
   planSupersededSchema,
   packageDeliveredSchema,
+  trailerDivertedSchema,
+  actionSuggestedSchema,
+  suggestionAcceptedSchema,
+  suggestionRejectedSchema,
 } from "./schemas.js";

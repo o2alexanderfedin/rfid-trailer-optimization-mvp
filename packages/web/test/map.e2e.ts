@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./offline.js";
 
 /**
  * VIZ-01 static-map e2e (Task 1): the OpenLayers + OSM map renders the USA

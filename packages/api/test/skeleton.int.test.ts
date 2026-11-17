@@ -63,7 +63,8 @@ describe("skeleton spine: append -> inline projection -> GET /hubs", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json<HubDto[]>();
     const mem = body.find((h) => h.hubId === MEMPHIS.hubId);
-    expect(mem).toEqual(MEMPHIS);
+    // MEM is not one of the derived regional sort centers, so it is a tier-2 spoke.
+    expect(mem).toEqual({ ...MEMPHIS, kind: "spoke", tier: 2 });
     await app.close();
   });
 

@@ -252,6 +252,71 @@ describe("auditTimelineReducer — trailer streams (Task 1 extension)", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Phase-25 COORD-03: SuggestionRejected / SuggestionAccepted audit rows
+  // ---------------------------------------------------------------------------
+
+  it("SuggestionRejected produces an audit row carrying occurredAt + reasonCode + suggestionId", () => {
+    const event: DomainEvent = {
+      type: "SuggestionRejected",
+      schemaVersion: 1,
+      payload: { suggestionId: "HUB-CTR-100-0", reasonCode: "hos", occurredAt: at(0) },
+    };
+    const entry = auditTimelineReducer(stored(event, 40n, at(0)));
+    expect(entry).not.toBeNull();
+    expect(entry?.eventType).toBe("SuggestionRejected");
+    expect(entry?.globalSeq).toBe(40n);
+    expect(entry?.occurredAt).toBe(at(0));
+    // reasonCode is carried for the audit trail; the suggestionId surfaces in the
+    // recommendation text (the captured rationale slot).
+    expect(entry?.reasonCode).toBe("hos");
+    expect(entry?.recommendation).toContain("HUB-CTR-100-0");
+    expect(entry?.recommendation).toContain("hos");
+  });
+
+  it("SuggestionAccepted produces an audit row (no reasonCode)", () => {
+    const event: DomainEvent = {
+      type: "SuggestionAccepted",
+      schemaVersion: 1,
+      payload: { suggestionId: "HUB-CTR-100-1", occurredAt: at(1_000) },
+    };
+    const entry = auditTimelineReducer(stored(event, 41n, at(1_000)));
+    expect(entry).not.toBeNull();
+    expect(entry?.eventType).toBe("SuggestionAccepted");
+    expect(entry?.reasonCode).toBeNull();
+    expect(entry?.recommendation).toContain("HUB-CTR-100-1");
+  });
+
+  it("ActionSuggested remains a no-op (null) in the audit timeline this phase", () => {
+    const event: DomainEvent = {
+      type: "ActionSuggested",
+      schemaVersion: 1,
+      payload: {
+        suggestionId: "S-1",
+        coordinatorId: "HUB-CTR",
+        targetAgentId: "T0001",
+        kind: "reroute",
+        params: { toHubId: "HUB-CTR" },
+        issuedAtSimMs: 1000,
+        ttlSimMs: 360000,
+      },
+    };
+    expect(auditTimelineReducer(stored(event, 42n, at(0)))).toBeNull();
+  });
+
+  it("SuggestionRejected audit rows are PURE (deep-equal across two calls)", () => {
+    const e = stored(
+      {
+        type: "SuggestionRejected",
+        schemaVersion: 1,
+        payload: { suggestionId: "S-PURE", reasonCode: "dock", occurredAt: at(0) },
+      },
+      52n,
+      at(0),
+    );
+    expect(auditTimelineReducer(e)).toEqual(auditTimelineReducer(e));
+  });
+
+  // ---------------------------------------------------------------------------
   // FND-04 golden-replay: the reducer is a pure function of the stored event
   // ---------------------------------------------------------------------------
 

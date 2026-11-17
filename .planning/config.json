@@ -32,8 +32,9 @@
     "ai_integration_phase": true,
     "discuss_strategy": "brainstorm",
     "discuss_brainstorm_skill": "superpowers:brainstorming",
-    "use_worktrees": true,
-    "subagent_timeout": 1800
+    "use_worktrees": false,
+    "subagent_timeout": 1800,
+    "_auto_chain_active": false
   },
   "hooks": {
     "context_warnings": true

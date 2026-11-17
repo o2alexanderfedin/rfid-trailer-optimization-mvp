@@ -27,10 +27,10 @@ import type { ApiDb } from "./queries.js";
  * not a positioning system; the API must not pretend otherwise.
  */
 
-/** SNS-04/05: one open exception row in the feed. */
+/** SNS-04/05 + COORD-03: one open exception row in the feed. */
 export interface ExceptionDto {
   readonly exceptionId: string;
-  readonly kind: "wrong-trailer" | "missed-unload";
+  readonly kind: "wrong-trailer" | "missed-unload" | "coordination-rejected";
   readonly packageId: string;
   /** The trailer the package was OBSERVED aboard. */
   readonly trailerId: string;
@@ -41,6 +41,13 @@ export interface ExceptionDto {
   /** Bounded observed confidence that triggered the exception (< 1.0). */
   readonly confidence: number;
   readonly occurredAt: string;
+  // --- Phase-25 COORD-03 (coordination-rejected rows only; null otherwise) -----
+  /** The closed reject reasonCode (`hos|fuel|dock|infeasible`), else null. */
+  readonly reasonCode: string | null;
+  /** The rejected suggestion's correlation id, else null. */
+  readonly suggestionId: string | null;
+  /** The operator-facing "won't …" label for the reject, else null. */
+  readonly label: string | null;
 }
 
 /** SNS-04/05: the false-positive-rate KPI snapshot. */
@@ -69,12 +76,15 @@ export interface ZoneEstimateDto {
 const exceptionsQuerySchema = {
   type: "object",
   properties: {
-    kind: { type: "string", enum: ["wrong-trailer", "missed-unload"] },
+    kind: {
+      type: "string",
+      enum: ["wrong-trailer", "missed-unload", "coordination-rejected"],
+    },
   },
 } as const;
 
 interface ExceptionsQuery {
-  readonly kind?: "wrong-trailer" | "missed-unload";
+  readonly kind?: "wrong-trailer" | "missed-unload" | "coordination-rejected";
 }
 
 /** A single string `:id` path param, validated non-empty (mirrors queries.ts). */
@@ -119,6 +129,11 @@ export function registerExceptionRoutes(app: FastifyInstance, db: ApiDb): void {
         recommendedAction: e.recommendedAction,
         confidence: e.confidence,
         occurredAt: e.occurredAt,
+        // Phase-25 COORD-03: the reject reason/label surface in the feed DTO (null
+        // for detection rows). The DB-backed read path leaves these null this plan.
+        reasonCode: e.reasonCode,
+        suggestionId: e.suggestionId,
+        label: e.label,
       }));
       return feed;
     },

@@ -93,13 +93,16 @@ export {
   zoneEstimateKey,
 } from "./reducers/zone-estimate.js";
 
-// --- SNS-04/05: open exceptions feed + false-positive-rate KPI ---------------
+// --- SNS-04/05: open exceptions feed + false-positive-rate KPI + COORD-03 ----
 export type {
+  CoordinationRejectReason,
   ExceptionKind,
   ExceptionsState,
   OpenException,
 } from "./reducers/exceptions.js";
 export {
+  COORDINATION_REJECT_LABELS,
+  coordinationRejectId,
   emptyExceptionsState,
   exceptionId,
   exceptionsReducer,
@@ -133,6 +136,13 @@ export {
   trailerFuelReducer,
 } from "./reducers/trailer-fuel.js";
 
+// --- PERF-02: induction deadline (LWW from PackageInducted) -------------------
+export type { InductionDeadlineState } from "./reducers/induction-deadline.js";
+export {
+  emptyInductionDeadlineState,
+  inductionDeadlineReducer,
+} from "./reducers/induction-deadline.js";
+
 // --- Operational twin: schema + inline applier + rebuild driver --------------
 export type {
   ProjectionDatabase,
@@ -154,6 +164,10 @@ export type {
   AuditTimelineTable,
   GeoRouteTable,
   GeoKeyframeTable,
+  TrailerFuelTable,
+  TrailerFuelRow,
+  InductionDeadlineTable,
+  InductionDeadlineRow,
   OperationalProjectionName,
   CatchupProjectionName,
 } from "./schema.js";
@@ -170,6 +184,8 @@ export type {
 } from "./runner/inline.js";
 export {
   applyInline,
+  applyTrailerFuel,
+  applyInductionDeadline,
   readOperationalTwin,
   projectionView,
   readOpenExceptions,

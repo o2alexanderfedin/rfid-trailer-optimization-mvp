@@ -157,6 +157,41 @@ export interface DeliveryEvent {
   readonly onTime: boolean;
 }
 
+/**
+ * VIZ-17 — one advisory coordination suggestion outcome this tick. TRANSIENT:
+ * present only on a `TickPayload` (never `SnapshotPayload`) — a reconnect must
+ * NOT re-flash historical suggestion markers (Pitfall-7, same rule as
+ * {@link InductionEvent} / {@link DeliveryEvent}).
+ *
+ * `locationHubId` is the hub id whose map coordinates the client uses to place
+ * the flash marker — typically `toHubId` for reroute suggestions, or the target
+ * entity's current/next hub for others. The client resolves lon/lat from its
+ * static hub cache (the established `hubLonLatRef` pattern).
+ */
+export interface SuggestionEvent {
+  /** Stable correlation id (mirrors `ActionSuggested.suggestionId`). */
+  readonly suggestionId: string;
+  /** Closed suggestion kind (reroute | hold | consolidate | dispatch). */
+  readonly kind: "reroute" | "hold" | "consolidate" | "dispatch";
+  /** Whether the target agent accepted or rejected the suggestion. */
+  readonly outcome: "accepted" | "rejected";
+  /** The target entity id (e.g., `trailer-<id>` or `hub-<id>`). */
+  readonly entityId: string;
+  /** Destination hub id for reroute/dispatch suggestions (else `""`). */
+  readonly toHubId: string;
+  /**
+   * Closed reject reason (`hos | fuel | dock | infeasible`) — present only
+   * when `outcome === "rejected"`. Omitted on accepted suggestions.
+   */
+  readonly reasonCode?: "hos" | "fuel" | "dock" | "infeasible";
+  /**
+   * Hub id whose map position hosts the flash marker. Resolved to lon/lat
+   * by the client's static hub cache (`hubLonLatRef`). Falls back to `""`
+   * when no suitable hub is available (no marker flashed).
+   */
+  readonly locationHubId: string;
+}
+
 /** UI-04 — plan re-optimization made visible. */
 export interface PlanDelta {
   readonly trailerId: string;
@@ -255,6 +290,14 @@ export interface TickPayload {
    * same Pitfall-7 rule as `inductionEvents`).
    */
   readonly deliveryEvents?: readonly DeliveryEvent[];
+  /**
+   * VIZ-17 — advisory coordination suggestion outcomes this tick (TRANSIENT).
+   * Drives the accept-green / reject-red flash markers on the suggestion overlay
+   * and the Advisory Suggestions rail feed. Present ONLY here, NEVER on
+   * `SnapshotPayload` (a reconnect must NOT re-flash historical suggestion
+   * markers — the same Pitfall-7 rule as `inductionEvents` / `deliveryEvents`).
+   */
+  readonly suggestions?: readonly SuggestionEvent[];
 }
 
 // ---------------------------------------------------------------------------

@@ -36,7 +36,7 @@ import { performance } from "node:perf_hooks";
 import type { ApiDb } from "../routes/queries.js";
 import { PRODUCTION_DETECTION_CONFIG } from "../detection-config.js";
 import type { Broadcast } from "../ws/snapshots.js";
-import type { DeliveryEvent, InductionEvent } from "../ws/envelope.js";
+import type { DeliveryEvent, InductionEvent, SuggestionEvent } from "../ws/envelope.js";
 import { computeSimAdvanceMs, selectDrain } from "./pacing.js";
 import { makeCoalescedRunner } from "./coalesced-runner.js";
 
@@ -75,6 +75,16 @@ export interface LoopLike {
 export interface SimRunnerOptions {
   /** The rolling optimizer loop to call per tick. `undefined` disables the optimizer. */
   readonly loop: LoopLike | undefined;
+  /**
+   * COORD-06 (Phase 26, T-26-05): when `true`, the GLOBAL rolling optimizer loop is
+   * DISABLED — the per-center coordinators are the (only) plan source, so the global
+   * loop and the coordinators never DOUBLE-PLAN. `makeSimRunner` returns the no-op
+   * runner (the global `loop.tick` is NEVER invoked) regardless of whether a `loop`
+   * is wired. **Default falsy** ⇒ the loop runs exactly as today (backward-compatible
+   * — every existing live-loop / driver test stays green). Checked with a STRICT
+   * `=== true` comparison; an absent flag leaves the global loop enabled.
+   */
+  readonly coordinatorUsesOptimizer?: boolean;
 }
 
 /**
@@ -95,7 +105,13 @@ export type SimTickRunner = (
  * isolation. The server composition root wires a `RollingLoop` instance.
  */
 export function makeSimRunner(opts: SimRunnerOptions): SimTickRunner {
-  if (opts.loop === undefined) {
+  // COORD-06 (T-26-05): when the per-center coordinators own planning, the global
+  // RollingLoop is DISABLED — return the no-op runner so `loop.tick` is never called
+  // (the two plan sources never double-plan). The decision: under the coordinator
+  // flag the coordinators are the primary/only plan source; the global loop is the
+  // non-continental / flags-off path. Strict `=== true` ⇒ an absent flag keeps the
+  // loop enabled (backward-compatible).
+  if (opts.coordinatorUsesOptimizer === true || opts.loop === undefined) {
     return (): Promise<EpochResult | undefined> => Promise.resolve(undefined);
   }
   const { loop } = opts;
@@ -170,6 +186,13 @@ export interface DriveSimulationOptions {
    * `undefined` disables the live loop — backward-compatible with existing tests.
    */
   readonly loop?: LoopLike;
+  /**
+   * COORD-06 (Phase 26, T-26-05): when `true`, the global RollingLoop is DISABLED
+   * for this run — the per-center coordinators are the (only) plan source, so the
+   * global loop + the coordinators never double-plan. Threaded into `makeSimRunner`
+   * so `loop.tick` is never called. **Default falsy** ⇒ the loop runs as today.
+   */
+  readonly coordinatorUsesOptimizer?: boolean;
   /**
    * SIM-HOS-01/02/03/05 (Phase 18 live wiring): OPT-IN driver Hours-of-Service
    * modeling. When `true` the engine seeds drivers, assigns them per trip,
@@ -367,6 +390,81 @@ function collectDeliveries(
   return out;
 }
 
+/**
+ * VIZ-17: map the `ActionSuggested`, `SuggestionAccepted`, and
+ * `SuggestionRejected` events in a drained tick/frame into transient
+ * `SuggestionEvent` wire items for the tick payload. Empty when the slice has no
+ * suggestions (the common case) — the broadcast then omits the field entirely.
+ *
+ * Correlates accept/reject events to their `ActionSuggested` by `suggestionId`
+ * to recover `kind`, `toHubId`, and `targetAgentId`. `locationHubId` uses
+ * `toHubId` (reroute/dispatch) or falls back to the parsed hub id from the
+ * target agent's stream (`hub-<id>` → `<id>`) so the client can resolve
+ * lon/lat from its static hub cache (`hubLonLatRef`).
+ */
+function collectSuggestions(items: readonly SimulatedEvent[]): SuggestionEvent[] {
+  // Build a suggestionId → ActionSuggested payload index from this tick.
+  const suggested = new Map<
+    string,
+    {
+      kind: "reroute" | "hold" | "consolidate" | "dispatch";
+      targetAgentId: string;
+      toHubId: string;
+    }
+  >();
+  for (const { event } of items) {
+    if (event.type !== "ActionSuggested") continue;
+    const p = event.payload;
+    suggested.set(p.suggestionId, {
+      kind: p.kind,
+      targetAgentId: p.targetAgentId,
+      toHubId: p.params.toHubId ?? "",
+    });
+  }
+
+  const out: SuggestionEvent[] = [];
+  for (const { event, streamId } of items) {
+    if (event.type === "SuggestionAccepted") {
+      const meta = suggested.get(event.payload.suggestionId);
+      if (meta === undefined) continue; // no ActionSuggested in this slice — skip
+      // locationHubId: toHubId for reroute/dispatch; strip prefix for hub targets.
+      const locationHubId =
+        meta.toHubId !== ""
+          ? meta.toHubId
+          : streamId.startsWith("hub-")
+            ? streamId.slice(4)
+            : "";
+      out.push({
+        suggestionId: event.payload.suggestionId,
+        kind: meta.kind,
+        outcome: "accepted",
+        entityId: streamId,
+        toHubId: meta.toHubId,
+        locationHubId,
+      });
+    } else if (event.type === "SuggestionRejected") {
+      const meta = suggested.get(event.payload.suggestionId);
+      if (meta === undefined) continue;
+      const locationHubId =
+        meta.toHubId !== ""
+          ? meta.toHubId
+          : streamId.startsWith("hub-")
+            ? streamId.slice(4)
+            : "";
+      out.push({
+        suggestionId: event.payload.suggestionId,
+        kind: meta.kind,
+        outcome: "rejected",
+        entityId: streamId,
+        toHubId: meta.toHubId,
+        reasonCode: event.payload.reasonCode,
+        locationHubId,
+      });
+    }
+  }
+  return out;
+}
+
 /** Group the deterministic stream into ordered ticks by `occurredAt`. */
 function intoTicks(stream: readonly SimulatedEvent[]): SimulatedEvent[][] {
   const ticks: SimulatedEvent[][] = [];
@@ -413,11 +511,20 @@ function destHubIndex(stream: readonly SimulatedEvent[]): Map<string, string> {
 async function driveTickStream(
   db: ApiDb,
   ticks: SimulatedEvent[][],
-  opts: Pick<DriveSimulationOptions, "rfid" | "detection" | "broadcast" | "loop">,
+  opts: Pick<
+    DriveSimulationOptions,
+    "rfid" | "detection" | "broadcast" | "loop" | "coordinatorUsesOptimizer"
+  >,
   fullStream: readonly SimulatedEvent[],
 ): Promise<{ ticks: number }> {
   const es = eventStoreView(db);
-  const runner = makeSimRunner({ loop: opts.loop });
+  // COORD-06: disable the global loop when the per-center coordinators own planning.
+  const runner = makeSimRunner({
+    loop: opts.loop,
+    ...(opts.coordinatorUsesOptimizer !== undefined
+      ? { coordinatorUsesOptimizer: opts.coordinatorUsesOptimizer }
+      : {}),
+  });
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
@@ -500,9 +607,15 @@ async function driveTickStream(
 
     // 6. Push ONE batched snapshot per tick. Supply the tick's domain timestamp
     //    as the authoritative sim-clock milliseconds for the ws envelope, plus the
-    //    tick's transient induction (VIZ-13) + delivery (VIZ-14) events.
+    //    tick's transient induction (VIZ-13), delivery (VIZ-14), and suggestion
+    //    (VIZ-17) events.
     if (opts.broadcast !== undefined) {
-      await opts.broadcast(tickMs, collectInductions(tick), collectDeliveries(tick));
+      await opts.broadcast(
+        tickMs,
+        collectInductions(tick),
+        collectDeliveries(tick),
+        collectSuggestions(tick),
+      );
     }
   }
 
@@ -612,7 +725,15 @@ export async function driveSimulationPaced(
   //   cursor (event-log position) + departedHubs (SNS-05 gate). The optimizer is
   //   fired non-blocking via the coalescer over the per-tick runner.
   const es = eventStoreView(opts.db);
-  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+  // COORD-06: disable the global loop when the per-center coordinators own planning.
+  const coalescer = makeCoalescedRunner(
+    makeSimRunner({
+      loop: opts.loop,
+      ...(opts.coordinatorUsesOptimizer !== undefined
+        ? { coordinatorUsesOptimizer: opts.coordinatorUsesOptimizer }
+        : {}),
+    }),
+  );
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
@@ -716,10 +837,11 @@ export async function driveSimulationPaced(
   let ticksSinceOpt = 0;
   let pendingOptEvents: SimulatedEvent["event"][] = [];
   let lastOptTickMs = 0;
-  // VIZ-13 / VIZ-14: induction + delivery events drained this frame, surfaced to
-  // the per-frame broadcast (read + cleared at the broadcast site).
+  // VIZ-13 / VIZ-14 / VIZ-17: induction, delivery, and suggestion events drained
+  // this frame, surfaced to the per-frame broadcast (read + cleared at broadcast site).
   let pendingInductions: InductionEvent[] = [];
   let pendingDeliveries: DeliveryEvent[] = [];
+  let pendingSuggestions: SuggestionEvent[] = [];
 
   // Process exactly the ticks selected for THIS frame (in order): append each
   // tick (per-tick `occurredAt`), then fold the whole batch ONCE, then fire the
@@ -736,6 +858,7 @@ export async function driveSimulationPaced(
       for (const item of tick) pendingOptEvents.push(item.event);
       pendingInductions.push(...collectInductions(tick));
       pendingDeliveries.push(...collectDeliveries(tick));
+      pendingSuggestions.push(...collectSuggestions(tick));
       lastOptTickMs = tickMs;
       broadcastSimMs = tickMs;
       nextIndex += 1;
@@ -790,22 +913,26 @@ export async function driveSimulationPaced(
 
     // ONE delta per FRAME — even when nothing drained — so the client clock /
     // speed envelope keeps flowing (e.g. pause reflects via simSpeed:0). Attach +
-    // clear this frame's induction (VIZ-13) + delivery (VIZ-14) events.
+    // clear this frame's induction (VIZ-13), delivery (VIZ-14), and suggestion
+    // (VIZ-17) events.
     if (opts.broadcast !== undefined) {
       const frameInductions = pendingInductions;
       const frameDeliveries = pendingDeliveries;
+      const frameSuggestions = pendingSuggestions;
       pendingInductions = [];
       pendingDeliveries = [];
-      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries);
+      pendingSuggestions = [];
+      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries, frameSuggestions);
     }
   }
 
   // Drain the coalesced optimizer to idle, then a final broadcast at the clock.
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
-    await opts.broadcast(simClock, pendingInductions, pendingDeliveries);
+    await opts.broadcast(simClock, pendingInductions, pendingDeliveries, pendingSuggestions);
     pendingInductions = [];
     pendingDeliveries = [];
+    pendingSuggestions = [];
   }
 
   return { ticks: nextIndex };
@@ -946,7 +1073,15 @@ export async function driveSimulationOpenEnded(
   }
 
   const es = eventStoreView(opts.db);
-  const coalescer = makeCoalescedRunner(makeSimRunner({ loop: opts.loop }));
+  // COORD-06: disable the global loop when the per-center coordinators own planning.
+  const coalescer = makeCoalescedRunner(
+    makeSimRunner({
+      loop: opts.loop,
+      ...(opts.coordinatorUsesOptimizer !== undefined
+        ? { coordinatorUsesOptimizer: opts.coordinatorUsesOptimizer }
+        : {}),
+    }),
+  );
 
   const detectionOn = opts.rfid !== undefined;
   const detectionConfig = opts.detection ?? PRODUCTION_DETECTION_CONFIG;
@@ -1044,10 +1179,11 @@ export async function driveSimulationOpenEnded(
   let lastOptTickMs = 0;
   let drainedTotal = 0;
   let lastRetentionAtCount = 0;
-  // VIZ-13 / VIZ-14: induction + delivery events drained this frame, surfaced to
-  // the per-frame broadcast.
+  // VIZ-13 / VIZ-14 / VIZ-17: induction, delivery, and suggestion events drained
+  // this frame, surfaced to the per-frame broadcast.
   let pendingInductions: InductionEvent[] = [];
   let pendingDeliveries: DeliveryEvent[] = [];
+  let pendingSuggestions: SuggestionEvent[] = [];
 
   /**
    * Keep the undrained window long enough to feed a frame by advancing the
@@ -1080,6 +1216,7 @@ export async function driveSimulationOpenEnded(
       for (const item of tick) pendingOptEvents.push(item.event);
       pendingInductions.push(...collectInductions(tick));
       pendingDeliveries.push(...collectDeliveries(tick));
+      pendingSuggestions.push(...collectSuggestions(tick));
       lastOptTickMs = tickMs;
       broadcastSimMs = tickMs;
       // Discard the drained tick from the front so RAM stays bounded.
@@ -1150,9 +1287,11 @@ export async function driveSimulationOpenEnded(
     if (opts.broadcast !== undefined) {
       const frameInductions = pendingInductions;
       const frameDeliveries = pendingDeliveries;
+      const frameSuggestions = pendingSuggestions;
       pendingInductions = [];
       pendingDeliveries = [];
-      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries);
+      pendingSuggestions = [];
+      await opts.broadcast(broadcastSimMs, frameInductions, frameDeliveries, frameSuggestions);
     }
   }
 
@@ -1164,9 +1303,10 @@ export async function driveSimulationOpenEnded(
   }
   await coalescer.whenIdle();
   if (opts.broadcast !== undefined) {
-    await opts.broadcast(simClock, pendingInductions, pendingDeliveries);
+    await opts.broadcast(simClock, pendingInductions, pendingDeliveries, pendingSuggestions);
     pendingInductions = [];
     pendingDeliveries = [];
+    pendingSuggestions = [];
   }
 
   return { ticks: drainedTotal };
